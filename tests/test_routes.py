@@ -65,3 +65,31 @@ def test_only_the_difference_from_the_builtins_is_stored(tmp_path, monkeypatch):
     routes.upsert(routes.Route(name="flat", agent="claude", providers=("relay",)))
     data = json.loads((tmp_path / "routes.json").read_text(encoding="utf-8"))
     assert list(data) == ["flat"]
+
+
+def test_readiness_means_the_route_can_actually_run(tmp_path, monkeypatch):
+    """This is the question the review/fix pickers ask, and it used to be
+    `agents.ready` — which stopped meaning anything once one agent could be
+    reached through several endpoints."""
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    assert routes.ready("claude", {}) is False  # no relay key on disk
+    assert routes.ready("claude", {"RELAY_API_KEY": "sk"}) is True
+    assert routes.ready("nope", {"RELAY_API_KEY": "sk"}) is False
+
+
+def test_a_chain_is_ready_on_its_fallback_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    routes.upsert(routes.Route(name="backup", agent="claude", providers=("relay", "minimax")))
+    assert routes.ready("backup", {"MINIMAX_API_KEY": "sk"}) is True
+
+
+def test_the_reviewer_picker_still_works_after_the_split(tmp_path, monkeypatch):
+    from nodus import review
+
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(
+        config, "load_secrets", lambda ws=None: {"RELAY_API_KEY": "sk", "MINIMAX_API_KEY": "sk"}
+    )
+    assert review.pick_reviewer("claude") in ("codex", "dsh")
+    with pytest.raises(ValueError, match="must differ"):
+        review.pick_reviewer("claude", "claude")

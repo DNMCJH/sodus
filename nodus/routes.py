@@ -167,3 +167,27 @@ def resolve_for_run(name: str) -> Route:
         known = ", ".join(sorted(load()))
         raise ValueError(f"unknown route: {name} (known: {known})")
     return route
+
+
+def ready(name: str, secrets: dict[str, str] | None = None) -> bool:
+    """Can this route run right now, with the secrets on this machine?
+
+    The one question the pipeline code asks ("is there another agent I can hand
+    this to"). It used to be `agents.ready`, which stopped meaning anything once
+    an agent could be reached through more than one endpoint.
+    """
+    route = resolve(name)
+    if route is None:
+        return False
+    if problems(route):
+        return False
+    spec = agents.get(route.agent)
+    if spec is None:
+        return False
+    table = providers.load()
+    secrets = secrets if secrets is not None else config.load_secrets()
+    return any(
+        not agents.missing(spec, table[provider], secrets)
+        for provider in route.providers
+        if provider in table
+    )

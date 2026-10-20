@@ -68,12 +68,12 @@ def latest_review(task_id: str, target_run_id: str) -> dict | None:
 
 
 def pick_fixer(target_agent: str, reviewer: str, by: str = "") -> str:
-    from . import agents, config
+    from . import config, routes
 
     secrets = config.load_secrets()
 
     def ready(name: str) -> bool:
-        return agents.ready(name, secrets)
+        return routes.ready(name, secrets)
 
     if by:
         if not ready(by):

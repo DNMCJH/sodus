@@ -21,7 +21,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import agents, config, db
+from . import config, db
 from .runner import RUNNER
 
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -192,10 +192,12 @@ def build_context(task: dict, target_run: dict, scope: str = "task") -> dict:
 
 
 def pick_reviewer(target_agent: str, by: str = "") -> str:
+    from . import routes
+
     secrets = config.load_secrets()
 
     def ready(name: str) -> bool:
-        return agents.ready(name, secrets)
+        return routes.ready(name, secrets)
 
     if by:
         if not ready(by):
