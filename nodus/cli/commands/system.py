@@ -233,6 +233,7 @@ def usage(args) -> int:
     data = telemetry.usage_summary(args.days)
     if not data:
         print("(no runs in window)")
+    metered = False
     for route, b in sorted(data.items()):
         money = " + ".join(
             f"{'¥' if c == 'CNY' else c + ' '}{v:.4f}" for c, v in sorted(b["costs"].items())
@@ -245,16 +246,22 @@ def usage(args) -> int:
                 "reported": "CLI 自报偏大",
             }
             money += "（" + "+".join(labels.get(x, x) for x in sorted(b["basis"])) + "）"
-        providers_used = ",".join(sorted(b["providers"]))
+            metered = metered or "metered" in b["basis"]
+        providers_used = ",".join(sorted(p for p in b["providers"] if p != "-")) or "-"
         fallback = f" fallback={b['fallbacks']}" if b["fallbacks"] else ""
         print(
-            f"{route:<12} runs={b['runs']:<3} in={b['in']:<9} out={b['out']:<8} "
+            f"{route:<14} runs={b['runs']:<3} in={b['in']:<9} out={b['out']:<8} "
             f"cache_read={b['cache_read']:<9} failed={b['failed']} "
             f"via={providers_used}{fallback}  cost={money or 'n/a'}"
         )
+    if metered:
+        # A balance delta is account-wide: two runs in flight at once both see
+        # the same spend, so summing over runs overstates. Say it where the
+        # number is printed, not only in a doc nobody re-reads.
+        print("- 标“实测”的成本来自中转站余额差：并发 run 的窗口重叠，合计是上界。")
     d = telemetry.decision_usage(args.days)
     print(
-        f"{'jev':<12} calls={d['calls']:<2} in={d['in']:<9} out={d['out']:<8} "
+        f"{'jev':<14} calls={d['calls']:<2} in={d['in']:<9} out={d['out']:<8} "
         f"unavailable={d['unavailable']}"
     )
     return 0

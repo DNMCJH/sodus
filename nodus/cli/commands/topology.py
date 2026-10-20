@@ -70,12 +70,13 @@ def provider_cmd(args) -> int:
         return 0
 
     if args.action == "probe":
+        from ... import telemetry
+
         targets = [table[args.name]] if args.name else sorted(table.values(), key=lambda x: x.name)
         secrets = config.load_secrets()
-        proxy = secrets.get("TYPESAFE_PROXY") or None
         bad = 0
         for p in targets:
-            r = providers.probe(p, secrets, proxy if p.protocol != providers.DEEPSEEK else None)
+            r = telemetry.record(providers.probe(p, secrets))
             bad += 0 if r.get("ok") else 1
             print(
                 f"{p.name:<14} {'ok' if r.get('ok') else 'FAIL':<5} status={r.get('status')} "

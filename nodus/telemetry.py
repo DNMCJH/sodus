@@ -18,17 +18,24 @@ from . import config, db, providers
 PROBE_LOG = "probes.jsonl"
 
 
+def record(result: dict) -> dict:
+    """Append one probe result to the log `nodus status` reads.
+
+    Both probe commands go through here; before, `providers probe` skipped the
+    log and `status` kept saying "never probed" right after a successful probe.
+    """
+    result.setdefault("ts", time.time())
+    config.ensure_dirs()
+    with (config.HOME / PROBE_LOG).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+    return result
+
+
 def probe() -> list[dict]:
     secrets = config.load_secrets()
-    results = []
-    for provider in sorted(providers.load().values(), key=lambda p: p.name):
-        record = providers.probe(provider, secrets)
-        record["ts"] = time.time()
-        results.append(record)
-        config.ensure_dirs()
-        with (config.HOME / PROBE_LOG).open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    return results
+    return [record(providers.probe(p, secrets)) for p in sorted(
+        providers.load().values(), key=lambda p: p.name
+    )]
 
 
 def last_probes() -> dict[str, dict]:
