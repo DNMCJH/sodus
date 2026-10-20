@@ -1,7 +1,7 @@
 # Nodus
 
-> 名字来自拉丁语 *nodus*（结、节点）。CLI、Python 包、状态目录都叫 `nodus`（`~/.nodus`）；
-> 仓库目录暂时还叫 `workbench`，改它要动别的会话和脚本，单独一步做。
+> 名字来自拉丁语 *nodus*（结、节点）。CLI、Python 包、仓库目录、状态目录都叫 `nodus`（`~/.nodus`）。
+> 2026-10-21 之前它叫 `wb`／`workbench`，旧状态目录会在首次运行时自动迁移。
 
 本地多 agent 任务编排器。不重写 agent loop，把 Claude Code / Codex / DSH / MiniMax 当 worker 驱动，
 自己只管任务、会话、产物、交接和审计。产品原则见 [docs/vision.md](docs/vision.md)。
@@ -9,11 +9,13 @@
 ## 快速开始
 
 ```powershell
-cd A:\VScode\Code\Projects\nodus
-A:\Anaconda\python.exe nodus.py agents           # 看各 agent 是否就绪
-A:\Anaconda\python.exe nodus.py task "目标" --accept "验收标准"
-A:\Anaconda\python.exe nodus.py run <task-id> --agent claude --cwd D:\work\demo
+pip install -e .                 # 装一次，之后任何目录都能用 nodus
+nodus agents                     # 看各 agent 是否就绪
+nodus task "目标" --accept "验收标准"
+nodus run <task-id> --agent claude --cwd D:\work\demo
 ```
+
+不装也行，等价写法是 `A:\Anaconda\python.exe nodus.py ...` 或 `python -m nodus ...`。
 
 `nodus run` 会自动在 4199 端口拉起 daemon（进程内），跑完自动退出。要常驻：
 
