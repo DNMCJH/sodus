@@ -10,9 +10,9 @@
 
 ```powershell
 pip install -e .                 # 装一次，之后任何目录都能用 nodus
-nodus agents                     # 看各 agent 是否就绪
+nodus topology                   # 一眼看全：agent × provider × route
 nodus task "目标" --accept "验收标准"
-nodus run <task-id> --agent claude --cwd D:\work\demo
+nodus run <task-id> --route claude --cwd D:\work\demo
 ```
 
 不装也行，等价写法是 `A:\Anaconda\python.exe nodus.py ...` 或 `python -m nodus ...`。
@@ -34,25 +34,29 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 
 | 命令 | 作用 |
 |---|---|
-| `nodus agents` | 各 agent 适配器就绪状态 |
-| `nodus doctor` | 自检：目录、token、数据库、agent、会话、密钥、磁盘 |
+| `nodus topology` | agents / providers / routes 一屏看完 |
+| `nodus agents` | 各 CLI 是否装了 |
+| `nodus providers list\|show\|probe\|add\|rm` | 端点：地址、凭据、单价、探活 |
+| `nodus routes list\|show\|set\|rm` | 路由组：一个 CLI + 有序回退链 |
+| `nodus profiles list\|show\|use\|new\|rm` | 配置快照：切一套环境 |
+| `nodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
 | `nodus --version` | 版本 |
 | `nodus task "goal" --accept "..."` | 建任务，返回 task-id |
 | `nodus sessions [--query TEXT]` | 列出 DSH 会话（读本地 zstd 存储） |
 | `nodus session <id> [--tail N] [--reasoning]` | 打印另一个会话的对话 |
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
 | `nodus resume <session> --note "..." [--force]` | 在 DSH 会话上续一轮（必须同 cwd） |
-| `nodus run <task> --agent claude\|codex\|dsh\|minimax --cwd PATH [--note "..."] [--parent RUN]` | 起一次执行并跟踪 |
+| `nodus run <task> --route NAME [--profile NAME] [--model M] --cwd PATH [--note "..."]` | 起一次执行并跟踪 |
 | `nodus watch <run>` | 跟踪已有 run |
-| `nodus runs [--task ID]` | 列执行，附 `verify=` 标记（ok / red / none） |
+| `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
 | `nodus show <run>` | 看 run 的原始记录 |
 | `nodus handoff <run>` | 看这次生成的交接单 |
 | `nodus stop <run>` | 杀掉进程树 |
 | `nodus reconcile [--stale 900]` | 把进程已死却还停在 running 的 run 标成 failed |
-| `nodus route <task>` | Jev 选 agent + effort |
+| `nodus route <task>` | Jev 选 agent + effort（和上面的 `routes` 是两件事） |
 | `nodus triage <run>` | Jev 给执行打分 |
 | `nodus decisions [--last N]` | 看历史决策 |
-| `nodus usage [--days N]` | 按 agent 汇总 token |
+| `nodus usage [--days N]` | 按 route 汇总 token 与花费，标出走过回退的次数 |
 | `nodus probe` | 探活各 provider（免费） |
 | `nodus status` | 探活结果 + 今日用量 |
 | `nodus verify --cwd DIR [--command "pytest -q"]` | 跑测试，返回 exit code（不花 token） |
@@ -61,6 +65,8 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus fix <run> [--by dsh] [--rounds 2] [--review-first]` | 审查→修→验证→复审，收敛才 exit 0 |
 | `nodus report <task-id\|run-id> [--print]` | 生成任务报告到 `tasks/<id>/report.md` |
 
+`--agent` 仍然可用，是 `--route` 的旧名字。
+
 ## 结构
 
 ```
@@ -68,21 +74,24 @@ nodus.py                 入口，等价于 python -m nodus
 nodus/cli/               argparse + 每个命令一个 handler
   client.py              HTTP 客户端（唯一知道 daemon 地址的地方）
 nodus/config.py          路径、token、secrets、用户配置、旧目录迁移
-nodus/agents.py          agent 注册表（加 vendor 只改这里 + adapters；换后端只改这里）
+nodus/providers.py       端点：地址、凭据、单价、计量口径（数据，可被 JSON 覆盖）
+nodus/agents.py          CLI：可执行、参数方言、流格式、能说哪种协议
+nodus/routes.py          路由组：一个 CLI + 有序 provider 回退链
+nodus/profiles.py        配置快照：按 profile × agent × provider 物化配置目录
 nodus/db.py              SQLite，所有读按 workspace 过滤
 nodus/adapters.py        各家 JSONL → 统一事件
-nodus/runner.py          起进程、读流、落事件、生成交接单
+nodus/runner.py          起进程、读流、落事件、尝试循环与回退、生成交接单
 nodus/verify.py          检测测试器、跑测试、把 red/green 落成证据
 nodus/tdd.py             写测试 → 红 → 实现 → 绿 →（可选）审查
 nodus/review.py          跨 agent 审查，结构化 findings
 nodus/fix.py             审查 finding → 换一家修 → 验证 → 复审
 nodus/report.py          任务报告
-nodus/meter.py           计费表：run 前后读 provider 的账，求差
+nodus/meter.py           计费表：run 前后读端点的账，求差
 nodus/decision.py        Jev 路由与分诊
 nodus/telemetry.py       探活、用量、余额
 nodus/dsh_sessions.py    读 DSH 会话（zstd JSONL）、brief、会话锁
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（91 条，`nodus verify --cwd .` 可自查）
+tests/                   自己的一套 pytest（155 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -90,9 +99,12 @@ tests/                   自己的一套 pytest（91 条，`nodus verify --cwd .
 状态默认放 `%USERPROFILE%\.nodus\`：
 
 ```
-agents/claude/settings.json   从 ~/.claude/settings.json 只复制 env/model
-agents/codex/config.toml      从 ~/.codex/config.toml 只复制 model/provider
-runs/<run-id>/raw.jsonl       原始流
+providers.json                端点的覆盖项（只存和内置不同的部分）
+routes.json                   路由组的覆盖项
+profiles/<name>/profile.json  这个 profile 默认用哪条 route / 哪个 model / 哪个 effort
+profiles/<name>/<agent>.json  手改的 agent 设置（modelSettings、sandbox、trust_level）
+profiles/<name>/<agent>/<provider>/   实际给 CLI 的配置目录（由上面两者生成）
+runs/<run-id>/raw-1.jsonl     第 1 次尝试的原始流（回退时会有 raw-2.jsonl）
 runs/<run-id>/prompt.md       实际发给 agent 的上下文
 runs/<run-id>/final.md        最终回复
 runs/<run-id>/handoff.md      交接单
@@ -102,8 +114,56 @@ runs/<run-id>/review.json     结构化 findings
 runs/<run-id>/review.md       人读版审查
 runs/<run-id>/context.md      审查者看到的证据（可复查）
 tasks/<task-id>/report.md     任务报告
-nodus.sqlite3                    全部状态
+backup/agents-<时间>/         升级前的 settings.json / config.toml 原件
+nodus.sqlite3                 全部状态
 ```
+
+## 三层：CLI / 端点 / 路由组
+
+以前这三件事糊在一个对象里，叫 `AgentSpec`。结果 `minimax` 既是 agent 又是端点，
+加一个后端要改 `argv()` 的 if/elif 链，`Pricing` 挂在 agent 上，failover 无处安放——因为"端点"根本不是个东西。
+
+现在拆开：
+
+```
+provider  打给谁：地址、凭据、协议（anthropic/openai/deepseek）、单价、计量口径
+agent     用什么跑：可执行文件、参数方言、流格式、能不能续会话
+route     怎么配：一个 agent + 一串 provider，顺序就是回退顺序
+profile   哪套环境：一个目录，装 agent 的本地配置，可切换、可复制、可回滚
+```
+
+同一个中转的两个协议入口是两个 provider（`relay` / `relay-openai`），共用一把 key。
+这不是重复，是事实：它们确实共用凭据，而那值得被看得见。
+
+```powershell
+nodus topology                  # 一屏
+nodus providers probe           # 四个端点各打一次模型列表，不花 token
+nodus routes set cheap --agent claude --providers minimax
+nodus run <task> --route cheap
+nodus profiles new work --from default
+nodus profiles use work
+```
+
+`providers.json` / `routes.json` 里**只存和内置不同的部分**。所以升级不会把你手上的默认值冻住。
+
+### 回退只在"什么都没做"的时候发生
+
+一条 route 上第一个端点失败，会换下一个——但**只有一个条件全部成立才换**：
+
+1. 这次尝试**没有产生任何 tool_call**；
+2. 失败信息像上游问题（401/403/429/5xx/连接/超时/限流），或者进程一个字都没输出就非零退出；
+3. 后面还有 provider。
+
+第一条压倒一切。跑到一半断线的 worker 不算上游故障——换个端点重跑会把同样的改动做第二遍，
+那正是回退链最不该引入的故障模式。这条规则有独立测试（真起子进程，不是 mock）。
+
+回退不是静默的：CLI 会打印 `!! relay-dead failed before doing anything (...) → retrying on minimax`，
+交接单里写 `回退：relay-dead → minimax`，`nodus runs` 显示最终 provider，`nodus usage` 数回退次数。
+
+实测一次（`run-90c6a47c9bae`）：第一段指向死端口，Claude Code 自己重试到放弃并打出
+`Connection refused (ECONNREFUSED)`，Nodus 判定无副作用、换到 minimax，任务完成，花费 ¥0.013476。
+代价是**慢**：CLI 自己的重试预算先耗掉了，整轮 187 秒。回退救的是结果，不是时间。
+
 
 ## 交接模型
 
@@ -129,19 +189,21 @@ worker 什么都没干、把"被阻断"写进结论、进程照样退出 0，Nod
 
 ## 各家的必需参数（实测）
 
-| vendor | 关键参数 | 说明 |
-|---|---|---|
-| claude | `--permission-mode bypassPermissions` | 否则 `-p` 模式下写文件会被拒 |
-| minimax | `ANTHROPIC_AUTH_TOKEN` + 独立 `CLAUDE_CONFIG_DIR` | 复用 Claude Code 这个壳，只换后端；token 每次运行注入，不落盘 |
-| codex | `--skip-git-repo-check` + `--dangerously-bypass-approvals-and-sandbox` | `-s workspace-write` 在 Windows 非交互下会挂起；`[windows] sandbox = elevated` 同样挂起 |
-| dsh | `DEEPSEEK_API_KEY` | DSH 启动子进程会清掉 `*_KEY`，必须在 `secrets.json` 里显式给 |
+| CLI | 端点 | 关键参数 | 说明 |
+|---|---|---|---|
+| claude | relay（默认）/ minimax | `--permission-mode bypassPermissions` | 否则 `-p` 模式下写文件会被拒 |
+| minimax | minimax | 同 claude | 复用 Claude Code 这个壳，只换后端；差别只在 base URL、模型映射和价目 |
+| codex | relay-openai | `--skip-git-repo-check` + `--dangerously-bypass-approvals-and-sandbox` | `-s workspace-write` 在 Windows 非交互下会挂起；`[windows] sandbox = elevated` 同样挂起 |
+| dsh | deepseek | `DEEPSEEK_API_KEY` | DSH 启动子进程会清掉 `*_KEY`，必须在 `secrets.json` 里显式给 |
 
-MiniMax 走的是 Anthropic 兼容端点（`https://api.minimax.cn/anthropic`），所以它的 vendor 字段
-也是 `claude`：同一份 CLI、同一份 stream-json、同一个 parser，区别只有 base URL 和计费。
+MiniMax 走的是 Anthropic 兼容端点（`https://api.minimax.cn/anthropic`），所以它和 claude 是同一个
+agent（同一份 CLI、同一份 stream-json、同一个 parser），区别只有端点、模型映射和计费——
+现在这件事在 `providers.json` 里是明写的，不再靠"另一个 AgentSpec"暗示。
 
-一个坑：`~/.claude/settings.json` 里的 `env` 块优先级高于进程环境变量。不改
-`CLAUDE_CONFIG_DIR` 直接设 `ANTHROPIC_BASE_URL` 是无效的，请求还会打到原来那个代理上，
-报 `401 Invalid token`——第一次接就是被这个骗了 190 秒。
+那个 190 秒的坑还在，但结构变了：`~/.claude/settings.json` 的 `env` 块优先级高于进程环境变量。
+Nodus 的做法是让生成的 settings.json **永远不含 `env`**，端点全从进程环境注入
+（`profiles.materialize` 里有测试盯着这一条）。所以换端点不需要换 `CLAUDE_CONFIG_DIR`，
+只需要换 provider——虽然配置目录仍然按 provider 分开，那是为了并发安全，不是为了隔离凭据。
 
 ## token 与耗时（2026-10-19 实测，单次 trivial 任务）
 
@@ -406,12 +468,15 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 还没有 SSE 客户端和 UI，`nodus watch` 是轮询（0.5s）。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
 - dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。但它没有隔离配置目录，跑的时候带着你的全局 `AGENTS.md`、skills 和 MCP，小任务 fresh input 约 2 万；也没有 per-run effort 入口。
-- `--model` 已接：`nodus run <task> --agent claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
+- `--model` 已接：`nodus run <task> --route claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
+- 回退链救结果不救时间：CLI 自己的重试预算会先耗掉（实测死端点那次整轮 187 秒）。要更快失败得给"首字节前"设单独的短超时，那是猜，没做。
+- 回退链里第 2 个端点用的是**它自己的模型**，不是本次 pin 的模型。pin 只对第一个端点生效，否则会把一个那端点不认识的模型名发过去。
 - 路由准确性没测过；一次 choice 在 criteria 写得含糊时会给高置信度的错答案（实测把文档任务判给 codex，0.90）。
 - usage 是逐条 assistant 消息累加，`input_tokens` 经常只有个位数、`cache_read` 偏高，只能看趋势不能当账单。
 - 审查读的是**当前工作区**，不是 run 时刻的快照。文件被改动时，`context.md` 里对应文件会标"当前内容与 run 记录不一致"，但审查仍按当前内容做——负向对照就是靠这一点。
 - 审查上下文到 80k 字符会截断，`review.json` 里有 `context_truncated` 字段，`review.md` 里没有显式警告，大 diff 时容易误判"看全了"。
-- 成本现在靠读表，但还有四个洞：codex 没有任何计费接口；minimax 要 admin key 才能读余额（普通 key 返回 `token_type_mismatch`），所以它用价目表；dsh 的 DeepSeek 余额只有 0.01 元精度，低于这个数的 run 记 0；**dsh 和本机 DSH 会话共用同一个 key**，所以它的余额 delta 会混进别的用量，那个数是上界不是精确值。
+- 成本现在靠读表，但还有四个洞：minimax 要 admin key 才能读余额（普通 key 返回 `token_type_mismatch`），所以它用价目表；dsh 的 DeepSeek 余额只有 0.01 元精度，低于这个数的 run 记 0；**dsh 和本机 DSH 会话共用同一个 key**，所以它的余额 delta 会混进别的用量，那个数是上界不是精确值；中转站的余额差是账户级的，两个 claude/codex run 并发时窗口重叠，那个数会偏大。
+- 一次 run 有多次尝试时，顶层 `cost` 记的是**最后那次**（真正产出结果的那次）。前面失败尝试的开销留在 `usage.attempts[]` 里，`nodus usage` 的合计只加顶层那个——失败尝试通常没花到钱，但不是永远为 0。
 - 并发只测了 2 个 run 同时跑；SQLite 单写者，10 个以上并发和跨小时长任务没测。
 - fix 回路只认最新一次审查；审查误报时没有自动驳回，只能靠 fixer 在回复里说明"不成立"。
 - 跨会话续跑只支持 dsh；claude/codex 的会话 ID 体系不同，没接。
@@ -422,11 +487,13 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.nodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。
 - `nodus route` 的画像表里还没有 minimax，`--agent auto` 只会在 claude / codex / dsh 里选。
 - minimax 复用的是 Claude Code，所以 Claude Code 的限制它全都有：本地按 200k 上下文档位算（MiniMax 实际是 1M）、`--effort` 档位走 Claude 的枚举（MiniMax 支持 low/medium/high/xhigh/max，`xhigh` 没验证过）、不能 `nodus resume`。
+- profiles 是快照，不是运行时隔离：切换只影响新起的 run，正在跑的那一个还用着旧目录。两个 run 用不同 provider 并发是安全的（目录按 provider 分开），用同一个 provider 但不同 profile 也安全（按 profile 分开）。
 
 ## 下一步
 
-1. dsh 已通；下一步给 dsh 建隔离 profile（`DSH_HOME` 或独立 headless 配置），别让它带着全局指令和 MCP 跑。
+1. 给 dsh 建隔离 profile（`DSH_HOME` 或独立 headless 配置），别让它带着全局指令和 MCP 跑；profile 层已经在了，缺的是 dsh 认哪个环境变量。
 2. `nodus run` 跑完后，如果能检测到测试器就自动验一次（可 `--no-verify` 关掉）。这是 `verify=none` 的正解，但要先想清楚副作用：未知仓库的测试可能有破坏性。
-2. 打包：PyInstaller 单文件先试，失败就换 Go 重写这几百行。
-3. `nodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
-4. VS Code 扩展只做三件事：列表、派活、看事件流和 diff。
+3. 打包：PyInstaller 单文件先试，失败就换 Go 重写这几百行。
+4. `nodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
+5. VS Code 扩展只做三件事：列表、派活、看事件流和 diff。
+6. 多写者锁 + propose/merge：现在一个 cwd 只能有一个 run 在写，"协作"还只是串行交接。

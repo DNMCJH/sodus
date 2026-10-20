@@ -278,7 +278,7 @@ def brief(session_id: str, task: str, tail: int = 12, max_chars: int = 40_000) -
 
     return "\n".join(
         [
-            f"# 跨会话交接",
+            "# 跨会话交接",
             "",
             f"- 主题：{task.strip().splitlines()[0][:80]}",
             f"- 生成时间：{_fmt_time(time.time())}",

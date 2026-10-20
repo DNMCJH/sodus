@@ -11,6 +11,10 @@ A CLI's local price book is a guess about somebody else's bill: Claude Code
 prices whatever backend it reaches with Anthropic's rates, and a relay adds its
 own multiplier on top. Reading the meter skips both problems.
 
+A meter belongs to an endpoint, so this module takes a `Provider` and reads the
+URL and key from it. It used to reverse-engineer them out of a Claude settings
+file, which meant the same fact had two homes and could disagree with itself.
+
 Meters fail open: a run must never be lost because billing was unreachable.
 """
 
@@ -22,12 +26,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
 
-from . import config
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .agents import AgentSpec
+from . import config, providers
 
 DEEPSEEK_BALANCE = "https://api.deepseek.com/user/balance"
 GATEWAY_DEFAULT = "http://127.0.0.1:3425"
@@ -40,8 +40,8 @@ class Reading:
     kind: str  # "usage" | "balance"
 
 
-def _get_json(url: str, token: str | None = None, timeout: float = 15.0) -> Any:
-    headers = {"User-Agent": "nodus/0.2"}
+def _get_json(url: str, token: str | None = None, timeout: float = 15.0):
+    headers = {"User-Agent": "nodus/0.4"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
@@ -50,24 +50,14 @@ def _get_json(url: str, token: str | None = None, timeout: float = 15.0) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _agent_env(spec: "AgentSpec") -> dict:
-    """The env block of an agent's isolated CLI config, if it has one."""
-    home = getattr(spec, "config_home", None)
-    if home is None:
-        return {}
-    path = home / "settings.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("env", {}) or {}
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _relay(spec: "AgentSpec") -> Reading | None:
-    env = _agent_env(spec)
-    base = (env.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
-    token = env.get("ANTHROPIC_AUTH_TOKEN") or ""
+def _relay(provider: providers.Provider, secrets: dict[str, str]) -> Reading | None:
+    # The billing endpoint hangs off the account root, not the protocol root:
+    # the OpenAI face of the same relay has base_url ".../v1" and would
+    # otherwise be asked for ".../v1/v1/dashboard/billing/usage".
+    base = (provider.base_url or "").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    token = providers.secret_value(provider, secrets)
     if not base.startswith("http") or not token:
         return None
     try:
@@ -78,8 +68,8 @@ def _relay(spec: "AgentSpec") -> Reading | None:
         return None
 
 
-def _deepseek(spec: "AgentSpec") -> Reading | None:
-    token = config.load_secrets().get("DEEPSEEK_API_KEY") or ""
+def _deepseek(provider: providers.Provider, secrets: dict[str, str]) -> Reading | None:
+    token = providers.secret_value(provider, secrets)
     if not token:
         return None
     try:
@@ -93,20 +83,25 @@ def _deepseek(spec: "AgentSpec") -> Reading | None:
 READERS = {"relay": _relay, "deepseek": _deepseek}
 
 
-def read(spec: "AgentSpec", settle_from: Reading | None = None, settle: float = 4.0) -> Reading | None:
-    """Read the spec's meter. With `settle_from`, wait briefly for billing to land."""
-    reader = READERS.get(getattr(spec, "meter", None) or "")
+def read(
+    provider: providers.Provider,
+    secrets: dict[str, str],
+    settle_from: Reading | None = None,
+    settle: float = 4.0,
+) -> Reading | None:
+    """Read this endpoint's meter. With `settle_from`, wait for billing to land."""
+    reader = READERS.get(provider.meter or "")
     if reader is None:
         return None
     deadline = time.time() + (settle if settle_from is not None else 0)
-    first = reader(spec)
+    first = reader(provider, secrets)
     if first is None:
         return None
     if settle_from is None:
         return first
     while time.time() < deadline and first.value <= settle_from.value:
         time.sleep(0.8)
-        again = reader(spec)
+        again = reader(provider, secrets)
         if again is None:
             return first
         first = again

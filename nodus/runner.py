@@ -1,4 +1,17 @@
-"""Run lifecycle: build context, spawn a CLI worker, persist its event stream."""
+"""Run lifecycle: build context, spawn a CLI worker, persist its event stream.
+
+A run is a sequence of attempts. Each attempt is one (agent, provider) pair from
+the route. The fallback rule is the important part and it is deliberately
+narrow:
+
+    fall through only when the attempt provably did nothing
+
+"Did nothing" means no tool call was ever parsed out of the stream. A worker
+that got sixty seconds into an edit and then lost its connection is not a
+provider outage — rerunning it on another endpoint would apply the same edits
+twice. That is the one failure mode a fallback chain must never introduce, so
+it is the first condition checked.
+"""
 
 from __future__ import annotations
 
@@ -6,12 +19,13 @@ import hashlib
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter
+from . import adapters, agents, config, db, meter, profiles, providers, routes
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -20,6 +34,17 @@ SKIP_DIRS = {
 
 # A child that stops writing for this long is treated as hung, not busy.
 IDLE_TIMEOUT = float(os.environ.get("NODUS_IDLE_TIMEOUT", "900"))
+
+#: Text that marks a failure as belonging to the endpoint rather than the task.
+#: Only consulted when the attempt produced no tool call, so a false positive
+#: costs one retry of something that had not started, never duplicated work.
+UPSTREAM_SIGNALS = re.compile(
+    r"401|403|429|5\d\d|unauthoriz|forbidden|invalid api key|authenticat|"
+    r"rate.?limit|quota|insufficient|overloaded|connection|reset by peer|"
+    r"econnreset|econnrefused|etimedout|timed? out|socket|tls|dns|"
+    r"no output for|api error|upstream",
+    re.IGNORECASE,
+)
 
 
 class EventBus:
@@ -76,7 +101,7 @@ def build_prompt(
         if include_handoff
         else ""
     )
-    return f"""你是工作台里负责执行任务的 agent（{agent}）。
+    return f"""你是 Nodus 里负责执行任务的 agent（{agent}）。
 
 ## 任务
 {task.get('goal', '')}
@@ -121,15 +146,45 @@ def touched_files(cwd: Path, since: float, limit: int = 50) -> list[Path]:
     return out
 
 
+def looks_upstream(attempt: dict) -> bool:
+    """Is this failure the endpoint's fault rather than the task's?"""
+    if attempt.get("tool_calls"):
+        return False
+    text = " ".join(list(attempt.get("errors") or []) + list(attempt.get("noise") or []))
+    if text and UPSTREAM_SIGNALS.search(text):
+        return True
+    # A process that produced nothing at all and exited non-zero never got far
+    # enough to act; treating it as an endpoint failure is safe.
+    if attempt.get("exit_code") not in (0, None) and not attempt.get("output_lines"):
+        return True
+    return False
+
+
+def should_fall_through(attempt: dict, nxt: str | None) -> bool:
+    """The one rule that keeps a fallback chain from doing work twice.
+
+    Every condition has to hold, and the tool-call check is first among the
+    reasons: once a worker has acted, a second endpoint would replay those
+    actions on top of the first one's side effects.
+    """
+    if not nxt:
+        return False
+    if attempt.get("ok"):
+        return False
+    return looks_upstream(attempt)
+
+
 class Runner:
     def __init__(self) -> None:
         self.procs: dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
 
+    # ---- entry point ---------------------------------------------------
+
     def start(
         self,
         task_id: str,
-        agent_name: str,
+        route_name: str = "claude",
         cwd: str | None = None,
         parent_run_id: str | None = None,
         note: str = "",
@@ -137,68 +192,97 @@ class Runner:
         model: str = "",
         include_handoff: bool = True,
         session_id: str = "",
+        profile: str = "",
     ) -> dict:
-        specs = agents.registry()
-        spec = specs.get(agent_name)
-        if spec is None:
-            raise ValueError(f"unknown agent: {agent_name}")
+        profiles.ensure_ready()
+        route = routes.resolve_for_run(route_name)
+        gap = routes.problems(route)
+        if gap:
+            raise RuntimeError(f"route {route.name} is not usable: {', '.join(gap)}")
+        spec = agents.get(route.agent)
+        assert spec is not None  # routes.problems already checked
         task = db.get_task(task_id)
         if not task:
             raise ValueError(f"unknown task: {task_id}")
-        secrets = config.load_secrets()
-        missing = agents.missing_requirements(spec, secrets)
-        if missing:
-            raise RuntimeError(f"{agent_name} not ready: {', '.join(missing)}")
 
+        secrets = config.load_secrets()
+        table = providers.load()
+        ready = [
+            name
+            for name in route.providers
+            if not agents.missing(spec, table[name], secrets)
+        ]
+        if not ready:
+            first = table[route.primary]
+            raise RuntimeError(
+                f"{route.name} not ready: {', '.join(agents.missing(spec, first, secrets))}"
+            )
+
+        profile_name = profile or config.active_profile()
         workdir = Path(cwd or Path.cwd()).resolve()
-        run = db.create_run(task_id, agent_name, str(workdir), parent_run_id, note, effort, model)
-        rid = run["id"]
+        prof = profiles.read(profile_name)
+        run = db.create_run(
+            task_id,
+            spec.name,
+            str(workdir),
+            parent_run_id,
+            note,
+            effort or route.effort or prof.effort or "",
+            model or route.model or prof.model or "",
+            route=route.name,
+            provider=route.primary,
+            profile=profile_name,
+        )
         thread = threading.Thread(
-            target=self._run,
-            args=(rid, spec, task, workdir, secrets, include_handoff, session_id),
+            target=self._execute,
+            args=(run["id"], route, spec, task, workdir, secrets, profile_name,
+                  include_handoff, session_id),
             daemon=True,
         )
         thread.start()
-        return db.get_run(rid)
+        return db.get_run(run["id"])
 
-    def _run(
+    # ---- attempt loop --------------------------------------------------
+
+    def _execute(
         self,
         rid: str,
-        spec,
+        route: routes.Route,
+        spec: agents.AgentSpec,
         task: dict,
         workdir: Path,
-        secrets: dict,
-        include_handoff: bool = True,
-        session_id: str = "",
+        secrets: dict[str, str],
+        profile_name: str,
+        include_handoff: bool,
+        session_id: str,
     ) -> None:
         try:
-            self._run_inner(rid, spec, task, workdir, secrets, include_handoff, session_id)
+            self._execute_inner(
+                rid, route, spec, task, workdir, secrets, profile_name,
+                include_handoff, session_id,
+            )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
 
-            message = f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
-            try:
-                seq = db.next_seq(rid)
-                db.append_event(rid, seq, "run.failed", {"error": message, "status": "failed"})
-            except Exception:
-                pass
-            db.update_run(rid, status="failed", ended_at=time.time(), error=message)
+            self._fail(rid, f"{type(exc).__name__}: {exc}")
 
-    def _run_inner(
+    def _execute_inner(
         self,
         rid: str,
-        spec,
+        route: routes.Route,
+        spec: agents.AgentSpec,
         task: dict,
         workdir: Path,
-        secrets: dict,
-        include_handoff: bool = True,
-        session_id: str = "",
+        secrets: dict[str, str],
+        profile_name: str,
+        include_handoff: bool,
+        session_id: str,
     ) -> None:
         run_dir = config.HOME / "runs" / rid
         run_dir.mkdir(parents=True, exist_ok=True)
-        raw_path = run_dir / "raw.jsonl"
-        note = db.get_run(rid).get("note") or ""
+        record = db.get_run(rid)
+        note = record.get("note") or ""
         if session_id:
             # Resuming: the session already carries its own history, so send the
             # instruction verbatim instead of wrapping it in a fresh task brief.
@@ -214,41 +298,136 @@ class Runner:
             )
         (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
 
-        seq = 0
-        usage = {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0}
-        texts: list[str] = []
-        session_ref: dict = {}
-        error_text = ""
-
-        def emit(etype: str, payload: dict) -> None:
-            nonlocal seq
-            seq = db.next_seq(rid)
-            ev = db.append_event(rid, seq, etype, payload)
-            BUS.publish({"run_id": rid, **{k: ev[k] for k in ("seq", "type", "payload", "ts")}})
-
-        emit(
+        pinned = (record.get("model") or "").strip()
+        effort = (record.get("effort") or "").strip()
+        self._emit(
+            rid,
             "run.started",
             {
                 "agent": spec.name,
+                "route": route.name,
+                "providers": list(route.providers),
+                "profile": profile_name,
                 "cwd": str(workdir),
                 "task": task["id"],
                 **({"session_id": session_id} if session_id else {}),
             },
         )
-        started_at = time.time()
-        db.update_run(rid, status="running", started_at=started_at)
+        db.update_run(rid, status="running", started_at=time.time())
 
-        env = agents.build_env(spec, secrets)
-        record = db.get_run(rid)
-        effort = (record.get("effort") or "").strip()
-        model = (record.get("model") or "").strip()
-        # Take the meter reading before the process exists, so this run's spend
-        # cannot already be inside the window.
-        meter_before = meter.read(spec)
+        table = providers.load()
+        attempts: list[dict] = []
+        chosen: dict = {}
+        first_started = None
+        for index, provider_name in enumerate(route.providers):
+            provider = table.get(provider_name)
+            if provider is None:
+                continue
+            if agents.missing(spec, provider, secrets):
+                continue  # a broken fallback must not stop the chain
+            model = (pinned if index == 0 else "") or provider.model
+            attempt = self._attempt(
+                rid, index, spec, provider, workdir, secrets, profile_name,
+                prompt, effort, model, session_id,
+            )
+            if first_started is None:
+                first_started = attempt["started_at"]
+            attempts.append(attempt)
+            chosen = attempt
+            db.update_run(rid, provider=provider.name, model=model or "")
+            if not attempt["ok"]:
+                nxt = self._next(route, index + 1, table, spec, secrets)
+                if should_fall_through(attempt, nxt):
+                    self._emit(
+                        rid,
+                        "run.fallback",
+                        {
+                            "from": provider.name,
+                            "to": nxt,
+                            "reason": attempt["error"] or "exit code",
+                            "tool_calls": attempt["tool_calls"],
+                        },
+                    )
+                    continue
+            break
+
+        if not attempts:
+            self._fail(rid, "no provider on this route could be reached")
+            return
+
+        self._finalize(
+            rid, route, spec, task, workdir, run_dir, attempts, chosen,
+            first_started or time.time(), session_id,
+        )
+
+    @staticmethod
+    def _next(
+        route: routes.Route,
+        start: int,
+        table: dict[str, providers.Provider],
+        spec: agents.AgentSpec,
+        secrets: dict[str, str],
+    ) -> str | None:
+        for name in route.providers[start:]:
+            provider = table.get(name)
+            if provider is not None and not agents.missing(spec, provider, secrets):
+                return name
+        return None
+
+    # ---- one attempt ---------------------------------------------------
+
+    def _attempt(
+        self,
+        rid: str,
+        index: int,
+        spec: agents.AgentSpec,
+        provider: providers.Provider,
+        workdir: Path,
+        secrets: dict[str, str],
+        profile_name: str,
+        prompt: str,
+        effort: str,
+        model: str,
+        session_id: str,
+    ) -> dict:
+        attempt: dict = {
+            "index": index,
+            "provider": provider.name,
+            "model": model or "",
+            "started_at": time.time(),
+            "ended_at": 0.0,
+            "exit_code": None,
+            "error": "",
+            "errors": [],
+            "ok": False,
+            "tool_calls": 0,
+            "output_lines": 0,
+            "noise": [],
+            "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read": 0, "cache_write": 0},
+            "texts": [],
+            "session_ref": {},
+        }
+        self._emit(
+            rid,
+            "run.attempt",
+            {"provider": provider.name, "model": model, "attempt": index + 1},
+        )
+        try:
+            home = profiles.materialize(spec, provider, secrets, profile_name)
+            env = agents.build_env(spec, provider, secrets, home=home)
+            argv = agents.argv(spec, provider, effort or None, session_id, model or None)
+        except (OSError, ValueError) as exc:
+            attempt["error"] = f"{type(exc).__name__}: {exc}"
+            attempt["errors"].append(attempt["error"])
+            attempt["ended_at"] = time.time()
+            return attempt
+
+        before = meter.read(provider, secrets)
+        raw_path = config.HOME / "runs" / rid / f"raw-{index + 1}.jsonl"
         creation = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
         try:
             proc = subprocess.Popen(
-                agents.argv(spec, effort or None, session_id, model or None),
+                argv,
                 cwd=str(workdir),
                 env=env,
                 stdin=subprocess.PIPE,
@@ -261,13 +440,13 @@ class Runner:
                 creationflags=creation,
             )
         except OSError as exc:
-            emit("run.failed", {"error": str(exc)})
-            db.update_run(rid, status="failed", ended_at=time.time(), error=str(exc))
-            return
+            attempt["error"] = f"spawn failed: {exc}"
+            attempt["errors"].append(str(exc))
+            attempt["ended_at"] = time.time()
+            return attempt
 
         with self.lock:
             self.procs[rid] = proc
-
         try:
             assert proc.stdin is not None
             proc.stdin.write(prompt)
@@ -275,6 +454,34 @@ class Runner:
         except OSError:
             pass
 
+        self._pump(rid, proc, raw_path, spec, attempt)
+        try:
+            code = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._kill_tree(proc)
+            code = proc.wait(timeout=5)
+        with self.lock:
+            self.procs.pop(rid, None)
+
+        attempt["session_ref"].setdefault("cwd", str(workdir))
+        attempt["exit_code"] = code
+        attempt["ended_at"] = time.time()
+        attempt["ok"] = code == 0 and not attempt["error"]
+        if not attempt["ok"] and not attempt["error"]:
+            attempt["error"] = f"exit code {code}"
+            attempt["errors"].append(attempt["error"])
+        self._price(attempt, spec, provider, secrets, before)
+        return attempt
+
+    def _pump(
+        self,
+        rid: str,
+        proc: subprocess.Popen,
+        raw_path: Path,
+        spec: agents.AgentSpec,
+        attempt: dict,
+    ) -> None:
+        usage = attempt["usage"]
         with raw_path.open("w", encoding="utf-8") as raw:
             assert proc.stdout is not None
             incoming: "queue.Queue[str | None]" = queue.Queue()
@@ -293,8 +500,8 @@ class Runner:
                 try:
                     line = incoming.get(timeout=0.5)
                 except queue.Empty:
-                    # A child process can hold the stdout pipe open after the
-                    # CLI itself exits; do not wait on EOF forever.
+                    # A child can hold the stdout pipe open after the CLI exits;
+                    # do not wait on EOF forever.
                     if proc.poll() is not None:
                         exited_at = exited_at or time.time()
                         if time.time() - exited_at > 2.0:
@@ -302,61 +509,73 @@ class Runner:
                     # A live child that stops writing is hung on something
                     # (API stall, dead MCP server). No output is not progress.
                     elif time.time() - last_activity > IDLE_TIMEOUT:
-                        error_text = f"no output for {int(IDLE_TIMEOUT)}s, killed"
-                        emit("run.failed", {"error": error_text})
+                        attempt["error"] = f"no output for {int(IDLE_TIMEOUT)}s, killed"
+                        attempt["errors"].append(attempt["error"])
+                        self._emit(rid, "run.failed", {"error": attempt["error"]})
                         self._kill_tree(proc)
                         break
                     continue
                 if line is None:
                     break
                 last_activity = time.time()
+                attempt["output_lines"] += 1
                 raw.write(line if line.endswith("\n") else line + "\n")
                 raw.flush()
-                for ev in adapters.parse(spec.vendor, line):
+                events = adapters.parse(spec.vendor, line)
+                if not events and line.strip():
+                    # CLIs put connection and auth failures on stderr as plain
+                    # text. Keeping the tail is what lets a fallback recognise
+                    # an endpoint problem that never reached the JSON stream.
+                    attempt["noise"].append(line.strip()[:300])
+                    del attempt["noise"][:-20]
+                for ev in events:
                     kind = ev.pop("type")
                     if kind == "usage":
-                        for k in usage:
+                        for k in ("input_tokens", "output_tokens", "cache_read", "cache_write"):
                             usage[k] += int(ev.get(k) or 0)
                         if ev.get("cost"):
                             usage["cost"] = usage.get("cost", 0) + float(ev["cost"])
                         continue
                     if kind == "session":
-                        session_ref = {
+                        attempt["session_ref"] = {
                             "provider": spec.vendor,
                             "session_id": ev.get("session_id"),
-                            "cwd": str(workdir),
+                            "cwd": "",
                         }
                     if kind == "message" and ev.get("text"):
-                        if ev.get("final") and texts and ev["text"] == texts[-1]:
+                        if ev.get("final") and attempt["texts"] and ev["text"] == attempt["texts"][-1]:
                             continue  # the CLI repeats its final text
-                        texts.append(ev["text"])
+                        attempt["texts"].append(ev["text"])
+                    if kind == "tool_call":
+                        attempt["tool_calls"] += 1
                     if kind == "error":
-                        error_text = ev.get("message", "")
-                    emit(kind, ev)
+                        message = ev.get("message", "")
+                        attempt["error"] = message
+                        if message and len(attempt["errors"]) < 5:
+                            attempt["errors"].append(message)
+                    self._emit(rid, kind, ev)
 
-        try:
-            code = proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._kill_tree(proc)
-            code = proc.wait(timeout=5)
-        with self.lock:
-            self.procs.pop(rid, None)
+    def _price(
+        self,
+        attempt: dict,
+        spec: agents.AgentSpec,
+        provider: providers.Provider,
+        secrets: dict[str, str],
+        before,
+    ) -> None:
+        """Cost in order of trustworthiness, recorded per attempt.
 
-        final_text = texts[-1] if texts else ""
-        (run_dir / "final.md").write_text(final_text, encoding="utf-8")
-        status = "completed" if code == 0 and not error_text else "failed"
-        err = error_text or ("" if code == 0 else f"exit code {code}")
-
-        # Cost, in order of trustworthiness:
-        #   metered_request  a gateway read this session's log: exact, per call
-        #   metered          what the provider deducted over the run window
-        #   list_price       tokens x published price, exact when billing is at list
-        #   reported         the CLI's local price book, which is often another
-        #                    vendor's rates anyway (Claude Code prices MiniMax
-        #                    with Anthropic's prices, and adds no relay multiplier)
+        metered_request  a gateway read this session's log: exact, per call
+        metered          what the provider deducted over the attempt window
+        list_price       tokens x published price, exact at list billing
+        reported         the CLI's own price book, often another vendor's rates
+        """
+        usage = attempt["usage"]
         gateway = None
         if spec.gateway_sessions:
-            gateway = meter.request_cost(session_ref.get("session_id") or "", settle=6.0)
+            gateway = meter.request_cost(
+                attempt["session_ref"].get("session_id") or "", settle=6.0
+            )
         if gateway is not None:
             usage["cost"], requests = gateway
             usage["currency"] = config.gateway_currency()
@@ -364,29 +583,66 @@ class Runner:
             usage["meter"] = {
                 "unit": "gateway_request",
                 "requests": requests,
-                "window_s": round(time.time() - started_at, 1),
+                "window_s": round(attempt["ended_at"] - attempt["started_at"], 1),
             }
-        else:
-            meter_after = meter.read(spec, settle_from=meter_before)
-            metered = meter.delta(meter_before, meter_after)
-            if metered is not None and meter_before is not None:
-                usage["cost"] = round(metered * config.cost_rate(meter_before.unit), 6)
-                usage["currency"] = "CNY"
-                usage["cost_basis"] = "metered"
-                usage["meter"] = {
-                    "unit": meter_before.unit,
-                    "delta": round(metered, 6),
-                    "window_s": round(time.time() - started_at, 1),
-                }
-            elif spec.pricing is not None:
-                usage["cost"] = spec.pricing.cost(usage)
-                usage["currency"] = spec.pricing.currency
-                usage["cost_basis"] = "list_price"
-            elif isinstance(usage.get("cost"), (int, float)):
-                usage["currency"] = "USD"
-                usage["cost_basis"] = "reported"
+            return
+        after = meter.read(provider, secrets, settle_from=before)
+        metered = meter.delta(before, after)
+        if metered is not None and before is not None:
+            usage["cost"] = round(metered * config.cost_rate(before.unit), 6)
+            usage["currency"] = "CNY"
+            usage["cost_basis"] = "metered"
+            usage["meter"] = {
+                "unit": before.unit,
+                "delta": round(metered, 6),
+                "window_s": round(attempt["ended_at"] - attempt["started_at"], 1),
+            }
+        elif provider.pricing is not None:
+            usage["cost"] = provider.pricing.cost(usage)
+            usage["currency"] = provider.pricing.currency
+            usage["cost_basis"] = "list_price"
+        elif isinstance(usage.get("cost"), (int, float)):
+            usage["currency"] = "USD"
+            usage["cost_basis"] = "reported"
 
-        files = touched_files(workdir, started_at)
+    # ---- finalisation --------------------------------------------------
+
+    def _finalize(
+        self,
+        rid: str,
+        route: routes.Route,
+        spec: agents.AgentSpec,
+        task: dict,
+        workdir: Path,
+        run_dir: Path,
+        attempts: list[dict],
+        chosen: dict,
+        first_started: float,
+        session_id: str,
+    ) -> None:
+        final_text = chosen["texts"][-1] if chosen["texts"] else ""
+        (run_dir / "final.md").write_text(final_text, encoding="utf-8")
+        status = "completed" if chosen["ok"] else "failed"
+        err = "" if chosen["ok"] else (chosen["error"] or f"exit code {chosen['exit_code']}")
+
+        usage = dict(chosen["usage"])
+        usage["attempts"] = [
+            {
+                "provider": a["provider"],
+                "model": a["model"],
+                "status": "ok" if a["ok"] else "failed",
+                "tool_calls": a["tool_calls"],
+                "cost": a["usage"].get("cost"),
+                "currency": a["usage"].get("currency"),
+                "cost_basis": a["usage"].get("cost_basis"),
+            }
+            for a in attempts
+        ]
+        fallbacks = [
+            a["provider"] for a in attempts[:-1] if a["provider"] != chosen["provider"]
+        ]
+
+        files = touched_files(workdir, first_started)
         artifacts = [str(p) for p in files]
         for p in files:
             try:
@@ -398,7 +654,8 @@ class Runner:
         handoff_path = run_dir / "handoff.md"
         verify_mark = db.verify_states([rid]).get(rid, "none")
         handoff = build_handoff(
-            task, rid, spec.name, status, final_text, files, err, verify_mark
+            task, rid, spec.name, status, final_text, files, err, verify_mark,
+            provider=chosen["provider"], route=route.name, fallbacks=fallbacks,
         )
         handoff_path.write_text(handoff, encoding="utf-8")
         db.add_handoff(task["id"], rid, str(handoff_path), _digest(handoff_path))
@@ -409,20 +666,37 @@ class Runner:
             status=status,
             ended_at=time.time(),
             usage_json=json.dumps(usage),
-            session_ref_json=json.dumps(session_ref),
+            session_ref_json=json.dumps(chosen["session_ref"]),
             error=err or None,
+            provider=chosen["provider"],
         )
-        emit(
+        self._emit(
+            rid,
             "run.completed" if status == "completed" else "run.failed",
             {
                 "status": status,
-                "exit_code": code,
+                "exit_code": chosen["exit_code"],
+                "provider": chosen["provider"],
                 "usage": usage,
                 "artifacts": artifacts,
                 "handoff": str(handoff_path),
                 "error": err,
             },
         )
+
+    # ---- helpers -------------------------------------------------------
+
+    def _emit(self, rid: str, etype: str, payload: dict) -> None:
+        try:
+            seq = db.next_seq(rid)
+            ev = db.append_event(rid, seq, etype, payload)
+            BUS.publish({"run_id": rid, **{k: ev[k] for k in ("seq", "type", "payload", "ts")}})
+        except Exception:
+            pass
+
+    def _fail(self, rid: str, message: str) -> None:
+        self._emit(rid, "run.failed", {"error": message, "status": "failed"})
+        db.update_run(rid, status="failed", ended_at=time.time(), error=message)
 
     @staticmethod
     def _kill_tree(proc: subprocess.Popen) -> None:
@@ -484,41 +758,22 @@ class Runner:
 
     def reap_orphans(self) -> list[dict]:
         """Fail every run that claims to be running when this process owns none."""
-        out: list[dict] = []
-        for run in db.live_runs():
-            rid = run["id"]
-            with self.lock:
-                proc = self.procs.pop(rid, None)
-            if proc is not None:
-                self._kill_tree(proc)
-            salvaged = self.salvage(run)
-            message = "orphaned: the process that owned this run is gone"
-            if salvaged:
-                message += f"; {len(salvaged)} file(s) written by the worker were kept"
-            try:
-                db.append_event(
-                    rid,
-                    db.next_seq(rid),
-                    "run.failed",
-                    {"error": message, "status": "failed", "salvaged": salvaged},
-                )
-            except Exception:
-                pass
-            db.update_run(rid, status="failed", ended_at=time.time(), error=message)
-            out.append({**run, "error": message, "salvaged": salvaged})
-        return out
+        return self._reap(db.live_runs(), "the process that owned this run is gone")
 
     def reconcile(self, stale_seconds: int = 900) -> list[dict]:
         """Fail runs whose owner process died while they were still running."""
+        return self._reap(db.stale_runs(stale_seconds), f"no activity for {stale_seconds}s")
+
+    def _reap(self, runs: list[dict], reason: str) -> list[dict]:
         out: list[dict] = []
-        for run in db.stale_runs(stale_seconds):
+        for run in runs:
             rid = run["id"]
             with self.lock:
                 proc = self.procs.pop(rid, None)
             if proc is not None:
                 self._kill_tree(proc)
             salvaged = self.salvage(run)
-            message = f"orphaned: no activity for {stale_seconds}s"
+            message = f"orphaned: {reason}"
             if salvaged:
                 message += f"; {len(salvaged)} file(s) written by the worker were kept"
             try:
@@ -551,6 +806,9 @@ def build_handoff(
     files: list[Path],
     error: str,
     verify_mark: str = "none",
+    provider: str = "",
+    route: str = "",
+    fallbacks: list[str] | None = None,
 ) -> str:
     listed = "\n".join(f"- {p}" for p in files) or "- （无改动）"
     unverified = (
@@ -558,11 +816,19 @@ def build_handoff(
         if verify_mark == "none"
         else ""
     )
+    endpoint = f"- 端点：{provider}" + (f"（路由 {route}）" if route and route != provider else "")
+    fallback_line = ""
+    if fallbacks:
+        fallback_line = (
+            f"- 回退：{' → '.join(fallbacks)} → {provider}"
+            "（前序端点未产生任何工具调用，属于上游故障而非任务失败）\n"
+        )
     return f"""# Handoff — {task.get('title', '')}
 
 - 任务：{task['id']}
 - 执行：{rid}（{agent}）
-- 状态：{status}
+{endpoint}
+{fallback_line}- 状态：{status}
 - 验证：{VERIFY_TEXT.get(verify_mark, verify_mark)}
 - 时间：{time.strftime('%Y-%m-%d %H:%M:%S')}
 

@@ -1,6 +1,6 @@
 [project]
 name = "nodus"
-version = "0.3.0"
+version = "0.4.0"
 description = "Task acceptance layer for multi-agent work"
 requires-python = ">=3.11"
 # DSH sessions are stored as multi-frame zstd JSONL; reading them is core.

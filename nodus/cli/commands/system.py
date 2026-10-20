@@ -8,7 +8,18 @@ import shutil
 import time
 from pathlib import Path
 
-from ... import agents, config, db, decision, desk as desk_view, runner, server, telemetry
+from ... import (
+    agents,
+    config,
+    db,
+    decision,
+    desk as desk_view,
+    providers,
+    routes,
+    runner,
+    server,
+    telemetry,
+)
 from ..client import call
 
 
@@ -73,7 +84,7 @@ def desk(args) -> int:
 def agents_cmd(args) -> int:
     for a in call("GET", "/agents"):
         mark = "ok" if a["ready"] else "MISSING " + ",".join(a["missing"])
-        print(f"{a['name']:<8} {a['vendor']:<8} {mark}")
+        print(f"{a['name']:<8} {a['vendor']:<8} {','.join(a['protocols']):<12} {mark}")
     return 0
 
 
@@ -114,13 +125,23 @@ def doctor(args) -> int:
 
     def agent_readiness():
         secrets = config.load_secrets()
+        table = providers.load()
         ready, missing = [], []
-        for name, spec in agents.registry().items():
-            gap = agents.missing_requirements(spec, secrets)
-            (missing if gap else ready).append(name if not gap else f"{name}({','.join(gap)})")
+        for route in routes.load().values():
+            spec = agents.get(route.agent)
+            gap = list(routes.problems(route))
+            if spec is not None:
+                for name in route.providers:
+                    provider = table.get(name)
+                    if provider is not None:
+                        gap.extend(agents.missing(spec, provider, secrets))
+            if gap:
+                missing.append(f"{route.name}({','.join(gap)})")
+            else:
+                ready.append(route.name)
         detail = f"ready={','.join(ready) or '-'}"
         if missing:
-            detail += f" missing={','.join(missing)}"
+            detail += f" gaps={','.join(missing)}"
         return bool(ready), detail
 
     def sessions():
@@ -165,31 +186,31 @@ def probe(args) -> int:
 
 def status(args) -> int:
     latest = telemetry.last_probes()
-    for name in ("9527", "typesafe", "deepseek"):
+    for name in sorted(providers.load()):
         r = latest.get(name)
         if not r:
-            print(f"{name:<10} never probed")
+            print(f"{name:<14} never probed")
             continue
         age = int((time.time() - r["ts"]) / 60)
         mark = "ok" if r.get("ok") else "FAIL"
         print(
-            f"{name:<10} {mark:<4} {age}min ago  models={r.get('models', '-')} "
-            f"{r.get('latency_ms', '-')}ms"
+            f"{name:<14} {mark:<4} {age}min ago  models={r.get('models', '-')} "
+            f"{r.get('latency_ms', '-')}ms {r.get('error', '')}"
         )
     today = telemetry.usage_summary(1)
     total_in = sum(b["in"] for b in today.values())
     total_out = sum(b["out"] for b in today.values())
     print(
-        f"today      runs={sum(b['runs'] for b in today.values())} "
+        f"today          runs={sum(b['runs'] for b in today.values())} "
         f"in={total_in} out={total_out}"
     )
     d = telemetry.decision_usage(1)
-    print(f"jev today  calls={d['calls']} in={d['in']} out={d['out']}")
+    print(f"jev today      calls={d['calls']} in={d['in']} out={d['out']}")
     b = telemetry.balance()
     if b:
         print(
-            f"9527 money limit=${b['limit_usd']:.2f} used=${b['used_usd']:.2f} "
-            f"remaining=${b['remaining_usd']:.2f}"
+            f"relay balance  站内余额 used={b['used_usd']:.2f} / limit={b['limit_usd']:.2f} "
+            f"remaining={b['remaining_usd']:.2f}"
         )
     return 0
 
@@ -212,20 +233,28 @@ def usage(args) -> int:
     data = telemetry.usage_summary(args.days)
     if not data:
         print("(no runs in window)")
-    for agent, b in sorted(data.items()):
+    for route, b in sorted(data.items()):
         money = " + ".join(
             f"{'¥' if c == 'CNY' else c + ' '}{v:.4f}" for c, v in sorted(b["costs"].items())
         )
         if money:
-            labels = {"metered": "实测", "list_price": "价目表", "reported": "CLI 自报偏大"}
+            labels = {
+                "metered": "实测",
+                "metered_request": "网关逐请求",
+                "list_price": "价目表",
+                "reported": "CLI 自报偏大",
+            }
             money += "（" + "+".join(labels.get(x, x) for x in sorted(b["basis"])) + "）"
+        providers_used = ",".join(sorted(b["providers"]))
+        fallback = f" fallback={b['fallbacks']}" if b["fallbacks"] else ""
         print(
-            f"{agent:<8} runs={b['runs']:<3} in={b['in']:<9} out={b['out']:<8} "
-            f"cache_read={b['cache_read']:<9} failed={b['failed']}  cost={money or 'n/a'}"
+            f"{route:<12} runs={b['runs']:<3} in={b['in']:<9} out={b['out']:<8} "
+            f"cache_read={b['cache_read']:<9} failed={b['failed']} "
+            f"via={providers_used}{fallback}  cost={money or 'n/a'}"
         )
     d = telemetry.decision_usage(args.days)
     print(
-        f"{'jev':<8} calls={d['calls']:<2} in={d['in']:<9} out={d['out']:<8} "
+        f"{'jev':<12} calls={d['calls']:<2} in={d['in']:<9} out={d['out']:<8} "
         f"unavailable={d['unavailable']}"
     )
     return 0

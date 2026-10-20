@@ -38,3 +38,7 @@ jobs:
           Write-Host $version
           python nodus.py --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "nodus --help failed" }
+
+      - name: Every command surface loads
+        shell: pwsh
+        run: ./scripts/smoke_cli.ps1

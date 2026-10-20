@@ -134,6 +134,33 @@ def test_dsh_log_line_is_not_json():
     assert adapters.parse("dsh", "[10/20/26 02:32:00] INFO Processing request") == []
 
 
+def test_dsh_turn_error_becomes_an_error_event():
+    """A DSH turn that dies on auth reports it only in `reason`.
+
+    The trailing `dsh: AUTH: 401 ...` line is plain text, so without this the
+    run records nothing but "exit code 1" and a fallback can never tell an
+    endpoint failure from a task failure.
+    """
+    line = json.dumps(
+        {
+            "type": "status",
+            "phase": "turn_end",
+            "reason": {
+                "kind": "error",
+                "error": {"message": "401: WorkBuddy: 401 Unauthorized", "code": "AUTH"},
+            },
+        }
+    )
+    events = adapters.parse("dsh", line)
+    assert [e["type"] for e in events] == ["status", "error"]
+    assert "401" in events[1]["message"]
+
+
+def test_dsh_a_clean_turn_end_is_not_an_error():
+    line = json.dumps({"type": "status", "phase": "turn_end", "reason": {"kind": "done"}})
+    assert [e["type"] for e in adapters.parse("dsh", line)] == ["status"]
+
+
 def test_unknown_line_is_preserved_as_raw():
     events = adapters.parse("claude", json.dumps({"type": "something_new", "x": 1}))
     assert events[0]["type"] == "raw"

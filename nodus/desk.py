@@ -50,7 +50,7 @@ def collect(limit: int = 15) -> list[dict]:
                 "id": task["id"],
                 "title": task.get("title") or task.get("goal") or task["id"],
                 "status": task.get("status") or "open",
-                "agent": (last or {}).get("agent") or "-",
+                "agent": _endpoint(last),
                 "run_status": (last or {}).get("status") or "-",
                 "verify": mark,
                 "cost": _money(_usage(last)) if last else "-",
@@ -58,6 +58,15 @@ def collect(limit: int = 15) -> list[dict]:
             }
         )
     return rows
+
+
+def _endpoint(run: dict | None) -> str:
+    """Which pairing actually ran, not just which CLI was asked for."""
+    if not run:
+        return "-"
+    route = run.get("route") or run.get("agent") or "-"
+    provider = run.get("provider") or ""
+    return route if not provider or provider == route else f"{route}→{provider}"
 
 
 def todos(rows: list[dict]) -> list[str]:

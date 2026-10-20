@@ -112,12 +112,24 @@ def fmt_event(ev: dict) -> str | None:
         return f"  ← {flag} {(p.get('text') or '')[:160]}"
     if t == "error":
         return f"  ! {p.get('message')}"
+    if t == "run.attempt":
+        return f"  · attempt {p.get('attempt')} on {p.get('provider')} ({p.get('model') or '-'})"
+    if t == "run.fallback":
+        # Never silent: the fallback endpoint is a different, often weaker model
+        return (
+            f"  !! {p.get('from')} failed before doing anything"
+            f" ({p.get('reason')}) → retrying on {p.get('to')}"
+        )
     if t in ("run.completed", "run.failed"):
         u = p.get("usage") or {}
+        money = ""
+        if isinstance(u.get("cost"), (int, float)):
+            symbol = "¥" if u.get("currency") == "CNY" else f"{u.get('currency')} "
+            money = f" cost={symbol}{u['cost']:.6f}({u.get('cost_basis')})"
         return (
-            f"\n[{p.get('status')}] exit={p.get('exit_code')} "
+            f"\n[{p.get('status')}] provider={p.get('provider', '-')} exit={p.get('exit_code')} "
             f"in={u.get('input_tokens', 0)} out={u.get('output_tokens', 0)} "
-            f"cache_read={u.get('cache_read', 0)}\nhandoff: {p.get('handoff')}"
+            f"cache_read={u.get('cache_read', 0)}{money}\nhandoff: {p.get('handoff')}"
         )
     return None
 

@@ -106,6 +106,9 @@ def connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE run ADD COLUMN effort TEXT")
     if "model" not in cols:
         conn.execute("ALTER TABLE run ADD COLUMN model TEXT")
+    for column in ("route", "provider", "profile"):
+        if column not in cols:
+            conn.execute(f"ALTER TABLE run ADD COLUMN {column} TEXT")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
@@ -195,12 +198,16 @@ def create_run(
     note: str = "",
     effort: str = "",
     model: str = "",
+    route: str = "",
+    provider: str = "",
+    profile: str = "",
 ) -> dict:
     rid = new_id("run")
     with connect() as c:
         c.execute(
             "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note,"
-            " effort, model, started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            " effort, model, route, provider, profile, started_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 rid,
                 config.workspace_id(),
@@ -211,6 +218,9 @@ def create_run(
                 note,
                 effort,
                 model,
+                route,
+                provider,
+                profile,
                 now(),
             ),
         )

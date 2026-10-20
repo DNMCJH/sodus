@@ -207,11 +207,14 @@ def render_md(data: dict) -> str:
         )
     else:
         lines.append("- 成本：未上报（agent CLI 没有返回 cost 字段，也没有可读的计费表）")
-    lines += ["", "## 执行", "", "| run | agent | 状态 | 用时 | in | out | cache_read |", "|---|---|---|---|---|---|---|"]
+    lines += ["", "## 执行", "", "| run | 路由/端点 | 状态 | 用时 | in | out | cache_read |", "|---|---|---|---|---|---|---|"]
     for run in data["runs"]:
         usage = _usage(run)
+        route = run.get("route") or run.get("agent") or "-"
+        provider = run.get("provider") or ""
+        endpoint = f"{route} → {provider}" if provider and provider != route else route
         lines.append(
-            f"| {run['id']} | {run['agent']} | {run.get('status')} | "
+            f"| {run['id']} | {endpoint} | {run.get('status')} | "
             f"{_fmt_dur(_seconds(run))} | {int(usage.get('input_tokens') or 0):,} | "
             f"{int(usage.get('output_tokens') or 0):,} | {int(usage.get('cache_read') or 0):,} |"
         )

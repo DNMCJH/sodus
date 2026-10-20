@@ -1,102 +1,29 @@
-"""Usage accounting and provider liveness probes.
+"""Usage accounting and endpoint liveness probes.
 
-Usage comes from the run table (already collected per run). Probes use each
-provider's model-list endpoint, which is free and also tells us whether the key
+Usage comes from the run table (already collected per attempt). Probes ask each
+provider for its model list, which is free and also tells us whether the key
 still works. No probe spends generation tokens.
+
+Endpoints come from the provider registry, so this module has no list of its
+own to drift out of date.
 """
 
 from __future__ import annotations
 
 import json
 import time
-import urllib.error
-import urllib.request
-from pathlib import Path
 
-from . import config, db
+from . import config, db, providers
 
 PROBE_LOG = "probes.jsonl"
 
 
-def _claude_env() -> dict:
-    path = Path.home() / ".claude" / "settings.json"
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("env", {})
-    except json.JSONDecodeError:
-        return {}
-
-
-def providers() -> list[dict]:
-    secrets = config.load_secrets()
-    claude = _claude_env()
-    out: list[dict] = []
-    base = (claude.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
-    token = claude.get("ANTHROPIC_AUTH_TOKEN") or ""
-    if base and token:
-        out.append(
-            {
-                "name": "9527",
-                "url": f"{base}/v1/models",
-                "headers": {"Authorization": f"Bearer {token}"},
-                "proxy": None,
-            }
-        )
-    ts_key = secrets.get("TYPESAFE_API_KEY") or ""
-    if ts_key:
-        out.append(
-            {
-                "name": "typesafe",
-                "url": "https://api.typesafe.ai/v1/models",
-                "headers": {"Authorization": f"Bearer {ts_key}"},
-                "proxy": secrets.get("TYPESAFE_PROXY") or "http://127.0.0.1:7890",
-            }
-        )
-    ds_key = secrets.get("DEEPSEEK_API_KEY") or ""
-    if ds_key:
-        out.append(
-            {
-                "name": "deepseek",
-                "url": "https://api.deepseek.com/models",
-                "headers": {"Authorization": f"Bearer {ds_key}"},
-                "proxy": None,
-            }
-        )
-    return out
-
-
-def _opener(proxy: str | None):
-    if proxy:
-        return urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
-        )
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-
 def probe() -> list[dict]:
+    secrets = config.load_secrets()
     results = []
-    for p in providers():
-        started = time.time()
-        record = {"ts": started, "provider": p["name"], "url": p["url"]}
-        try:
-            headers = {**p["headers"], "User-Agent": "nodus/0.3"}
-            req = urllib.request.Request(p["url"], headers=headers)
-            with _opener(p.get("proxy")).open(req, timeout=20) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            models = body.get("data") or body.get("models") or []
-            record.update(
-                {
-                    "ok": True,
-                    "status": resp.status,
-                    "models": len(models),
-                    "latency_ms": int((time.time() - started) * 1000),
-                }
-            )
-        except urllib.error.HTTPError as exc:
-            record.update({"ok": False, "status": exc.code, "error": exc.reason})
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            record.update({"ok": False, "status": 0, "error": str(exc)})
+    for provider in sorted(providers.load().values(), key=lambda p: p.name):
+        record = providers.probe(provider, secrets)
+        record["ts"] = time.time()
         results.append(record)
         config.ensure_dirs()
         with (config.HOME / PROBE_LOG).open("a", encoding="utf-8") as f:
@@ -119,13 +46,19 @@ def last_probes() -> dict[str, dict]:
 
 
 def balance() -> dict | None:
-    """Prepaid balance for relays that expose OpenAI-style billing endpoints."""
-    claude = _claude_env()
-    base = (claude.get("ANTHROPIC_BASE_URL") or "").rstrip("/")
-    token = claude.get("ANTHROPIC_AUTH_TOKEN") or ""
+    """Prepaid balance for a relay that exposes OpenAI-style billing endpoints."""
+    secrets = config.load_secrets()
+    provider = providers.get("relay")
+    if provider is None:
+        return None
+    base = (provider.base_url or "").rstrip("/")
+    token = providers.secret_value(provider, secrets)
     if not base or not token:
         return None
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "nodus/0.3"}
+    import urllib.error
+    import urllib.request
+
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "nodus/0.4"}
     try:
         sub = json.loads(
             urllib.request.urlopen(
@@ -144,7 +77,7 @@ def balance() -> dict | None:
     limit = float(sub.get("hard_limit_usd") or 0)
     used = float(usage.get("total_usage") or 0) / 100.0  # OpenAI returns cents
     return {
-        "provider": "9527",
+        "provider": "relay",
         "limit_usd": limit,
         "used_usd": round(used, 2),
         "remaining_usd": round(limit - used, 2),
@@ -152,6 +85,12 @@ def balance() -> dict | None:
 
 
 def usage_summary(days: float = 7.0) -> dict:
+    """Per-route totals.
+
+    Routed, not per-agent: "claude" no longer names one endpoint, and a report
+    that merges a relay run with a MiniMax run hides the number that matters.
+    Runs from before the split have no route column and fall back to the agent.
+    """
     cutoff = time.time() - days * 86400
     totals: dict[str, dict] = {}
     for run in db.list_runs(limit=10000):
@@ -161,14 +100,28 @@ def usage_summary(days: float = 7.0) -> dict:
             usage = json.loads(run.get("usage_json") or "{}")
         except json.JSONDecodeError:
             usage = {}
+        key = run.get("route") or run["agent"]
         bucket = totals.setdefault(
-            run["agent"],
-            {"runs": 0, "in": 0, "out": 0, "cache_read": 0, "failed": 0, "costs": {}, "basis": set()},
+            key,
+            {
+                "runs": 0,
+                "in": 0,
+                "out": 0,
+                "cache_read": 0,
+                "failed": 0,
+                "costs": {},
+                "basis": set(),
+                "providers": set(),
+                "fallbacks": 0,
+            },
         )
         bucket["runs"] += 1
         bucket["in"] += int(usage.get("input_tokens") or 0)
         bucket["out"] += int(usage.get("output_tokens") or 0)
         bucket["cache_read"] += int(usage.get("cache_read") or 0)
+        bucket["providers"].add(run.get("provider") or "-")
+        if len(usage.get("attempts") or []) > 1:
+            bucket["fallbacks"] += 1
         if isinstance(usage.get("cost"), (int, float)):
             currency = usage.get("currency") or "USD"
             bucket["costs"][currency] = bucket["costs"].get(currency, 0.0) + float(usage["cost"])

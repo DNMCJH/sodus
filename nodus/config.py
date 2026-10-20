@@ -14,8 +14,9 @@ from pathlib import Path
 DEFAULT_HOME = Path.home() / ".nodus"
 LEGACY_HOME = Path.home() / ".workbench"
 HOME = Path(os.environ.get("NODUS_HOME") or DEFAULT_HOME).expanduser()
-AGENTS_DIR = HOME / "agents"
-VERSION = "0.3.0"
+#: Pre-0.4 per-agent config dirs. Read once by the provider/profile migration.
+LEGACY_AGENTS_DIR = HOME / "agents"
+VERSION = "0.4.0"
 
 
 def _absorb_legacy_home() -> None:
@@ -65,8 +66,14 @@ def token() -> str:
     return value
 
 
+def active_profile() -> str:
+    """Which profile new runs use. Stored here because it is a setting, not a
+    capability: `profiles` owns the contents, `config` owns the pointer."""
+    return str(load_config().get("profile") or "default")
+
+
 def ensure_dirs() -> None:
-    for d in (HOME, AGENTS_DIR, HOME / "tasks", HOME / "runs", HOME / "briefs", state_dir()):
+    for d in (HOME, HOME / "profiles", HOME / "tasks", HOME / "runs", HOME / "briefs", state_dir()):
         d.mkdir(parents=True, exist_ok=True)
 
 

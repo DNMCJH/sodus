@@ -20,7 +20,9 @@ def add(sub) -> None:
 
     p = sub.add_parser("run", help="start a run for a task")
     p.add_argument("task")
-    p.add_argument("--agent", default="claude")
+    p.add_argument("--agent", default="", help="route name (kept for older scripts)")
+    p.add_argument("--route", default="", help="route: agent + ordered fallback chain")
+    p.add_argument("--profile", default="", help="profile to run under")
     p.add_argument("--cwd", default=None)
     p.add_argument("--parent", default=None)
     p.add_argument("--note", default="")
@@ -67,30 +69,31 @@ def tasks(args) -> int:
 
 
 def run(args) -> int:
-    agent = args.agent
+    route = args.route or args.agent
     effort = args.effort
-    if agent == "auto":
+    if route == "auto":
         from ... import decision
 
         task_obj = call("GET", f"/tasks/{args.task}")
-        ready = [a["name"] for a in call("GET", "/agents") if a["ready"]]
+        ready = [r["name"] for r in call("GET", "/routes") if r["ready"]]
         routed = decision.route_task(task_obj, ready)
         if routed.get("ok"):
-            agent = choice(routed, "agent")[0] or "claude"
+            route = choice(routed, "agent")[0] or "claude"
             effort = effort or (choice(routed, "effort")[0] or "")
             print(
-                f"route → {agent} effort={effort or '-'} "
+                f"route → {route} effort={effort or '-'} "
                 f"({routed.get('model')}, {routed.get('latency_ms')}ms)"
             )
         else:
-            agent = "claude"
+            route = "claude"
             print(f"route unavailable ({routed.get('unavailable')}), fallback claude")
     r = call(
         "POST",
         "/runs",
         {
             "task_id": args.task,
-            "agent": agent,
+            "route": route or "claude",
+            "profile": args.profile,
             "cwd": args.cwd,
             "parent_run_id": args.parent,
             "note": args.note,
@@ -98,7 +101,7 @@ def run(args) -> int:
             "model": args.model,
         },
     )
-    print(f"run {r['id']} ({agent})")
+    print(f"run {r['id']} ({r.get('route') or route})")
     return watch(r["id"])
 
 
@@ -107,8 +110,9 @@ def runs(args) -> int:
         # `completed` alone means the process exited 0. Say whether anything
         # was actually checked, so a blocked worker cannot read as success.
         print(
-            f"{r['id']}  {r['status']:<9} {r['agent']:<7} "
-            f"verify={r.get('verify', 'none'):<4} task={r['task_id']}"
+            f"{r['id']}  {r['status']:<9} {(r.get('route') or r['agent']):<8} "
+            f"{(r.get('provider') or '-'):<12} verify={r.get('verify', 'none'):<4} "
+            f"task={r['task_id']}"
         )
     return 0
 

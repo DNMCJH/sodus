@@ -18,7 +18,6 @@ upgrade degrades to noise rather than silence.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 
 def _load(line: str) -> dict | None:
@@ -213,6 +212,15 @@ def parse_dsh(line: str) -> list[dict]:
                     "cache_write": usage.get("cacheWriteTokens", 0) or 0,
                 }
             )
+        # A turn that dies on an auth or transport error reports it here and
+        # nowhere else: the trailing stderr line is not JSON, so dropping this
+        # leaves the run with nothing but "exit code 1" and no way to tell an
+        # endpoint failure from a task failure.
+        reason = obj.get("reason")
+        if isinstance(reason, dict) and reason.get("kind") == "error":
+            error = reason.get("error") or {}
+            message = error.get("message") if isinstance(error, dict) else None
+            out.append({"type": "error", "message": str(message or reason)})
         return out
     if t == "error":
         return [{"type": "error", "message": str(obj)}]

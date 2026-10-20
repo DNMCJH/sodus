@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nodus import agents, config, meter
+from nodus import config, meter, providers
 
 
 def _usage(value: float) -> meter.Reading:
@@ -15,6 +15,18 @@ def _usage(value: float) -> meter.Reading:
 
 def _balance(value: float) -> meter.Reading:
     return meter.Reading(value=value, unit="cny", kind="balance")
+
+
+def _relay(**over) -> providers.Provider:
+    base = dict(
+        name="relay",
+        protocol=providers.ANTHROPIC,
+        base_url="https://relay.test",
+        key_secret="RELAY_API_KEY",
+        meter="relay",
+    )
+    base.update(over)
+    return providers.Provider(**base)
 
 
 def test_usage_meter_delta_grows():
@@ -30,39 +42,45 @@ def test_negative_or_mixed_deltas_are_not_guessed():
     assert meter.delta(_usage(100.0), _balance(90.0)) is None  # different meters
 
 
-def test_agents_without_a_meter_return_none():
-    assert meter.read(agents.SPECS["minimax"]) is None
-    assert agents.SPECS["claude"].meter == "relay"
-    assert agents.SPECS["dsh"].meter == "deepseek"
+def test_an_endpoint_without_a_meter_returns_none():
+    assert meter.read(providers.Provider(name="x", protocol=providers.OPENAI), {}) is None
 
 
-def test_relay_reading_is_cents_of_site_balance(tmp_path, monkeypatch):
-    home = tmp_path / "claude"
-    home.mkdir()
-    (home / "settings.json").write_text(
-        json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://relay.test", "ANTHROPIC_AUTH_TOKEN": "sk"}}),
-        encoding="utf-8",
-    )
-    spec = agents.AgentSpec(name="x", vendor="claude", command=["x"], config_home=home, meter="relay")
+def test_relay_reading_is_cents_of_site_balance(monkeypatch):
     monkeypatch.setattr(meter, "_get_json", lambda url, token, timeout=15.0: {"total_usage": 249486.0})
-    reading = meter.read(spec)
+    reading = meter.read(_relay(), {"RELAY_API_KEY": "sk"})
     assert reading == meter.Reading(value=2494.86, unit="relay_unit", kind="usage")
 
 
-def test_unreachable_meter_fails_open(tmp_path, monkeypatch):
-    home = tmp_path / "claude"
-    home.mkdir()
-    (home / "settings.json").write_text(
-        json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://relay.test", "ANTHROPIC_AUTH_TOKEN": "sk"}}),
-        encoding="utf-8",
-    )
-    spec = agents.AgentSpec(name="x", vendor="claude", command=["x"], config_home=home, meter="relay")
-
+def test_unreachable_meter_fails_open(monkeypatch):
     def boom(*_a, **_k):
         raise OSError("network down")
 
     monkeypatch.setattr(meter, "_get_json", boom)
-    assert meter.read(spec) is None
+    assert meter.read(_relay(), {"RELAY_API_KEY": "sk"}) is None
+
+
+def test_a_meter_without_a_key_is_not_read(monkeypatch):
+    called: list = []
+    monkeypatch.setattr(meter, "_get_json", lambda *a, **k: called.append(1) or {})
+    assert meter.read(_relay(), {}) is None
+    assert called == []
+
+
+def test_both_faces_of_one_relay_read_the_same_meter(monkeypatch):
+    """Billing hangs off the account root, not the protocol root."""
+    seen: list[str] = []
+
+    def capture(url, token, timeout=15.0):
+        seen.append(url)
+        return {"total_usage": 100.0}
+
+    monkeypatch.setattr(meter, "_get_json", capture)
+    anthropic = _relay(base_url="https://relay.test")
+    openai = _relay(base_url="https://relay.test/v1")
+    meter.read(anthropic, {"RELAY_API_KEY": "sk"})
+    meter.read(openai, {"RELAY_API_KEY": "sk"})
+    assert seen[0] == seen[1] == "https://relay.test/v1/dashboard/billing/usage"
 
 
 def test_cost_rate_is_configurable_because_the_api_never_states_it(tmp_path, monkeypatch):

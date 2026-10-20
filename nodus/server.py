@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agents, config, db, runner
+from . import agents, config, db, profiles, providers, routes, runner
 
 MAX_BODY = 1_000_000
 
@@ -130,10 +130,11 @@ class Handler(BaseHTTPRequestHandler):
         path = u.path.rstrip("/") or "/"
 
         if path == "/health":
-            return _json(self, 200, {"ok": True, "version": "0.1.0"})
+            return _json(
+                self, 200, {"ok": True, "version": config.VERSION, "profile": config.active_profile()}
+            )
 
         if path == "/agents":
-            specs = agents.registry()
             secrets = config.load_secrets()
             return _json(
                 self,
@@ -142,10 +143,71 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "name": s.name,
                         "vendor": s.vendor,
-                        "ready": not agents.missing_requirements(s, secrets),
-                        "missing": agents.missing_requirements(s, secrets),
+                        "protocols": list(s.accepts),
+                        "ready": not agents.unavailable(s),
+                        "missing": agents.unavailable(s),
                     }
-                    for s in specs.values()
+                    for s in agents.registry().values()
+                ],
+            )
+
+        if path == "/providers":
+            secrets = config.load_secrets()
+            return _json(
+                self,
+                200,
+                [
+                    {
+                        "name": p.name,
+                        "protocol": p.protocol,
+                        "base_url": p.base_url,
+                        "model": p.model,
+                        "tiers": p.tiers,
+                        "pricing": vars(p.pricing) if p.pricing else None,
+                        "meter": p.meter,
+                        "note": p.note,
+                        "ready": not providers.missing(p, secrets),
+                        "missing": providers.missing(p, secrets),
+                    }
+                    for p in providers.load().values()
+                ],
+            )
+
+        if path == "/routes":
+            secrets = config.load_secrets()
+            table = providers.load()
+            out = []
+            for route in routes.load().values():
+                spec = agents.get(route.agent)
+                gaps = routes.problems(route)
+                if spec is not None:
+                    for name in route.providers:
+                        provider = table.get(name)
+                        if provider is not None:
+                            gaps.extend(
+                                f"{name}: {gap}" for gap in agents.missing(spec, provider, secrets)
+                            )
+                out.append(
+                    {
+                        "name": route.name,
+                        "agent": route.agent,
+                        "providers": list(route.providers),
+                        "model": route.model,
+                        "effort": route.effort,
+                        "ready": not gaps,
+                        "problems": gaps,
+                    }
+                )
+            return _json(self, 200, out)
+
+        if path == "/profiles":
+            active = config.active_profile()
+            return _json(
+                self,
+                200,
+                [
+                    {**vars(profiles.read(name)), "active": name == active}
+                    for name in (profiles.names() or ["default"])
                 ],
             )
 
@@ -219,12 +281,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 run = runner.RUNNER.start(
                     task_id=body.get("task_id", ""),
-                    agent_name=body.get("agent", "claude"),
+                    route_name=body.get("route") or body.get("agent") or "claude",
                     cwd=body.get("cwd"),
                     parent_run_id=body.get("parent_run_id"),
                     note=body.get("note", ""),
                     effort=body.get("effort", ""),
                     model=body.get("model", ""),
+                    profile=body.get("profile", ""),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
@@ -243,6 +306,7 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     ):
         raise SystemExit("refusing non-loopback bind without NODUS_ALLOW_REMOTE=1")
     config.ensure_dirs()
+    profiles.ensure_ready()
     db.connect().close()
     # A daemon that just started owns no runs: anything still marked running
     # belongs to a process that is gone. Reap before accepting work, so a
