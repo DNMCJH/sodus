@@ -136,7 +136,7 @@ def run_fix(
         "counts": review.get("counts"),
     }
 
-    fixer = pick_fixer(target.get("agent", ""), review.get("reviewer", ""), by)
+    fixer = pick_fixer(review_mod.implementer_of(target), review.get("reviewer", ""), by)
     result["fixer"] = fixer
     baseline = verify.test_file_hashes(cwd)
 

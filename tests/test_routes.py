@@ -93,3 +93,17 @@ def test_the_reviewer_picker_still_works_after_the_split(tmp_path, monkeypatch):
     assert review.pick_reviewer("claude") in ("codex", "dsh")
     with pytest.raises(ValueError, match="must differ"):
         review.pick_reviewer("claude", "claude")
+
+
+def test_a_legacy_run_name_resolves_to_the_cli_that_wrote_it(tmp_path, monkeypatch):
+    """Rows written before 0.4.0 stored a route-shaped name in `agent`.
+
+    Comparing that against CLI names would let Claude review its own work on
+    every old MiniMax run, which is the one thing a reviewer must not do.
+    """
+    from nodus import review
+
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    assert review.implementer_of({"agent": "minimax", "route": None}) == "claude"
+    assert review.implementer_of({"agent": "claude", "route": "minimax"}) == "claude"
+    assert review.implementer_of({"agent": "codex", "route": "codex"}) == "codex"

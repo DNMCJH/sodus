@@ -191,6 +191,20 @@ def build_context(task: dict, target_run: dict, scope: str = "task") -> dict:
     return ctx
 
 
+def implementer_of(run: dict) -> str:
+    """Which CLI wrote this run, even for rows recorded before routes existed.
+
+    `agent` used to hold a route-shaped name (`minimax`), and a reviewer picker
+    that compared it against CLI names would happily let Claude review its own
+    work. Resolving the route collapses both shapes to the CLI that ran.
+    """
+    from . import routes
+
+    name = run.get("route") or run.get("agent") or ""
+    route = routes.resolve(name)
+    return route.agent if route else (run.get("agent") or "")
+
+
 def pick_reviewer(target_agent: str, by: str = "") -> str:
     from . import routes
 
@@ -379,7 +393,7 @@ def run_review(
     task = db.get_task(target.get("task_id", ""))
     if not task:
         raise ValueError(f"run has no task: {target_run_id}")
-    reviewer = pick_reviewer(target.get("agent", ""), by)
+    reviewer = pick_reviewer(implementer_of(target), by)
     ctx = build_context(task, target, scope)
     note = NOTE.format(
         title=task.get("title") or task.get("goal", "")[:60],
