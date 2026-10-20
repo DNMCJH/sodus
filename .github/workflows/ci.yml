@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Windows is the target platform: process handling, ACLs and .cmd shims
+    # all behave differently here, so CI has to run where the product runs.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: CLI answers without a daemon
+        shell: pwsh
+        run: |
+          $version = python nodus.py --version
+          if ($LASTEXITCODE -ne 0) { throw "nodus --version failed" }
+          Write-Host $version
+          python nodus.py --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "nodus --help failed" }
