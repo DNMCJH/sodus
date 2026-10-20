@@ -100,6 +100,17 @@ def session_roots() -> list[Path]:
     return roots
 
 
+def gateway_currency() -> str:
+    """Currency the local gateway's `cost` column is denominated in.
+
+    Verified by reading the gateway's own report (`magpie usage` prints `≈$`),
+    not assumed: a wrong unit here is a silent 7x error. Configurable because
+    the gateway can be pointed at any provider set.
+    """
+    raw = os.environ.get("NODUS_MAGPIE_CURRENCY") or load_config().get("magpie_currency")
+    return str(raw or "USD").upper()
+
+
 def cost_rate(unit: str) -> float:
     """CNY per meter unit.
 

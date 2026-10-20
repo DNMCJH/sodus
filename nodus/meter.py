@@ -17,6 +17,7 @@ Meters fail open: a run must never be lost because billing was unreachable.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .agents import AgentSpec
 
 DEEPSEEK_BALANCE = "https://api.deepseek.com/user/balance"
+GATEWAY_DEFAULT = "http://127.0.0.1:3425"
 
 
 @dataclass(frozen=True)
@@ -38,11 +40,11 @@ class Reading:
     kind: str  # "usage" | "balance"
 
 
-def _get_json(url: str, token: str, timeout: float = 15.0) -> Any:
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "nodus/0.2"},
-    )
+def _get_json(url: str, token: str | None = None, timeout: float = 15.0) -> Any:
+    headers = {"User-Agent": "nodus/0.2"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -119,3 +121,50 @@ def delta(before: Reading | None, after: Reading | None) -> float | None:
     if raw < 0:  # balance topped up mid-run, or a meter glitch
         return None
     return raw
+
+
+def _gateway_base() -> str:
+    raw = os.environ.get("NODUS_MAGPIE_URL") or config.load_config().get("magpie_url")
+    return str(raw or GATEWAY_DEFAULT).rstrip("/")
+
+
+def request_cost(
+    session_id: str, base: str | None = None, settle: float = 0.0
+) -> tuple[float, int] | None:
+    """Exact cost of one agent session, read from a gateway's request log.
+
+    A gateway that parses each agent's local session log knows the cost of
+    every single call, keyed by the session it belongs to. That is strictly
+    better than a balance delta: exact, and immune to whatever else was
+    spending on the same key at the same time.
+
+    `settle` retries while the gateway has not caught up yet — it tails session
+    files, so the row can land seconds after the run exits.
+
+    Returns (cost, requests) or None. Never raises — this is enrichment.
+    """
+    if not session_id:
+        return None
+    deadline = time.time() + max(0.0, settle)
+    while True:
+        result = _request_cost_once(session_id, base)
+        if result is not None or time.time() >= deadline:
+            return result
+        time.sleep(1.5)
+
+
+def _request_cost_once(session_id: str, base: str | None = None) -> tuple[float, int] | None:
+    url = f"{base or _gateway_base()}/v1/magpie/usage/requests?period=7d&limit=5000"
+    try:
+        body = _get_json(url, timeout=8.0)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        return None
+    rows = [
+        row
+        for row in body.get("rows") or []
+        if row.get("session") == session_id and row.get("priced")
+    ]
+    if not rows:
+        return None
+    total = sum(float(row.get("cost") or 0) for row in rows)
+    return round(total, 6), len(rows)

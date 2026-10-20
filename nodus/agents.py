@@ -54,6 +54,8 @@ class AgentSpec:
     pricing: Pricing | None = None
     #: which billing meter to read around a run: "relay" / "deepseek" / None
     meter: str | None = None
+    #: a local gateway parses this agent's session files and can price each call
+    gateway_sessions: bool = False
     can_resume_session: bool = False
 
 
@@ -117,6 +119,9 @@ def _specs() -> dict[str, AgentSpec]:
                 "-",
             ],
             needs_env=["DEEPSEEK_API_KEY"],
+            # DSH keeps its sessions in a location the gateway already tails.
+            # Claude Code here runs from an isolated config dir it does not scan.
+            gateway_sessions=True,
             meter="deepseek",
             can_resume_session=True,
         ),

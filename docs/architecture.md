@@ -93,9 +93,10 @@ nodus/config.py       路径、token、secrets、用户配置
 
 **ADR-007 后端可换，壳不用换。** MiniMax 提供 Anthropic 兼容端点，Claude Code 的 stream-json 契约不变，所以它的 `vendor` 字段就是 `claude`——同一个 CLI、同一个 parser、同一个 runner，差别只在 base URL、凭据和价目。加它只动了 `agents.py` 一个文件、没新增 parser，这条 ADR 顺带验证了 ADR-006 的边界：`vendor` 表示"哪种流格式"，不表示"哪家公司"。代价：`~/.claude/settings.json` 的 `env` 块优先级高于进程环境变量，换后端必须换 `CLAUDE_CONFIG_DIR`，否则请求静默打回原来的代理（实测报 401 并退避重试 10 次）。
 
-**ADR-008 成本读表，不读自述。** 成本有三个来源，优先级 metered > list_price > reported。metered 是在 run 前后读 provider 计费接口求差（中转站累计消耗、DeepSeek 余额）；list_price 是 token × 公开价目，只有确认对方按价目扣费时才等价于实付；reported 是 CLI 自己算的账，只做兜底。
+**ADR-008 成本读表，不读自述。** 成本有四个来源，优先级 metered_request > metered > list_price > reported。metered_request 是本地网关 tail 各 agent 的会话文件、按会话 id 算出每次调用的成本（精度 1e-6，且不受并发污染）；metered 是在 run 前后读 provider 计费接口求差（中转站累计消耗、DeepSeek 余额）；list_price 是 token × 公开价目，只有确认对方按价目扣费时才等价于实付；reported 是 CLI 自己算的账，只做兜底。
 理由：CLI 的价目表是别人的（Claude Code 用 Anthropic 价格给任意后端计价），中转站还会叠自己的分组倍率，两者都推不出来，只能读表。实测同一个 run：CLI 自报 0.2627，实付 0.3230（站内余额），比值 1.23；换一次模型组合变成 1.44。
-代价：每个 run 多一次前置 HTTP 和最多 4s 的落账等待；并发 run 的窗口会重叠，`meter.window_s` 记录窗口但不消除重叠。中转站"站内余额"到人民币的换算比例是账户事实，API 不暴露，放在 `config.json` 的 `cost_rates` 里。
+理由二：余额差有精度下限（DeepSeek 只有 0.01 元）和并发污染，网关按请求读两个问题都没有。实测同一个 dsh 任务：网关 0.001386 美元（4 次调用），余额差是 0.09 元或 0——差两个数量级。
+代价：每个 run 多一次前置 HTTP 和最多 4s 的落账等待（走网关再加最多 6s）；余额差的窗口会重叠，`meter.window_s` 记录窗口但不消除重叠。中转站"站内余额"到人民币的换算比例是账户事实，API 不暴露，放在 `config.json` 的 `cost_rates` 里；网关的成本是美元（它自己打印 `≈$`），靠 `currency` 字段区分。
 
 ## 6. 质量门槛
 

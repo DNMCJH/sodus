@@ -152,18 +152,23 @@ MiniMax 的输入大头是 Claude Code 自己的 system prompt + 工具定义（
 
 **结论：成本从 provider 的计费接口读，不取 CLI 自报的数字。**
 
-`nodus/meter.py` 在 run 开始前读一次计费表、结束后再读一次，差值就是这个 run 的实付：
+`nodus/meter.py` 有两条读法：**按请求读日志**（最准）和**按余额读差值**（兜底）。
 
 | agent | 表 | 精度 |
 |---|---|---|
+| dsh | 本地网关的请求日志（按会话匹配）→ 没有就退回 DeepSeek 余额 | 1e-6 美元 / 0.01 元 |
 | claude | 中转站 `/v1/dashboard/billing/usage`（累计消耗） | 1e-4 站内余额 |
-| dsh | DeepSeek `/user/balance`（余额下降） | 0.01 元 |
 | minimax | 没有余额接口（`/v1/account/balance` 要 admin key），用价目表 | 精确，官方就是按价目扣 |
 | codex | 没有 | 记 n/a |
 
+第一条只在装了本地网关（magpie）时生效：它 tail 各 agent 的会话文件，知道**每一次调用**的
+token、模型和成本，并且带会话 id——正好和 run 记的 `session_ref.session_id` 对得上。
+实测一次 dsh 改字任务：`cost=0.001386, currency=USD, cost_basis=metered_request, requests=4`，
+折合约 ¥0.010；同一件事按余额差读是 ¥0.09 或者干脆 0，因为余额只有 0.01 元精度。
+
 实测一次 claude 改字任务：`cost=0.322958, currency=CNY, cost_basis=metered, meter={unit:relay_unit, delta:0.322958, window_s:29.7}`。
 
-三个容易搞错的地方：
+四个容易搞错的地方：
 
 1. **中转站的"$"不是美元。** 官方文档写得很清楚：模型广场的价格单位是"站内余额 / 1M Tokens"，不是美元；
    站内余额 = 官方美元价 × 分组倍率。这个账户 1 站内余额 = ¥1。
@@ -174,9 +179,12 @@ MiniMax 的输入大头是 Claude Code 自己的 system prompt + 工具定义（
    倍率随分组和模型浮动，**推不出来，只能读表**。
 3. **换算比例是配置，不是常量。** `~/.nodus/config.json` 里 `{"cost_rates": {"relay_unit": 1.0}}`。
    拿不到 API 的地方就承认拿不到，别写死。
+4. **网关的成本是美元。** `magpie usage` 自己打印的是 `≈$`，所以 `cost_basis=metered_request` 记 USD，
+   不要和人民币的 `metered` 相加。币种分开统计这件事，报告里已经做了。
 
-代价：每次 run 多 1 次前置 HTTP（约 0.2s），结束后最多等 4s 让计费落账。
-两个 run 并发时，delta 会同时覆盖两者——`meter.window_s` 记了窗口，报告里能看出重叠。
+代价：每次 run 多 1 次前置 HTTP（约 0.2s），结束后最多等 4s 让计费落账；走网关按请求读时，
+最多再等 6s 等它 tail 到会话文件。两个 run 并发时，余额差会同时覆盖两者——`meter.window_s` 记了窗口；
+按请求读没有这个问题。只有 dsh 走网关这条路：Nodus 的 claude 跑在隔离配置目录里，网关扫不到。
 
 ## 为什么不要一家一个 CLI
 
@@ -369,13 +377,14 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 `nodus report <task>` 把 run、事件、决策汇成一页：墙钟与 agent 累计时间、token、成本、每次验证的 exit 和证据路径、审查结论、Jev 决策、以及**标记**（失败 run、测试被改、没有 red、red 意外通过、最新审查未通过、`needs_review`）。
 
 `usage_json` 里记四个字段：`cost`、`currency`、`cost_basis`、`meter`。
-`cost_basis` 只有三种取值，从可信到不可信：
+`cost_basis` 只有四种取值，从可信到不可信：
 
 | basis | 来源 | 什么时候用 |
 |---|---|---|
-| `metered` | provider 计费接口的前后差值 | 有表的优先，实测 |
+| `metered_request` | 本地网关按会话读到的每次调用成本 | 装了网关且是 dsh 时 |
+| `metered` | provider 计费接口的前后差值 | 其他所有能读表的 |
 | `list_price` | token × 公开价目 | 按价目扣费的（minimax） |
-| `reported` | CLI 自报 `total_cost_usd` | 前两者都拿不到时的兜底，报告里标"CLI 自报" |
+| `reported` | CLI 自报 `total_cost_usd` | 前三者都拿不到时的兜底，报告里标"CLI 自报" |
 
 币种仍然分开加总，不跨币种相加——2026-10-20 之前的历史 run 是 `reported`（USD），
 读起来会偏大，`nodus usage` 会在后面标"（含 CLI 自报，偏大）"。

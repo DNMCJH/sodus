@@ -345,29 +345,43 @@ class Runner:
         err = error_text or ("" if code == 0 else f"exit code {code}")
 
         # Cost, in order of trustworthiness:
-        #   metered    what the provider actually deducted (starts after exit)
-        #   list_price tokens x published price, exact when billing is at list
-        #   reported   the CLI's local price book, which is often another
-        #              vendor's rates anyway (Claude Code prices MiniMax with
-        #              Anthropic's prices, and adds no relay multiplier)
-        meter_after = meter.read(spec, settle_from=meter_before)
-        metered = meter.delta(meter_before, meter_after)
-        if metered is not None and meter_before is not None:
-            usage["cost"] = round(metered * config.cost_rate(meter_before.unit), 6)
-            usage["currency"] = "CNY"
-            usage["cost_basis"] = "metered"
+        #   metered_request  a gateway read this session's log: exact, per call
+        #   metered          what the provider deducted over the run window
+        #   list_price       tokens x published price, exact when billing is at list
+        #   reported         the CLI's local price book, which is often another
+        #                    vendor's rates anyway (Claude Code prices MiniMax
+        #                    with Anthropic's prices, and adds no relay multiplier)
+        gateway = None
+        if spec.gateway_sessions:
+            gateway = meter.request_cost(session_ref.get("session_id") or "", settle=6.0)
+        if gateway is not None:
+            usage["cost"], requests = gateway
+            usage["currency"] = config.gateway_currency()
+            usage["cost_basis"] = "metered_request"
             usage["meter"] = {
-                "unit": meter_before.unit,
-                "delta": round(metered, 6),
+                "unit": "gateway_request",
+                "requests": requests,
                 "window_s": round(time.time() - started_at, 1),
             }
-        elif spec.pricing is not None:
-            usage["cost"] = spec.pricing.cost(usage)
-            usage["currency"] = spec.pricing.currency
-            usage["cost_basis"] = "list_price"
-        elif isinstance(usage.get("cost"), (int, float)):
-            usage["currency"] = "USD"
-            usage["cost_basis"] = "reported"
+        else:
+            meter_after = meter.read(spec, settle_from=meter_before)
+            metered = meter.delta(meter_before, meter_after)
+            if metered is not None and meter_before is not None:
+                usage["cost"] = round(metered * config.cost_rate(meter_before.unit), 6)
+                usage["currency"] = "CNY"
+                usage["cost_basis"] = "metered"
+                usage["meter"] = {
+                    "unit": meter_before.unit,
+                    "delta": round(metered, 6),
+                    "window_s": round(time.time() - started_at, 1),
+                }
+            elif spec.pricing is not None:
+                usage["cost"] = spec.pricing.cost(usage)
+                usage["currency"] = spec.pricing.currency
+                usage["cost_basis"] = "list_price"
+            elif isinstance(usage.get("cost"), (int, float)):
+                usage["currency"] = "USD"
+                usage["cost_basis"] = "reported"
 
         files = touched_files(workdir, started_at)
         artifacts = [str(p) for p in files]
