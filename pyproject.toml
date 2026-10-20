@@ -1,0 +1,19 @@
+[project]
+name = "nodus"
+version = "0.3.0"
+description = "Task acceptance layer for multi-agent work"
+requires-python = ">=3.11"
+
+[project.scripts]
+nodus = "nodus.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["nodus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
