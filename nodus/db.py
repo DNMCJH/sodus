@@ -104,6 +104,8 @@ def connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE run ADD COLUMN note TEXT")
     if "effort" not in cols:
         conn.execute("ALTER TABLE run ADD COLUMN effort TEXT")
+    if "model" not in cols:
+        conn.execute("ALTER TABLE run ADD COLUMN model TEXT")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
@@ -192,13 +194,25 @@ def create_run(
     parent_run_id: str | None = None,
     note: str = "",
     effort: str = "",
+    model: str = "",
 ) -> dict:
     rid = new_id("run")
     with connect() as c:
         c.execute(
-            "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note, effort, started_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?)",
-            (rid, config.workspace_id(), task_id, agent, cwd, parent_run_id, note, effort, now()),
+            "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note,"
+            " effort, model, started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                rid,
+                config.workspace_id(),
+                task_id,
+                agent,
+                cwd,
+                parent_run_id,
+                note,
+                effort,
+                model,
+                now(),
+            ),
         )
     return get_run(rid)
 
@@ -262,6 +276,20 @@ def update_run(rid: str, **fields: Any) -> None:
     cols = ", ".join(f"{k}=?" for k in fields)
     with connect() as c:
         c.execute(f"UPDATE run SET {cols} WHERE id=?", (*fields.values(), rid))
+
+
+def live_runs() -> list[dict]:
+    """Every run still marked queued/running in this workspace.
+
+    A fresh daemon owns none of them, so they are all orphans by definition.
+    """
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM run WHERE status IN ('queued','running') AND workspace_id=?"
+            " ORDER BY started_at",
+            (config.workspace_id(),),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def stale_runs(seconds: int) -> list[dict]:

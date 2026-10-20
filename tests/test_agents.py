@@ -72,6 +72,21 @@ def test_minimax_pins_its_model_on_the_command_line():
     assert "--model" not in agents.argv(agents.SPECS["claude"])
 
 
+def test_a_run_can_pin_its_own_model():
+    argv = agents.argv(agents.SPECS["claude"], None, "", "claude-opus-5-5[1M]")
+    assert argv[argv.index("--model") + 1] == "claude-opus-5-5[1M]"
+
+
+def test_codex_takes_its_model_as_a_config_override():
+    argv = agents.argv(agents.SPECS["codex"], None, "", "gpt-6.1-sol")
+    assert any('model="gpt-6.1-sol"' in part for part in argv)
+
+
+def test_dsh_records_the_model_but_cannot_apply_it():
+    argv = agents.argv(agents.SPECS["dsh"], None, "", "deepseek-flash")
+    assert "--model" not in argv
+
+
 def test_pricing_turns_tokens_into_money():
     p = agents.Pricing(input=1.0, output=4.0, cache_read=0.1, currency="CNY")
     usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_read": 1_000_000}

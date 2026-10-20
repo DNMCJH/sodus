@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from .. import config
 
 BASE = "http://127.0.0.1:4199"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def alive(port: int = 4199) -> bool:
@@ -21,19 +25,48 @@ def alive(port: int = 4199) -> bool:
 
 
 def ensure_daemon(port: int = 4199) -> None:
-    from .. import server
+    """Start the daemon as its own process, never inside this one.
 
+    An in-process daemon used to die with whichever CLI happened to start it:
+    with four concurrent `nodus run`, the first one to finish took the daemon
+    (and the other three watchers) down with it. The daemon outlives every
+    client, so it has to be a separate process.
+    """
     if alive(port):
         return
-    server.serve_async(port)
-    for _ in range(50):
+    config.ensure_dirs()
+    log_path = config.HOME / "daemon.log"
+    log = log_path.open("a", encoding="utf-8", errors="replace")
+    flags = 0
+    if os.name == "nt":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", _SERVE_SNIPPET, str(port)],
+            cwd=str(REPO_ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            creationflags=flags,
+            close_fds=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"could not start nodusd: {exc}") from None
+    finally:
+        log.close()
+    for _ in range(60):
         if alive(port):
             return
         time.sleep(0.1)
-    raise RuntimeError("nodusd failed to start")
+    raise RuntimeError(f"nodusd failed to start; see {log_path}")
 
 
-def call(method: str, path: str, body: dict | None = None):
+_SERVE_SNIPPET = (
+    "import sys; from nodus.cli import main; sys.exit(main(['serve', '--port', sys.argv[1]]))"
+)
+
+
+def call(method: str, path: str, body: dict | None = None, retries: int = 2):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE + path,
@@ -44,14 +77,22 @@ def call(method: str, path: str, body: dict | None = None):
             "Authorization": f"Bearer {config.token()}",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
-        raise RuntimeError(f"HTTP {e.code}: {detail}") from None
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"daemon unreachable: {e}") from None
+    attempt = 0
+    while True:
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")
+            raise RuntimeError(f"HTTP {e.code}: {detail}") from None
+        except (urllib.error.URLError, ConnectionResetError, ConnectionAbortedError) as e:
+            # A dropped connection is normal when several clients poll at once;
+            # a read-only call is safe to repeat.
+            if method == "GET" and attempt < retries:
+                attempt += 1
+                time.sleep(0.2 * attempt)
+                continue
+            raise RuntimeError(f"daemon unreachable: {e}") from None
 
 
 def fmt_event(ev: dict) -> str | None:
@@ -83,13 +124,24 @@ def fmt_event(ev: dict) -> str | None:
 
 def watch(rid: str, after: int = 0) -> int:
     seen = after
+    restarts = 0
     while True:
-        run = call("GET", f"/runs/{rid}")
-        for ev in call("GET", f"/runs/{rid}/events?after={seen}"):
-            seen = max(seen, ev["seq"])
-            line = fmt_event(ev)
-            if line is not None:
-                print(line, flush=True)
-        if run.get("status") in ("completed", "failed"):
-            return 0 if run["status"] == "completed" else 1
+        try:
+            run = call("GET", f"/runs/{rid}")
+            for ev in call("GET", f"/runs/{rid}/events?after={seen}"):
+                seen = max(seen, ev["seq"])
+                line = fmt_event(ev)
+                if line is not None:
+                    print(line, flush=True)
+            if run.get("status") in ("completed", "failed"):
+                return 0 if run["status"] == "completed" else 1
+        except RuntimeError as exc:
+            # The daemon can be restarted underneath us. Come back once; the
+            # fresh daemon reaps the orphaned run, so this loop still ends.
+            if "unreachable" not in str(exc) or restarts >= 2:
+                raise
+            restarts += 1
+            time.sleep(0.5)
+            ensure_daemon()
+            continue
         time.sleep(0.5)

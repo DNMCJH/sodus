@@ -25,6 +25,7 @@ def add(sub) -> None:
     p.add_argument("--parent", default=None)
     p.add_argument("--note", default="")
     p.add_argument("--effort", default="")
+    p.add_argument("--model", default="", help="pin the model for this run only")
     p.set_defaults(func=run)
 
     p = sub.add_parser("watch", help="follow a run")
@@ -94,6 +95,7 @@ def run(args) -> int:
             "parent_run_id": args.parent,
             "note": args.note,
             "effort": effort,
+            "model": args.model,
         },
     )
     print(f"run {r['id']} ({agent})")

@@ -18,6 +18,21 @@ from . import agents, config, db, runner
 MAX_BODY = 1_000_000
 
 
+def _log(message: str) -> None:
+    """One line per event in `~/.nodus/daemon.log`.
+
+    A detached daemon has nowhere to print, so an unexplained exit used to
+    leave no evidence at all.
+    """
+    try:
+        config.HOME.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with (config.HOME / "daemon.log").open("a", encoding="utf-8") as f:
+            f.write(f"{stamp} {message}\n")
+    except OSError:
+        pass
+
+
 def authorized(header: str) -> bool:
     """Constant-time token check; a plain == leaks length/prefix timing."""
     return hmac.compare_digest(header or "", f"Bearer {config.token()}")
@@ -75,6 +90,27 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # quiet by default
         return
 
+    def _guard(self, handler) -> None:
+        """Never let an exception take the connection (and the client) down."""
+        try:
+            handler()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception:  # noqa: BLE001 - last line of defence
+            import traceback
+
+            _log("handler crashed:\n" + traceback.format_exc())
+            try:
+                _json(self, 500, {"error": "internal error"})
+            except OSError:
+                pass
+
+    def do_GET(self) -> None:
+        self._guard(self._get)
+
+    def do_POST(self) -> None:
+        self._guard(self._post)
+
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         if not length:
@@ -86,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return authorized(self.headers.get("Authorization", ""))
 
-    def do_GET(self) -> None:
+    def _get(self) -> None:
         if not self._authorized():
             return _json(self, 401, {"error": "unauthorized"})
         u = urlparse(self.path)
@@ -154,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return _json(self, 404, {"error": "not found"})
 
-    def do_POST(self) -> None:
+    def _post(self) -> None:
         if not self._authorized():
             return _json(self, 401, {"error": "unauthorized"})
         try:
@@ -188,6 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                     parent_run_id=body.get("parent_run_id"),
                     note=body.get("note", ""),
                     effort=body.get("effort", ""),
+                    model=body.get("model", ""),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
@@ -207,10 +244,27 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         raise SystemExit("refusing non-loopback bind without NODUS_ALLOW_REMOTE=1")
     config.ensure_dirs()
     db.connect().close()
+    # A daemon that just started owns no runs: anything still marked running
+    # belongs to a process that is gone. Reap before accepting work, so a
+    # restart never leaves clients waiting on a corpse.
+    reaped = runner.RUNNER.reap_orphans()
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
-    print(f"nodusd listening on http://{host}:{port}", file=sys.stderr, flush=True)
-    server.serve_forever()
+    _log(f"nodusd {config.VERSION} listening on {host}:{port} (pid {os.getpid()})")
+    if reaped:
+        _log(f"reaped {len(reaped)} orphaned run(s): " + ", ".join(r["id"] for r in reaped))
+    if sys.stderr.isatty():  # a detached daemon writes to the log, not the console
+        print(f"nodusd listening on http://{host}:{port}", file=sys.stderr, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        _log("nodusd stopped (interrupt)")
+        raise
+    except Exception:
+        import traceback
+
+        _log("nodusd crashed:\n" + traceback.format_exc())
+        raise
 
 
 def serve_async(port: int = 4199) -> threading.Thread:

@@ -270,14 +270,24 @@ def build_env(spec: AgentSpec, secrets: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def argv(spec: AgentSpec, effort: str | None = None, session_id: str = "") -> list[str]:
+def argv(
+    spec: AgentSpec,
+    effort: str | None = None,
+    session_id: str = "",
+    model: str | None = None,
+) -> list[str]:
     """Resolve the executable. npm installs .cmd shims on Windows, and
     CreateProcess cannot launch those directly."""
     cmd = list(spec.command)
-    if spec.default_model:
+    chosen = model or spec.default_model
+    if chosen:
         # Pin the model on the command line so the run record names what ran,
         # instead of trusting whatever the CLI config resolves to.
-        cmd += ["--model", spec.default_model]
+        if spec.vendor == "codex":
+            cmd += ["-c", f'model="{chosen}"']
+        elif spec.vendor == "claude":
+            cmd += ["--model", chosen]
+        # dsh has no per-run model flag; the run record still keeps the intent.
     if effort:
         if spec.vendor == "claude":
             cmd += ["--effort", effort]

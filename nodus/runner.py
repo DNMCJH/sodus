@@ -134,6 +134,7 @@ class Runner:
         parent_run_id: str | None = None,
         note: str = "",
         effort: str = "",
+        model: str = "",
         include_handoff: bool = True,
         session_id: str = "",
     ) -> dict:
@@ -150,7 +151,7 @@ class Runner:
             raise RuntimeError(f"{agent_name} not ready: {', '.join(missing)}")
 
         workdir = Path(cwd or Path.cwd()).resolve()
-        run = db.create_run(task_id, agent_name, str(workdir), parent_run_id, note, effort)
+        run = db.create_run(task_id, agent_name, str(workdir), parent_run_id, note, effort, model)
         rid = run["id"]
         thread = threading.Thread(
             target=self._run,
@@ -238,14 +239,16 @@ class Runner:
         db.update_run(rid, status="running", started_at=started_at)
 
         env = agents.build_env(spec, secrets)
-        effort = (db.get_run(rid).get("effort") or "").strip()
+        record = db.get_run(rid)
+        effort = (record.get("effort") or "").strip()
+        model = (record.get("model") or "").strip()
         # Take the meter reading before the process exists, so this run's spend
         # cannot already be inside the window.
         meter_before = meter.read(spec)
         creation = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
         try:
             proc = subprocess.Popen(
-                agents.argv(spec, effort or None, session_id),
+                agents.argv(spec, effort or None, session_id, model or None),
                 cwd=str(workdir),
                 env=env,
                 stdin=subprocess.PIPE,
@@ -452,6 +455,59 @@ class Runner:
             time.sleep(poll)
         return db.get_run(rid)
 
+    def salvage(self, run: dict) -> list[str]:
+        """Record files the worker wrote before its owner died.
+
+        A dead daemon does not mean the agent did nothing: the worker is a
+        separate process and may have finished its files already. Failing the
+        run without looking loses real output.
+        """
+        cwd = run.get("cwd") or ""
+        started = run.get("started_at") or run.get("created_at") or 0
+        root = Path(cwd)
+        if not cwd or not root.is_dir():
+            return []
+        found: list[str] = []
+        for path in touched_files(root, started):
+            try:
+                rel = str(path.relative_to(root))
+            except ValueError:
+                rel = ""
+            try:
+                db.add_artifact(
+                    run["id"], run.get("task_id"), "file", str(path), _digest(path), rel_path=rel
+                )
+            except Exception:
+                continue
+            found.append(str(path))
+        return found
+
+    def reap_orphans(self) -> list[dict]:
+        """Fail every run that claims to be running when this process owns none."""
+        out: list[dict] = []
+        for run in db.live_runs():
+            rid = run["id"]
+            with self.lock:
+                proc = self.procs.pop(rid, None)
+            if proc is not None:
+                self._kill_tree(proc)
+            salvaged = self.salvage(run)
+            message = "orphaned: the process that owned this run is gone"
+            if salvaged:
+                message += f"; {len(salvaged)} file(s) written by the worker were kept"
+            try:
+                db.append_event(
+                    rid,
+                    db.next_seq(rid),
+                    "run.failed",
+                    {"error": message, "status": "failed", "salvaged": salvaged},
+                )
+            except Exception:
+                pass
+            db.update_run(rid, status="failed", ended_at=time.time(), error=message)
+            out.append({**run, "error": message, "salvaged": salvaged})
+        return out
+
     def reconcile(self, stale_seconds: int = 900) -> list[dict]:
         """Fail runs whose owner process died while they were still running."""
         out: list[dict] = []
@@ -461,15 +517,21 @@ class Runner:
                 proc = self.procs.pop(rid, None)
             if proc is not None:
                 self._kill_tree(proc)
+            salvaged = self.salvage(run)
             message = f"orphaned: no activity for {stale_seconds}s"
+            if salvaged:
+                message += f"; {len(salvaged)} file(s) written by the worker were kept"
             try:
                 db.append_event(
-                    rid, db.next_seq(rid), "run.failed", {"error": message, "status": "failed"}
+                    rid,
+                    db.next_seq(rid),
+                    "run.failed",
+                    {"error": message, "status": "failed", "salvaged": salvaged},
                 )
             except Exception:
                 pass
             db.update_run(rid, status="failed", ended_at=time.time(), error=message)
-            out.append({**run, "error": message})
+            out.append({**run, "error": message, "salvaged": salvaged})
         return out
 
 
