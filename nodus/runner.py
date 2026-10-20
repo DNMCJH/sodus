@@ -193,6 +193,7 @@ class Runner:
         include_handoff: bool = True,
         session_id: str = "",
         profile: str = "",
+        wait: float = 0.0,
     ) -> dict:
         profiles.ensure_ready()
         route = routes.resolve_for_run(route_name)
@@ -221,17 +222,11 @@ class Runner:
         profile_name = profile or config.active_profile()
         workdir = Path(cwd or Path.cwd()).resolve()
         prof = profiles.read(profile_name)
-        run = db.create_run(
-            task_id,
-            spec.name,
-            str(workdir),
-            parent_run_id,
-            note,
+        run = self._claim(
+            task, spec, workdir, parent_run_id, note,
             effort or route.effort or prof.effort or "",
             model or route.model or prof.model or "",
-            route=route.name,
-            provider=route.primary,
-            profile=profile_name,
+            route, profile_name, wait,
         )
         thread = threading.Thread(
             target=self._execute,
@@ -241,6 +236,49 @@ class Runner:
         )
         thread.start()
         return db.get_run(run["id"])
+
+    def _claim(
+        self,
+        task: dict,
+        spec: agents.AgentSpec,
+        workdir: Path,
+        parent_run_id: str | None,
+        note: str,
+        effort: str,
+        model: str,
+        route: routes.Route,
+        profile_name: str,
+        wait: float,
+    ) -> dict:
+        """Create the run and take the write lock on its directory.
+
+        Two agents editing one tree is the failure this exists to prevent: the
+        second one's edits land on top of a half-finished first one, and both
+        handoffs describe a state that never existed. Refusing is cheap;
+        untangling is not.
+        """
+        deadline = time.time() + max(0.0, wait)
+        while True:
+            try:
+                return db.create_run(
+                    task["id"],
+                    spec.name,
+                    str(workdir),
+                    parent_run_id,
+                    note,
+                    effort,
+                    model,
+                    route=route.name,
+                    provider=route.primary,
+                    profile=profile_name,
+                    lock=True,
+                )
+            except db.Busy as busy:
+                # create_run already cleared a lock whose run had finished, so
+                # anything left here has a live owner.
+                if time.time() >= deadline:
+                    raise RuntimeError(str(busy)) from None
+                time.sleep(1.0)
 
     # ---- attempt loop --------------------------------------------------
 
@@ -661,6 +699,10 @@ class Runner:
         db.add_handoff(task["id"], rid, str(handoff_path), _digest(handoff_path))
         db.add_artifact(rid, task["id"], "handoff", str(handoff_path), _digest(handoff_path), "handoff")
 
+        # Free the directory before the status write: `wait()` returning
+        # "finished" must mean the caller can start the next run here, and a
+        # pipeline (tdd) does exactly that on the next line.
+        db.release_write(rid)
         db.update_run(
             rid,
             status=status,
@@ -696,6 +738,7 @@ class Runner:
 
     def _fail(self, rid: str, message: str) -> None:
         self._emit(rid, "run.failed", {"error": message, "status": "failed"})
+        db.release_write(rid)
         db.update_run(rid, status="failed", ended_at=time.time(), error=message)
 
     @staticmethod
@@ -785,6 +828,7 @@ class Runner:
                 )
             except Exception:
                 pass
+            db.release_write(rid)
             db.update_run(rid, status="failed", ended_at=time.time(), error=message)
             out.append({**run, "error": message, "salvaged": salvaged})
         return out

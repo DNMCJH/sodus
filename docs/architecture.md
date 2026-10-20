@@ -39,7 +39,7 @@ nodus/adapters.py     各家 JSONL → 统一事件（纯函数）
 nodus/verify.py       测试检测与执行（纯函数 + 落盘）
 nodus/dsh_sessions.py DSH 会话读取 / brief / 锁（只读为主）
 nodus/meter.py        计费表：run 前后读端点的账
-nodus/db.py           SQLite：所有读取都按 workspace 过滤
+nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁
 nodus/config.py       路径、token、secrets、用户配置、当前 profile
 ```
 
@@ -158,14 +158,16 @@ base URL、凭据和价目。0.4.0 把这个"差别"从 `AgentSpec` 的一个副
 代价：切换 profile 只影响新起的 run；配置目录里 CLI 自己写的东西（会话、onboarding）
 跟着 (agent, provider) 走而不是跟着人走。
 
-**ADR-008 成本读表，不读自述。** 成本有四个来源，优先级 metered_request > metered > list_price > reported。metered_request 是本地网关 tail 各 agent 的会话文件、按会话 id 算出每次调用的成本（精度 1e-6，且不受并发污染）；metered 是在 run 前后读 provider 计费接口求差（中转站累计消耗、DeepSeek 余额）；list_price 是 token × 公开价目，只有确认对方按价目扣费时才等价于实付；reported 是 CLI 自己算的账，只做兜底。
-理由：CLI 的价目表是别人的（Claude Code 用 Anthropic 价格给任意后端计价），中转站还会叠自己的分组倍率，两者都推不出来，只能读表。实测同一个 run：CLI 自报 0.2627，实付 0.3230（站内余额），比值 1.23；换一次模型组合变成 1.44。
-理由二：余额差有精度下限（DeepSeek 只有 0.01 元）和并发污染，网关按请求读两个问题都没有。实测同一个 dsh 任务：网关 0.001386 美元（4 次调用），余额差是 0.09 元或 0——差两个数量级。
-代价：每个 run 多一次前置 HTTP 和最多 4s 的落账等待（走网关再加最多 6s）；余额差的窗口会重叠，`meter.window_s` 记录窗口但不消除重叠。中转站"站内余额"到人民币的换算比例是账户事实，API 不暴露，放在 `config.json` 的 `cost_rates` 里；网关的成本是美元（它自己打印 `≈$`），靠 `currency` 字段区分。
+**ADR-012 一个目录一个写者，锁跟着 run 走。** 两个 run 同时写一棵树，后一个的编辑会盖在前一个的半成品上，
+两份交接单描述的状态都不存在。约束落在数据库里：`write_lock` 表 + `WHERE released_at IS NULL` 的部分唯一索引，
+第二个 INSERT 失败而不是两个 worker 悄悄覆盖。行和锁同一事务插入，避免"有锁没有 run"的窗口被误判成持有者已死。
+释放先于状态写入，所以 `wait()` 返回"完成"就保证目录可再用——`nodus tdd` 紧接着就起下一个 run。
+代价：`review`/`fix` 会借走目标目录，目标 run 还在跑时会被拒；这是对的（审查一份正在变的树本来就没有意义），
+但报错信息必须点名持有者，否则用户会以为是 Nodus 坏了。
 
 ## 6. 质量门槛
 
-- `python -m pytest -q`：155 条，覆盖解析、策略、隔离、锁、报告、计费表、端点/路由/配置物化、
+- `python -m pytest -q`：166 条，覆盖解析、策略、隔离、写锁、报告、计费表、端点/路由/配置物化、
   以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
 - 每个新能力都要有一次真实调用记录：0.4.0 的四条 route（relay / minimax / relay-openai / deepseek）

@@ -82,7 +82,41 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+-- One row per run that owns a working directory. A partial unique index makes
+-- "two runs writing the same tree" impossible rather than unlikely: the second
+-- INSERT fails instead of the two workers silently overwriting each other.
+CREATE TABLE IF NOT EXISTS write_lock (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  cwd TEXT NOT NULL,
+  run_id TEXT,
+  acquired_at REAL,
+  released_at REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_write_lock_active
+  ON write_lock(cwd) WHERE released_at IS NULL;
 """
+
+
+class Busy(RuntimeError):
+    """A working directory already has a writer."""
+
+    def __init__(self, cwd: str, holder: dict) -> None:
+        self.cwd = cwd
+        self.holder = holder
+        super().__init__(describe_busy(cwd, holder))
+
+
+def describe_busy(cwd: str, holder: dict) -> str:
+    if not holder:
+        return f"{cwd} is already being written by another run"
+    age = time.time() - float(holder.get("acquired_at") or 0)
+    who = holder.get("run_id") or "?"
+    return (
+        f"{cwd} is already being written by {who}"
+        f" (agent={holder.get('agent') or '?'}, {int(age)}s);"
+        " wait for it, or use a different --cwd"
+    )
 
 
 def connect() -> sqlite3.Connection:
@@ -201,8 +235,46 @@ def create_run(
     route: str = "",
     provider: str = "",
     profile: str = "",
+    lock: bool = False,
 ) -> dict:
-    rid = new_id("run")
+    """Create a run, optionally taking the write lock on its directory.
+
+    The row and the lock are inserted in one transaction. Doing them
+    separately leaves a window where a lock exists with no run behind it, and
+    a second process would reasonably conclude the holder was dead.
+
+    A lock whose run has already finished is debris, and this retries once
+    after clearing it: the alternative is every caller implementing the same
+    two lines and one of them forgetting.
+    """
+    key = str(Path(cwd).resolve())
+    for attempt in (0, 1):
+        rid = new_id("run")
+        try:
+            _insert_run(rid, task_id, agent, cwd, parent_run_id, note, effort, model,
+                        route, provider, profile, key if lock else "")
+            return get_run(rid)
+        except Busy as busy:
+            if attempt == 0 and release_if_finished(busy.holder):
+                continue
+            raise
+    raise Busy(key, {})  # pragma: no cover - the loop either returns or raises
+
+
+def _insert_run(
+    rid: str,
+    task_id: str,
+    agent: str,
+    cwd: str,
+    parent_run_id: str | None,
+    note: str,
+    effort: str,
+    model: str,
+    route: str,
+    provider: str,
+    profile: str,
+    lock_key: str,
+) -> None:
     with connect() as c:
         c.execute(
             "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note,"
@@ -224,7 +296,84 @@ def create_run(
                 now(),
             ),
         )
-    return get_run(rid)
+        if not lock_key:
+            return
+        try:
+            c.execute(
+                "INSERT INTO write_lock(id, workspace_id, cwd, run_id, acquired_at)"
+                " VALUES(?,?,?,?,?)",
+                (new_id("lock"), config.workspace_id(), lock_key, rid, now()),
+            )
+        except sqlite3.IntegrityError:
+            c.rollback()
+            raise Busy(lock_key, holder_of(c, lock_key)) from None
+
+
+def holder_of(conn: sqlite3.Connection, key: str) -> dict:
+    row = conn.execute(
+        "SELECT l.*, r.agent, r.route, r.status AS run_status"
+        " FROM write_lock l LEFT JOIN run r ON r.id = l.run_id"
+        " WHERE l.cwd = ? AND l.released_at IS NULL",
+        (key,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def write_holder(cwd: str) -> dict:
+    with connect() as c:
+        return holder_of(c, str(Path(cwd).resolve()))
+
+
+def release_write(run_id: str) -> None:
+    if not run_id:
+        return
+    with connect() as c:
+        c.execute(
+            "UPDATE write_lock SET released_at=? WHERE run_id=? AND released_at IS NULL",
+            (now(), run_id),
+        )
+
+
+def release_if_finished(holder: dict) -> bool:
+    """Drop a lock whose run is over. Returns True when it was stale.
+
+    A run that finished always released its own lock; this only catches the
+    paths that skip it (an exception between the last event and the status
+    write, or a hand edit).
+    """
+    run_id = holder.get("run_id") or ""
+    if not run_id:
+        return False
+    with connect() as c:
+        row = c.execute("SELECT status FROM run WHERE id=?", (run_id,)).fetchone()
+    status = row["status"] if row else None
+    if status in ("completed", "failed") or status is None:
+        release_write(run_id)
+        return True
+    return False
+
+
+def active_locks() -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            "SELECT l.*, r.agent, r.route, r.status AS run_status FROM write_lock l"
+            " LEFT JOIN run r ON r.id = l.run_id"
+            " WHERE l.released_at IS NULL ORDER BY l.acquired_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def release_lock_for_cwd(cwd: str) -> bool:
+    """Force-release whatever holds this directory. For `nodus unlock`."""
+    with connect() as c:
+        holder = holder_of(c, str(Path(cwd).resolve()))
+        if not holder:
+            return False
+        c.execute(
+            "UPDATE write_lock SET released_at=? WHERE cwd=? AND released_at IS NULL",
+            (now(), str(Path(cwd).resolve())),
+        )
+    return True
 
 
 def get_run(rid: str) -> dict:

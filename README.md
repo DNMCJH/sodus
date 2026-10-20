@@ -46,9 +46,11 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus session <id> [--tail N] [--reasoning]` | 打印另一个会话的对话 |
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
 | `nodus resume <session> --note "..." [--force]` | 在 DSH 会话上续一轮（必须同 cwd） |
-| `nodus run <task> --route NAME [--profile NAME] [--model M] --cwd PATH [--note "..."]` | 起一次执行并跟踪 |
+| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] --cwd PATH [--note "..."]` | 起一次执行并跟踪 |
 | `nodus watch <run>` | 跟踪已有 run |
 | `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
+| `nodus locks` | 哪些工作目录正被占用、被谁 |
+| `nodus unlock <cwd>` | 强制释放一个目录（正常情况用不到） |
 | `nodus show <run>` | 看 run 的原始记录 |
 | `nodus handoff <run>` | 看这次生成的交接单 |
 | `nodus stop <run>` | 杀掉进程树 |
@@ -91,7 +93,7 @@ nodus/decision.py        Jev 路由与分诊
 nodus/telemetry.py       探活、用量、余额
 nodus/dsh_sessions.py    读 DSH 会话（zstd JSONL）、brief、会话锁
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（155 条）
+tests/                   自己的一套 pytest（166 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -164,6 +166,28 @@ nodus profiles use work
 `Connection refused (ECONNREFUSED)`，Nodus 判定无副作用、换到 minimax，任务完成，花费 ¥0.013476。
 代价是**慢**：CLI 自己的重试预算先耗掉了，整轮 187 秒。回退救的是结果，不是时间。
 
+
+## 一个目录只能有一个写者
+
+两个 run 同时改一棵树，是这套东西最容易造成的真实损失：后一个的编辑盖在前一个的半成品上，
+两份交接单描述的都是一个从未存在过的状态。所以 run 建行的时候同时在 `write_lock` 表里插一行，
+用**部分唯一索引**顶住——第二个 INSERT 直接失败，而不是两个 worker 悄悄互相覆盖。
+
+```powershell
+nodus run $t2 --cwd D:\work\demo
+# error: D:\work\demo is already being written by run-10080926f04d (agent=claude, 6s);
+#        wait for it, or use a different --cwd
+nodus run $t2 --cwd D:\work\demo --wait 300    # 排队而不是报错
+nodus locks                                    # 谁占着，占多久
+```
+
+行和锁在**同一个事务**里插入。分开插会留下"有锁没有 run"的窗口，另一个进程会合理地判定持有者已死。
+锁跟着 run 的生命周期走：完成、失败、被对账判死，三条路径都释放，而且**先释放再写状态**——
+这样 `nodus wait` 返回"完成"就意味着这个目录可以立刻给下一次 run 用了（`nodus tdd` 就是紧接着这么干的）。
+持有者的 run 已经结束还留着锁，算残骸：`create_run` 会清掉它并重试一次，不需要 `--force`。
+
+已实测：A 跑着的时候 `nodus locks` 显示 `run-10080926f04d claude@minimax 5s`，B 在同目录 exit 1 并报出持有者，
+A 完成后 `nodus locks` 回到 `(no directory is locked)`。
 
 ## 交接模型
 
@@ -467,7 +491,11 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - codex 的 bypass 参数等于关掉沙箱，只在受控 cwd 下用。
 - 还没有 SSE 客户端和 UI，`nodus watch` 是轮询（0.5s）。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
-- dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。但它没有隔离配置目录，跑的时候带着你的全局 `AGENTS.md`、skills 和 MCP，小任务 fresh input 约 2 万；也没有 per-run effort 入口。
+- dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。没有 per-run effort 入口。
+- ~~dsh 没有隔离配置目录，跑的时候带着你的全局 AGENTS.md、skills 和 MCP~~ —— 2026-10-21 量过，这个判断是错的：
+  `DSH_HOME` 确实认（`resolveDshHome`: 显式配置 > `$DSH_HOME` > `~/.dsh`），但 headless 用的是自动生成的 `headless` profile，
+  本来就不加载用户的全局配置。同一个 prompt 实测 global `in=9424/cache=19456` vs isolated `in=9451/cache=29312`，
+  没有收益，反而多一轮工具调用。所以没做隔离。
 - `--model` 已接：`nodus run <task> --route claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
 - 回退链救结果不救时间：CLI 自己的重试预算会先耗掉（实测死端点那次整轮 187 秒）。要更快失败得给"首字节前"设单独的短超时，那是猜，没做。
 - 回退链里第 2 个端点用的是**它自己的模型**，不是本次 pin 的模型。pin 只对第一个端点生效，否则会把一个那端点不认识的模型名发过去。

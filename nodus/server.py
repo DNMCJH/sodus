@@ -288,6 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                     effort=body.get("effort", ""),
                     model=body.get("model", ""),
                     profile=body.get("profile", ""),
+                    wait=float(body.get("wait") or 0.0),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

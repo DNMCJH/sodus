@@ -63,6 +63,35 @@ def add(sub) -> None:
     p.add_argument("--limit", type=int, default=15, help="how many tasks (default 15)")
     p.set_defaults(func=desk, needs_daemon=False)
 
+    p = sub.add_parser("locks", help="which working directories have a writer")
+    p.set_defaults(func=locks, needs_daemon=False)
+
+    p = sub.add_parser("unlock", help="force-release a directory a dead run left locked")
+    p.add_argument("cwd")
+    p.set_defaults(func=unlock, needs_daemon=False)
+
+
+def locks(args) -> int:
+    rows = db.active_locks()
+    if not rows:
+        print("(no directory is locked)")
+        return 0
+    for row in rows:
+        age = int(time.time() - float(row.get("acquired_at") or 0))
+        print(
+            f"{row['cwd']}  {row.get('run_id') or '?'}  "
+            f"{row.get('agent') or '?'}@{row.get('route') or '-'}  {age}s"
+        )
+    return 0
+
+
+def unlock(args) -> int:
+    if not db.release_lock_for_cwd(args.cwd):
+        print(f"{args.cwd} was not locked")
+        return 0
+    print(f"{args.cwd}: unlocked")
+    return 0
+
 
 def serve(args) -> int:
     server.serve(args.port)
@@ -158,6 +187,13 @@ def doctor(args) -> int:
         free = shutil.disk_usage(config.HOME).free / (1024**3)
         return free > 1.0, f"{free:.1f} GB free"
 
+    def write_locks():
+        rows = db.active_locks()
+        if not rows:
+            return True, "no directory is locked"
+        detail = ", ".join(f"{r['cwd']}={r.get('run_id') or '?'}" for r in rows[:3])
+        return True, f"{len(rows)} held: {detail}"
+
     for name, fn in (
         ("home", home),
         ("token", token),
@@ -165,6 +201,7 @@ def doctor(args) -> int:
         ("agents", agent_readiness),
         ("dsh sessions", sessions),
         ("secrets", secrets_check),
+        ("write locks", write_locks),
         ("disk", disk),
     ):
         ok, _ = _check(name, fn)

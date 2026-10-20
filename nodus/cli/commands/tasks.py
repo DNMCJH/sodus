@@ -28,6 +28,12 @@ def add(sub) -> None:
     p.add_argument("--note", default="")
     p.add_argument("--effort", default="")
     p.add_argument("--model", default="", help="pin the model for this run only")
+    p.add_argument(
+        "--wait",
+        type=float,
+        default=0.0,
+        help="seconds to wait for a busy --cwd instead of failing at once",
+    )
     p.set_defaults(func=run)
 
     p = sub.add_parser("watch", help="follow a run")
@@ -99,6 +105,7 @@ def run(args) -> int:
             "note": args.note,
             "effort": effort,
             "model": args.model,
+            "wait": args.wait,
         },
     )
     print(f"run {r['id']} ({r.get('route') or route})")
