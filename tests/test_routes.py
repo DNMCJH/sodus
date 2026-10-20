@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nodus import config, routes
+from nodus import agents, config, routes
 
 
 def test_builtin_routes_pair_an_agent_with_an_ordered_chain():
@@ -67,7 +67,18 @@ def test_only_the_difference_from_the_builtins_is_stored(tmp_path, monkeypatch):
     assert list(data) == ["flat"]
 
 
-def test_readiness_means_the_route_can_actually_run(tmp_path, monkeypatch):
+@pytest.fixture()
+def installed(monkeypatch):
+    """Pretend every CLI is installed.
+
+    These tests are about route readiness, not about what happens to be on the
+    build machine — CI has no `claude` or `codex` binary, and the first version
+    of these tests failed there for exactly that reason.
+    """
+    monkeypatch.setattr(agents, "unavailable", lambda spec: [])
+
+
+def test_readiness_means_the_route_can_actually_run(tmp_path, monkeypatch, installed):
     """This is the question the review/fix pickers ask, and it used to be
     `agents.ready` — which stopped meaning anything once one agent could be
     reached through several endpoints."""
@@ -77,13 +88,13 @@ def test_readiness_means_the_route_can_actually_run(tmp_path, monkeypatch):
     assert routes.ready("nope", {"RELAY_API_KEY": "sk"}) is False
 
 
-def test_a_chain_is_ready_on_its_fallback_alone(tmp_path, monkeypatch):
+def test_a_chain_is_ready_on_its_fallback_alone(tmp_path, monkeypatch, installed):
     monkeypatch.setattr(config, "HOME", tmp_path)
     routes.upsert(routes.Route(name="backup", agent="claude", providers=("relay", "minimax")))
     assert routes.ready("backup", {"MINIMAX_API_KEY": "sk"}) is True
 
 
-def test_the_reviewer_picker_still_works_after_the_split(tmp_path, monkeypatch):
+def test_the_reviewer_picker_still_works_after_the_split(tmp_path, monkeypatch, installed):
     from nodus import review
 
     monkeypatch.setattr(config, "HOME", tmp_path)
