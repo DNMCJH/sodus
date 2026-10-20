@@ -17,11 +17,18 @@ nodus run <task-id> --agent claude --cwd D:\work\demo
 
 不装也行，等价写法是 `A:\Anaconda\python.exe nodus.py ...` 或 `python -m nodus ...`。
 
-`nodus run` 会自动在 4199 端口拉起 daemon（进程内），跑完自动退出。要常驻：
+`nodus run` 会自动在 4199 端口拉起 daemon，**作为独立进程**，客户端退出它不退：
+跑了三个并发 run、全部结束后 daemon PID 不变。日志在 `~/.nodus/daemon.log`。
+
+要前台看输出就手动起：
 
 ```powershell
-A:\Anaconda\python.exe nodus.py serve
+nodus serve
 ```
+
+daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，其所有者进程必然已经死了，
+一律标失败，并把 worker 已经写出的文件捞成 artifact（实测一次捞回 7 个产物文件）。
+所以"exit 1 但东西其实做完了"这件事，现在库里看得见。
 
 ## 命令
 
@@ -399,7 +406,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 还没有 SSE 客户端和 UI，`nodus watch` 是轮询（0.5s）。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
 - dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。但它没有隔离配置目录，跑的时候带着你的全局 `AGENTS.md`、skills 和 MCP，小任务 fresh input 约 2 万；也没有 per-run effort 入口。
-- `--model` 还没接：Claude 的 opus/sonnet 切换、Codex 的模型族切换都要单独加参数。
+- `--model` 已接：`nodus run <task> --agent claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
 - 路由准确性没测过；一次 choice 在 criteria 写得含糊时会给高置信度的错答案（实测把文档任务判给 codex，0.90）。
 - usage 是逐条 assistant 消息累加，`input_tokens` 经常只有个位数、`cache_read` 偏高，只能看趋势不能当账单。
 - 审查读的是**当前工作区**，不是 run 时刻的快照。文件被改动时，`context.md` 里对应文件会标"当前内容与 run 记录不一致"，但审查仍按当前内容做——负向对照就是靠这一点。
@@ -410,7 +417,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 跨会话续跑只支持 dsh；claude/codex 的会话 ID 体系不同，没接。
 - DSH 会话文件没有"正在被 GUI 使用"的标记，只能按最近写入时间猜；`--force` 有双写风险。
 - 读会话依赖 `zstandard`（本机已装）；会话是 append-only，Nodus 只读不写。
-- 流水线命令（tdd/review/fix）在 CLI 进程里执行（ADR-004）：关终端会中断，`nodus stop` 也管不到别的进程里的 run。daemon 作业队列还没做。
+- 流水线命令（tdd/review/fix）在 CLI 进程里执行（ADR-004）：关终端会中断，`nodus stop` 也管不到别的进程里的 run。daemon 作业队列还没做。daemon 本身现在独立于客户端，这个问题只影响流水线，不影响 `nodus run`。
 - `nodus run` 不会自动跑验收：`completed` 只等于 exit 0，要不要验证得显式调 `nodus tdd` 或 `nodus verify`。`verify=none` 就是这个意思，别把它读成通过。
 - 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.nodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。
 - `nodus route` 的画像表里还没有 minimax，`--agent auto` 只会在 claude / codex / dsh 里选。
