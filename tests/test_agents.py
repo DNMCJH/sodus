@@ -60,7 +60,9 @@ def test_minimax_token_is_injected_not_stored():
 def test_minimax_without_secret_is_not_ready_and_gets_no_token(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     spec = agents.SPECS["minimax"]
-    assert agents.missing_requirements(spec, {}) == ["MINIMAX_API_KEY"]
+    # A build machine without the claude binary reports that too; the missing
+    # secret must be reported either way.
+    assert "MINIMAX_API_KEY" in agents.missing_requirements(spec, {})
     assert "ANTHROPIC_AUTH_TOKEN" not in agents.build_env(spec, {})
 
 
