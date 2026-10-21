@@ -95,6 +95,24 @@ CREATE TABLE IF NOT EXISTS write_lock (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_write_lock_active
   ON write_lock(cwd) WHERE released_at IS NULL;
+-- A proposal is work that exists on a branch, not in the main tree. The row
+-- is what `nodus proposals` lists and what `nodus merge` consumes.
+CREATE TABLE IF NOT EXISTS proposal (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  run_id TEXT,
+  task_id TEXT,
+  repo TEXT,
+  branch TEXT,
+  worktree TEXT,
+  base TEXT,
+  patch_path TEXT,
+  files_json TEXT,
+  stat TEXT,
+  status TEXT DEFAULT 'open',
+  created_at REAL,
+  closed_at REAL
+);
 """
 
 
@@ -236,6 +254,7 @@ def create_run(
     provider: str = "",
     profile: str = "",
     lock: bool = False,
+    rid: str = "",
 ) -> dict:
     """Create a run, optionally taking the write lock on its directory.
 
@@ -249,7 +268,7 @@ def create_run(
     """
     key = str(Path(cwd).resolve())
     for attempt in (0, 1):
-        rid = new_id("run")
+        rid = rid or new_id("run")
         try:
             _insert_run(rid, task_id, agent, cwd, parent_run_id, note, effort, model,
                         route, provider, profile, key if lock else "")
@@ -361,6 +380,25 @@ def active_locks() -> list[dict]:
             " WHERE l.released_at IS NULL ORDER BY l.acquired_at"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def lock_path(path: str, owner: str) -> tuple[bool, dict]:
+    """Take the write lock on a directory without creating a run.
+
+    A merge is not a run: it happens in the main tree, it is short, and the only
+    thing it needs from the run machinery is the same exclusion the runs have.
+    """
+    key = str(Path(path).resolve())
+    with connect() as c:
+        try:
+            c.execute(
+                "INSERT INTO write_lock(id, workspace_id, cwd, run_id, acquired_at)"
+                " VALUES(?,?,?,?,?)",
+                (new_id("lock"), config.workspace_id(), key, owner, now()),
+            )
+        except sqlite3.IntegrityError:
+            return False, holder_of(c, key)
+    return True, {}
 
 
 def release_lock_for_cwd(cwd: str) -> bool:
@@ -590,3 +628,89 @@ def latest_handoff(task_id: str) -> dict:
             (task_id, config.workspace_id()),
         ).fetchone()
     return dict(row) if row else {}
+
+
+# ---- proposals ---------------------------------------------------------
+
+
+def create_proposal(
+    run_id: str,
+    task_id: str,
+    repo: str,
+    branch: str,
+    worktree: str,
+    base: str,
+    patch_path: str,
+    files: list[dict],
+    stat: str,
+) -> dict:
+    pid = new_id("prop")
+    with connect() as c:
+        c.execute(
+            "INSERT INTO proposal(id, workspace_id, run_id, task_id, repo, branch, worktree,"
+            " base, patch_path, files_json, stat, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                pid,
+                config.workspace_id(),
+                run_id,
+                task_id,
+                repo,
+                branch,
+                worktree,
+                base,
+                patch_path,
+                json.dumps(files, ensure_ascii=False),
+                stat,
+                now(),
+            ),
+        )
+    return get_proposal(pid)
+
+
+def get_proposal(pid: str) -> dict:
+    with connect() as c:
+        row = c.execute(
+            "SELECT * FROM proposal WHERE id=? AND workspace_id=?",
+            (pid, config.workspace_id()),
+        ).fetchone()
+    if not row:
+        return {}
+    out = dict(row)
+    try:
+        out["files"] = json.loads(out.get("files_json") or "[]")
+    except json.JSONDecodeError:
+        out["files"] = []
+    return out
+
+
+def list_proposals(status: str = "open", limit: int = 50) -> list[dict]:
+    with connect() as c:
+        if status:
+            rows = c.execute(
+                "SELECT * FROM proposal WHERE status=? AND workspace_id=?"
+                " ORDER BY created_at DESC LIMIT ?",
+                (status, config.workspace_id(), limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM proposal WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?",
+                (config.workspace_id(), limit),
+            ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["files"] = json.loads(item.get("files_json") or "[]")
+        except json.JSONDecodeError:
+            item["files"] = []
+        out.append(item)
+    return out
+
+
+def close_proposal(pid: str, status: str) -> None:
+    with connect() as c:
+        c.execute(
+            "UPDATE proposal SET status=?, closed_at=? WHERE id=?",
+            (status, now(), pid),
+        )

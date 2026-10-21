@@ -25,7 +25,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter, profiles, providers, routes, verify
+from . import adapters, agents, config, db, meter, profiles, propose, providers, routes, verify
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -204,10 +204,19 @@ class Runner:
         provider: str = "",
         wait: float = 0.0,
         verify_run: bool | None = None,
+        propose_run: bool = False,
     ) -> dict:
         profiles.ensure_ready()
         if verify_run is None:
             verify_run = AUTO_VERIFY and config.auto_verify()
+        profile_name0 = profile or config.active_profile()
+        run_id = db.new_id("run")
+        target = Path(cwd or Path.cwd()).resolve()
+        proposal_ctx = None
+        if propose_run:
+            # The worktree is named after the run, so a branch, a worktree
+            # and a run are the same fact under three names.
+            proposal_ctx = propose.prepare(target, run_id)
         route = routes.resolve_for_run(route_name)
         if provider:
             # Continuing a session means going back to the endpoint that holds
@@ -242,19 +251,23 @@ class Runner:
                 f"{route.name} not ready: {', '.join(agents.missing(spec, first, secrets))}"
             )
 
-        profile_name = profile or config.active_profile()
-        workdir = Path(cwd or Path.cwd()).resolve()
+        profile_name = profile_name0
+        # A proposal runs in its own worktree: that path is a different cwd,
+        # so the write lock stops protecting the main tree and starts
+        # protecting this branch — which is exactly what makes parallel
+        # work possible without weakening the rule.
+        workdir = Path(proposal_ctx["worktree"]) if proposal_ctx else target
         prof = profiles.read(profile_name)
         run = self._claim(
             task, spec, workdir, parent_run_id, note,
             effort or route.effort or prof.effort or "",
             model or route.model or prof.model or "",
-            route, profile_name, wait,
+            route, profile_name, wait, run_id,
         )
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,
-                  include_handoff, session_id, session_mode, verify_run),
+                  include_handoff, session_id, session_mode, verify_run, proposal_ctx),
             daemon=True,
         )
         thread.start()
@@ -272,6 +285,7 @@ class Runner:
         route: routes.Route,
         profile_name: str,
         wait: float,
+        run_id: str = "",
     ) -> dict:
         """Create the run and take the write lock on its directory.
 
@@ -295,6 +309,7 @@ class Runner:
                     provider=route.primary,
                     profile=profile_name,
                     lock=True,
+                    rid=run_id,
                 )
             except db.Busy as busy:
                 # create_run already cleared a lock whose run had finished, so
@@ -318,11 +333,12 @@ class Runner:
         session_id: str,
         session_mode: str,
         verify_run: bool,
+        proposal_ctx: dict | None,
     ) -> None:
         try:
             self._execute_inner(
                 rid, route, spec, task, workdir, secrets, profile_name,
-                include_handoff, session_id, session_mode, verify_run,
+                include_handoff, session_id, session_mode, verify_run, proposal_ctx,
             )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
@@ -343,6 +359,7 @@ class Runner:
         session_id: str,
         session_mode: str,
         verify_run: bool,
+        proposal_ctx: dict | None,
     ) -> None:
         run_dir = config.HOME / "runs" / rid
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -422,7 +439,7 @@ class Runner:
 
         self._finalize(
             rid, route, spec, task, workdir, run_dir, attempts, chosen,
-            first_started or time.time(), session_id, verify_run,
+            first_started or time.time(), session_id, verify_run, proposal_ctx,
         )
 
     @staticmethod
@@ -688,6 +705,7 @@ class Runner:
         first_started: float,
         session_id: str,
         verify_after: bool = True,
+        proposal_ctx: dict | None = None,
     ) -> None:
         final_text = chosen["texts"][-1] if chosen["texts"] else ""
         (run_dir / "final.md").write_text(final_text, encoding="utf-8")
@@ -711,6 +729,7 @@ class Runner:
             a["provider"] for a in attempts[:-1] if a["provider"] != chosen["provider"]
         ]
 
+        proposal = self._finish_proposal(rid, task, proposal_ctx) if proposal_ctx else None
         files = touched_files(workdir, first_started)
         artifacts = [str(p) for p in files]
         for p in files:
@@ -727,6 +746,7 @@ class Runner:
         handoff = build_handoff(
             task, rid, spec.name, status, final_text, files, err, verify_mark,
             provider=chosen["provider"], route=route.name, fallbacks=fallbacks,
+            proposal=proposal,
         )
         handoff_path.write_text(handoff, encoding="utf-8")
         db.add_handoff(task["id"], rid, str(handoff_path), _digest(handoff_path))
@@ -778,6 +798,36 @@ class Runner:
         phase = "green" if result.get("ok") else "red"
         verify.persist(rid, task_id, phase, result, note=f"auto after run ({found['reason']})")
         return "ok" if phase == "green" else "red"
+
+    def _finish_proposal(self, rid: str, task: dict, ctx: dict) -> dict | None:
+        """Commit the worktree and turn it into a reviewable proposal.
+
+        A proposal run never touches the main tree, so nothing merges by
+        itself: the point is that somebody looks before it lands. An empty
+        branch is not a proposal, and its worktree is removed rather than
+        left lying around.
+        """
+        try:
+            collected = propose.collect(ctx, task.get("title") or task.get("goal") or "")
+        except (OSError, RuntimeError) as exc:
+            self._emit(rid, "proposal.failed", {"error": str(exc)})
+            return None
+        if not collected:
+            propose.discard(ctx)
+            self._emit(rid, "proposal.empty", {"branch": ctx["branch"]})
+            return None
+        record = propose.record(rid, task["id"], ctx, collected)
+        self._emit(
+            rid,
+            "proposal.created",
+            {
+                "proposal": record["id"],
+                "branch": record["branch"],
+                "stat": record["stat"],
+                "patch": record["patch_path"],
+            },
+        )
+        return record
 
     # ---- helpers -------------------------------------------------------
 
@@ -906,6 +956,7 @@ def build_handoff(
     provider: str = "",
     route: str = "",
     fallbacks: list[str] | None = None,
+    proposal: dict | None = None,
 ) -> str:
     listed = "\n".join(f"- {p}" for p in files) or "- （无改动）"
     unverified = (
@@ -920,12 +971,23 @@ def build_handoff(
             f"- 回退：{' → '.join(fallbacks)} → {provider}"
             "（前序端点未产生任何工具调用，属于上游故障而非任务失败）\n"
         )
+    proposal_line = ""
+    proposal_note = ""
+    if proposal:
+        proposal_line = (
+            f"- 提案：{proposal['id']}（分支 {proposal['branch']}，{proposal['stat']}）"
+            "—— **主工作区没有被改动**\n"
+        )
+        proposal_note = (
+            f"- 这是提案，不是已生效的改动：`nodus merge {proposal['id']}` 合入，"
+            f"`nodus reject {proposal['id']}` 丢弃。\n"
+        )
     return f"""# Handoff — {task.get('title', '')}
 
 - 任务：{task['id']}
 - 执行：{rid}（{agent}）
 {endpoint}
-{fallback_line}- 状态：{status}
+{fallback_line}{proposal_line}- 状态：{status}
 - 验证：{VERIFY_TEXT.get(verify_mark, verify_mark)}
 - 时间：{time.strftime('%Y-%m-%d %H:%M:%S')}
 
@@ -951,7 +1013,7 @@ def build_handoff(
 
 ## 未决
 
-{unverified}- （人工补充）
+{unverified}{proposal_note}- （人工补充）
 """
 
 

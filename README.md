@@ -47,7 +47,11 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
 | `nodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
 | `nodus branch <id> [--note]` | 从这段历史分叉/播种一个新会话 |
-| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] [--no-verify] --cwd PATH` | 起一次执行并跟踪（改过文件会自动跑测试） |
+| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] [--no-verify] [--propose] --cwd PATH` | 起一次执行并跟踪（改过文件会自动跑测试；`--propose` 在独立 worktree 里干） |
+| `nodus proposals [--all]` | 未合并的提案 |
+| `nodus proposal <id>` | 看一份提案和它的 patch |
+| `nodus merge <id>` | 合入主树（主树写锁） |
+| `nodus reject <id>` | 丢弃提案和 worktree |
 | `nodus watch <run>` | 跟踪已有 run |
 | `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
 | `nodus locks` | 哪些工作目录正被占用、被谁 |
@@ -90,6 +94,7 @@ nodus/review.py          跨 agent 审查，结构化 findings
 nodus/fix.py             审查 finding → 换一家修 → 验证 → 复审
 nodus/report.py          任务报告
 nodus/meter.py           计费表：run 前后读端点的账，求差
+nodus/propose.py         提案：worktree / 提交 / patch / 合并 / 丢弃
 nodus/decision.py        Jev 路由与分诊
 nodus/telemetry.py       探活、用量、余额
 nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统一入口
@@ -97,7 +102,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（176 条）
+tests/                   自己的一套 pytest（185 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -224,6 +229,50 @@ dsh 是**播种**（新会话从一份 brief 开始，不是原历史的副本�
 - 接续 `claude:be6acd2c` → run 的 session id 不变，下一轮答出"两个文件均已就位（wait-b.txt = b，wait-c.txt = c）"，是同一段历史
 - 分支 `claude:be6acd2c` → 新 session `63ff6726`，原会话消息数不变
 - 接续 codex / 播种 dsh 各一次真任务，均 exit 0
+
+## 并行：提案与合并
+
+写锁解决"两个 agent 改同一棵树互相覆盖"，代价是**不能并行**。提案把这两半补齐：
+
+```
+branch   每个 run 一个真实 git worktree，分支 nodus/<run-id>
+commit   run 结束时在 worktree 里提交
+PR       proposal 行 + 一个可以读的 patch 文件
+merge    在主树的写锁下把分支合进去
+```
+
+关键是 worktree 路径就是另一个 cwd——**现有的写锁立刻从"保护主树"变成"保护这条分支"**，
+于是并行不需要放宽任何规则，而"拿主树的锁"这件事本身就成了 merge 的语义。
+
+```powershell
+nodus run $t --cwd D:\repo --propose      # 在独立 worktree 里干活
+nodus proposals                           # 谁在提案、改了多少
+nodus proposal prop-7fd1353f16cc          # 看 patch，不用打开文件
+nodus merge prop-7fd1353f16cc             # 合入主树，删分支和 worktree
+nodus reject prop-7fd1353f16cc            # 丢弃
+```
+
+实测（同一个仓库、两个任务同时跑）：
+
+```
+[completed] run-ebe16bd18f5e  ¥0.020291
+[completed] run-30bf7dd3115c  ¥0.016180
+elapsed: 26s                    ← 没有串行
+主树：README.md                  ← 一个文件都没漏进去
+proposals: 2 open
+
+merge 两次之后：
+主树：alpha.txt  beta.txt  README.md
+git log: Merge branch 'nodus/run-...' ×2
+branches: 只剩 main      worktrees: 只剩主树
+```
+
+边界：
+
+- **需要 git**。没有 git 的目录没法便宜地隔离和合并，`--propose` 会明确拒绝，而不是偷偷串行。
+- 冲突不会自动解决：`git merge` 失败就 abort，提案保持 open，主树一个字节都不动。
+- 合并期间主树被别的 run 占着，merge 会把锁冲突说清楚。
+- 空提案（run 没改任何东西）不进列表，worktree 直接删掉——否则列表会被噪音训练成没人看。
 
 ## 交接模型
 

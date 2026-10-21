@@ -29,6 +29,11 @@ def add(sub) -> None:
     p.add_argument("--effort", default="")
     p.add_argument("--model", default="", help="pin the model for this run only")
     p.add_argument(
+        "--propose",
+        action="store_true",
+        help="work in an isolated git worktree and produce a mergeable proposal",
+    )
+    p.add_argument(
         "--no-verify",
         action="store_true",
         help="do not run the project's tests when the worker changed files",
@@ -112,6 +117,7 @@ def run(args) -> int:
             "model": args.model,
             "wait": args.wait,
             "verify": not args.no_verify,
+            "propose": args.propose,
         },
     )
     print(f"run {r['id']} ({r.get('route') or route})")
