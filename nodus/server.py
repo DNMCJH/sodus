@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agents, config, db, jobs, profiles, providers, routes, runner
+from . import agents, config, db, jobs, profiles, propose, providers, routes, runner, ui
 
 MAX_BODY = 1_000_000
 
@@ -118,7 +118,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def _authorized(self) -> bool:
-        if self.path.startswith("/health"):
+        # `/` is the board itself: it has to load before anything else can be
+        # requested, and it carries the token for the requests it makes.
+        if self.path == "/" or self.path.startswith("/health") or self.path == "/favicon.ico":
             return True
         return authorized(self.headers.get("Authorization", ""))
 
@@ -128,6 +130,22 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
+
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if path == "/":
+            body = ui.PAGE.replace("__TOKEN__", config.token()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         if path == "/health":
             return _json(
@@ -253,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/pipelines":
             return _json(self, 200, db.list_pipelines((qs.get("status") or [""])[0]))
 
+        if path == "/proposals":
+            return _json(self, 200, db.list_proposals("" if (qs.get("all") or [""])[0] else "open"))
+
         if path.startswith("/pipelines/"):
             parts = path.split("/")
             pid = parts[2]
@@ -328,6 +349,21 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
             return _json(self, 201, row)
+
+        if path.startswith("/proposals/"):
+            parts = path.split("/")
+            pid, action = parts[2], (parts[3] if len(parts) > 3 else "")
+            row = db.get_proposal(pid)
+            if not row:
+                return _json(self, 404, {"error": "not found"})
+            if action == "reject":
+                propose.reject(row)
+                _log(f"proposal {pid} rejected from the board")
+                return _json(self, 200, {"ok": True, "proposal": pid, "status": "rejected"})
+            if action == "merge":
+                result = propose.merge(row)
+                _log(f"proposal {pid} merge -> {result}")
+                return _json(self, 200 if result["ok"] else 409, result)
 
         if path.startswith("/pipelines/") and path.endswith("/stop"):
             pid = path.split("/")[2]
