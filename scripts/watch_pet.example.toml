@@ -1,0 +1,56 @@
+# watch_pet 配置示例。
+# 用法：复制成同目录的 watch_pet.toml，按需改；不复制脚本也能跑（用内置默认值）。
+# 命令行 --interval / --min-gap / --max-per-day 会覆盖这里的值。
+
+[pet]
+# dsh-pet 的宠物 id，对应 main-config.jsonc 里的 pets[].id
+id = "main"
+
+[capture]
+# 每轮轮询间隔（秒）
+interval = 20
+# 两次模型调用的最小间隔（秒）。间隔 20 + 这里 45，实际约 45~65 秒花一次钱
+min_gap = 45
+# 每天模型调用硬上限。超了只记日志，到第二天 0 点重置
+max_per_day = 30
+# 16×16 灰度指纹的平均绝对差阈值：>= 10 才算画面变了
+threshold = 10
+# 发给模型前缩到长边 768（Gemini 按 768 一块、258 tokens 计费）
+max_side = 768
+jpeg_quality = 75
+
+[privacy]
+# 前台窗口的 exe 名（小写子串匹配）命中就整帧静默：不截屏、不记指纹、不发模型。
+# 密码管理器 + 私聊类。工作 IM（飞书 / Slack / Teams）默认没挡，想挡就自己加。
+processes = [
+  "1password", "keepass", "bitwarden", "lastpass", "dashlane", "enpass",
+  "wechat", "weixin", "wecom", "qq", "tim", "telegram", "whatsapp",
+  "signal", "line", "discord", "alipay",
+]
+
+# 窗口标题关键字命中同样静默，兜住进程名认不出来的银行/支付/证件页面。
+# "dsh-pet" 是宠物自己的窗口：被拖出右上角时，只靠 pet_box 遮不住它。
+titles = [
+  "密码", "password", "银行", "网银", "转账", "余额", "信用卡",
+  "支付宝", "身份证", "验证码", "支付", "私聊", "dsh-pet",
+]
+
+# 宠物自己那块，物理像素。三种写法：
+#   "auto"        右上角，18% 屏宽 × 42% 屏高（够盖住精灵和头顶气泡）
+#   [x, y, w, h]  精确指定。2880×1620 上实测宠物+气泡在 x 2450..2850 / y 200..590
+#   "off"         不涂（不建议：宠物每帧都在动，指纹会一直判"变了"）
+pet_box = "auto"
+pet_fill = "#202020"
+
+[vision]
+# OpenAI 兼容端点 + 中转 key 的环境变量名
+base_url = "https://9527.codes/v1"
+model = "gemini-3.8-flash"
+api_key_env = "RELAY_API_KEY"
+timeout = 25
+max_tokens = 200
+temperature = 0.7
+# 单次调用成本（USD），只用来打印"今日预估花费"，不参与限流。
+# 调研报告按「258 图 + 300 文本 + 60 输出」估 $0.00064；本机 2026-10-21 实测一次
+# 1258 in / 283 out（含 246 reasoning tokens）≈ $0.0020，这里按实测值填。
+estimated_usd_per_call = 0.0020
