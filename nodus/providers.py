@@ -61,6 +61,93 @@ class Pricing:
 
 
 @dataclass(frozen=True)
+class Calibration:
+    """What one token costs on a specific relay, measured rather than published.
+
+    The relay's own price table (`/api/pricing`) turned out to be shaped
+    differently from the classic ratio formula: fitting a linear model to six
+    controlled runs with that table produced a negative cache coefficient. So
+    these coefficients come from an experiment — vary output, cache read and
+    cache write separately, read the account meter around each run, solve.
+    Residual on the fit was 0.1%, and a held-out run landed within 0.3%.
+
+    Values are in the relay's balance unit; `config.cost_rate("relay_unit")`
+    converts to CNY. A model without a calibration falls back to the meter
+    delta, which is account-wide and therefore an upper bound under concurrency.
+    """
+
+    model: str
+    per_output: float
+    per_cache_read: float
+    per_cache_write: float
+    per_call: float
+    measured: str  # date the experiment ran
+
+    def cost(self, usage: dict) -> float:
+        return round(
+            self.per_call
+            + int(usage.get("output_tokens") or 0) * self.per_output
+            + int(usage.get("cache_read") or 0) * self.per_cache_read
+            + int(usage.get("cache_write") or 0) * self.per_cache_write,
+            6,
+        )
+
+    def as_json(self) -> dict:
+        return {
+            "per_output": self.per_output,
+            "per_cache_read": self.per_cache_read,
+            "per_cache_write": self.per_cache_write,
+            "per_call": self.per_call,
+            "measured": self.measured,
+        }
+
+
+#: Measured 2026-10-21 on the 9527 relay, claude-opus-5-5[1M].
+#: `nodus cost` prints these; `scripts/calibrate_relay.py` re-measures them.
+DEFAULT_CALIBRATIONS = {
+    "claude-opus-5-5[1M]": Calibration(
+        model="claude-opus-5-5[1M]",
+        per_output=3.6728e-05,
+        per_cache_read=9.6206e-08,
+        per_cache_write=2.9769e-06,
+        per_call=1.0350e-03,
+        measured="2026-10-21",
+    ),
+}
+
+
+def calibration_for(model: str) -> Calibration | None:
+    """A measured cost model for this endpoint's model, if there is one.
+
+    `config.json` wins: the relay can reprice at any time, and the answer to
+    that is a fresh measurement, not a code change.
+    """
+    raw = (config.load_config().get("cost_models") or {}).get(model)
+    if isinstance(raw, dict):
+        try:
+            return Calibration(
+                model=model,
+                per_output=float(raw["per_output"]),
+                per_cache_read=float(raw.get("per_cache_read") or 0.0),
+                per_cache_write=float(raw.get("per_cache_write") or 0.0),
+                per_call=float(raw.get("per_call") or 0.0),
+                measured=str(raw.get("measured") or "config"),
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+    return DEFAULT_CALIBRATIONS.get(model)
+
+
+def all_calibrations() -> dict[str, Calibration]:
+    out = dict(DEFAULT_CALIBRATIONS)
+    for model in (config.load_config().get("cost_models") or {}):
+        found = calibration_for(model)
+        if found:
+            out[model] = found
+    return out
+
+
+@dataclass(frozen=True)
 class Provider:
     name: str
     protocol: str

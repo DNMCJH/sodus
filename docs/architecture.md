@@ -197,9 +197,18 @@ daemon 起线程跑同一批函数，CLI 只跟随（`pipeline.child` 事件告�
 `nodus stop` 现在同时认 run id 和 pipe id。代价：多一张 `pipeline` 表和一跳 HTTP；
 CLI 的进度靠轮询（0.5s），不是 SSE。
 
+**ADR-017 成本用标定的 token 单价，不用账户余额差。** ADR-008 的 `metered` 档有个默认的洞：
+余额差是**账户级**的，两个 run 并发时看到的是同一笔钱，合计必然偏高。修法不是排队（那会毁掉并行），
+是给每个模型测出单价：固定模型、串行跑、每次只改一种 token 形状，读账户表前后差，最小二乘解系数。
+opus 拟合残差 0.1%，留出验证 0.3%，多调用大 cache 的干净核对 0.8%，所以在成本阶梯里排在 `metered` 之上。
+依据是**实验**而不是 relay 的价目表：同一张表套进经典比例公式联立，缓存写系数解出负数——
+表是真的，公式不是。sonnet 用同样方法得到 13.7% 残差和负截距，因此**不发布**，继续走余额差。
+代价：系数来自本账户本时刻，relay 调价就漂；所以每个 run 同时存 `meter_observed`，`nodus cost` 能看出漂移。
+重新标定是 `scripts/calibrate_relay.py`，系数不合格时脚本拒绝输出。
+
 ## 6. 质量门槛
 
-- `python -m pytest -q`：190 条，覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、报告、计费表、
+- `python -m pytest -q`：195 条，覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、成本标定、报告、计费表、
   端点/路由/配置物化，以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
 - 每个新能力都要有一次真实调用记录：0.4.0 的四条 route（relay / minimax / relay-openai / deepseek）

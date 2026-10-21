@@ -63,7 +63,8 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus route <task>` | Jev 选 agent + effort（和上面的 `routes` 是两件事） |
 | `nodus triage <run>` | Jev 给执行打分 |
 | `nodus decisions [--last N]` | 看历史决策 |
-| `nodus usage [--days N]` | 按 route 汇总 token 与花费，标出走过回退的次数 |
+| `nodus usage [--days N]` | 按 route 汇总 token 与花费，标出花费来源和回退次数 |
+| `nodus cost` | 标定过的每 token 单价，以及标定 vs 账单的漂移 |
 | `nodus probe` | 探活各 provider（免费） |
 | `nodus status` | 探活结果 + 今日用量 |
 | `nodus verify --cwd DIR [--command "pytest -q"]` | 跑测试，返回 exit code（不花 token） |
@@ -104,7 +105,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（190 条）
+tests/                   自己的一套 pytest（195 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -328,43 +329,52 @@ Nodus 的做法是让生成的 settings.json **永远不含 `env`**，端点全�
 MiniMax 的输入大头是 Claude Code 自己的 system prompt + 工具定义（约 18k），和模型无关。
 这张表是 token 和耗时，不是钱——钱见下一节。
 
-## 成本：读表，不读自述
+## 成本：标定过的 token 单价
 
-**结论：成本从 provider 的计费接口读，不取 CLI 自报的数字。**
+**结论：能测出来的单价，比读余额差准，而且不受并发影响。**
 
-`nodus/meter.py` 有两条读法：**按请求读日志**（最准）和**按余额读差值**（兜底）。
+成本的来源按可信度排：
 
-| agent | 表 | 精度 |
+| 来源 | 含义 | 并发安全 |
 |---|---|---|
-| dsh | 本地网关的请求日志（按会话匹配）→ 没有就退回 DeepSeek 余额 | 1e-6 美元 / 0.01 元 |
-| claude | 中转站 `/v1/dashboard/billing/usage`（累计消耗） | 1e-4 站内余额 |
-| minimax | 没有余额接口（`/v1/account/balance` 要 admin key），用价目表 | 精确，官方就是按价目扣 |
-| codex | 没有 | 记 n/a |
+| `metered_request` | 网关逐请求读会话日志（dsh） | 是 |
+| `calibrated` | **实测出来的每 token 单价**（relay 上的 claude/opus） | 是 |
+| `metered` | run 前后读账户余额求差 | **否**：同一时间别的 run 花的钱也会算进来 |
+| `list_price` | 公开价目表（minimax） | 是 |
+| `reported` | CLI 自己算的账，常常是别家的价格 | 是但不可信 |
 
-第一条只在装了本地网关（magpie）时生效：它 tail 各 agent 的会话文件，知道**每一次调用**的
-token、模型和成本，并且带会话 id——正好和 run 记的 `session_ref.session_id` 对得上。
-实测一次 dsh 改字任务：`cost=0.001386, currency=USD, cost_basis=metered_request, requests=4`，
-折合约 ¥0.010；同一件事按余额差读是 ¥0.09 或者干脆 0，因为余额只有 0.01 元精度。
+### 为什么不用 relay 的价目表
 
-实测一次 claude 改字任务：`cost=0.322958, currency=CNY, cost_basis=metered, meter={unit:relay_unit, delta:0.322958, window_s:29.7}`。
+`/api/pricing` 拿得到（`claude-opus-5-5` = model_ratio 2 / completion 5 / cache 0.05），
+但把它套进经典比例公式、用两次实测 run 联立，**缓存写系数解出负数**——公式形状不对。
 
-四个容易搞错的地方：
+改成能控变量的实验：固定模型、串行跑、每次只改一种 token 形状（输出长度 / 上下文 / 两者），
+用账户表读前后差。6 次 run 的最小二乘拟合：
 
-1. **中转站的"$"不是美元。** 官方文档写得很清楚：模型广场的价格单位是"站内余额 / 1M Tokens"，不是美元；
-   站内余额 = 官方美元价 × 分组倍率。这个账户 1 站内余额 = ¥1。
-   所以 CLI 报的 `$0.2673` 既不是美元也不是实付，实付是 **¥0.3230**。
-   按 7.2 的汇率把它当美元读，会高估约 5.8 倍。
-2. **CLI 的价目表是别人的。** Claude Code 拿 Anthropic 的价格给任意后端计价，中转站的倍率它不知道。
-   同一个 run：`total_cost_usd=0.2627`，实测 0.3230 站内余额，比值 1.23；另一次是 1.44。
-   倍率随分组和模型浮动，**推不出来，只能读表**。
-3. **换算比例是配置，不是常量。** `~/.nodus/config.json` 里 `{"cost_rates": {"relay_unit": 1.0}}`。
-   拿不到 API 的地方就承认拿不到，别写死。
-4. **网关的成本是美元。** `magpie usage` 自己打印的是 `≈$`，所以 `cost_basis=metered_request` 记 USD，
-   不要和人民币的 `metered` 相加。币种分开统计这件事，报告里已经做了。
+```
+残差 RMS 0.1%   单点最大误差 0.3%
+per_output       3.6728e-05
+per_cache_read   9.6206e-08
+per_cache_write  2.9769e-06
+per_call         1.0350e-03      （站内余额）
+```
 
-代价：每次 run 多 1 次前置 HTTP（约 0.2s），结束后最多等 4s 让计费落账；走网关按请求读时，
-最多再等 6s 等它 tail 到会话文件。两个 run 并发时，余额差会同时覆盖两者——`meter.window_s` 记了窗口；
-按请求读没有这个问题。只有 dsh 走网关这条路：Nodus 的 claude 跑在隔离配置目录里，网关扫不到。
+留出验证（第七次、不同形状）：预测 0.059893，实测 0.059712，**误差 0.3%**。
+之后两次干净核对：单调用 0.2%，多调用（cache_read 78k，超出标定范围）0.8%。
+
+**sonnet 没有发布**：同样的方法拟合出 13.7% 残差和负截距，说明它的数据不支持同一个线性模型
+（很可能这个 relay 把 sonnet 路由到多个后端分组）。不发布比发布一个错的强。
+
+### 怎么重测
+
+```powershell
+python scripts/calibrate_relay.py --model "claude-opus-5-5[1M]"
+# 系数不合格（负值或残差 >5%）时脚本拒绝输出
+nodus cost                     # 看当前系数，以及标定 vs 账单的漂移
+```
+
+系数写在 `~/.nodus/config.json` 的 `cost_models`，覆盖内置的那一份——relay 调价时改配置，不用改代码。
+`meter_observed` 会和标定值一起存在 run 里，用来发现"哪天真调价了"。
 
 ## 为什么不要一家一个 CLI
 
@@ -610,7 +620,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - usage 是逐条 assistant 消息累加，`input_tokens` 经常只有个位数、`cache_read` 偏高，只能看趋势不能当账单。
 - 审查读的是**当前工作区**，不是 run 时刻的快照。文件被改动时，`context.md` 里对应文件会标"当前内容与 run 记录不一致"，但审查仍按当前内容做——负向对照就是靠这一点。
 - 审查上下文到 80k 字符会截断，`review.json` 里有 `context_truncated` 字段，`review.md` 里没有显式警告，大 diff 时容易误判"看全了"。
-- 成本现在靠读表，但还有四个洞：minimax 要 admin key 才能读余额（普通 key 返回 `token_type_mismatch`），所以它用价目表；dsh 的 DeepSeek 余额只有 0.01 元精度，低于这个数的 run 记 0；**dsh 和本机 DSH 会话共用同一个 key**，所以它的余额 delta 会混进别的用量，那个数是上界不是精确值；中转站的余额差是账户级的，两个 claude/codex run 并发时窗口重叠，那个数会偏大。
+- 成本：relay 上只有 claude-opus-5-5[1M] 有标定，其余模型仍走余额差（并发时是上界）；还有几个洞：minimax 要 admin key 才能读余额（普通 key 返回 `token_type_mismatch`），所以它用价目表；dsh 的 DeepSeek 余额只有 0.01 元精度，低于这个数的 run 记 0；**dsh 和本机 DSH 会话共用同一个 key**，所以它的余额 delta 会混进别的用量，那个数是上界不是精确值；中转站的余额差是账户级的，两个 claude/codex run 并发时窗口重叠，那个数会偏大。
 - 一次 run 有多次尝试时，顶层 `cost` 记的是**最后那次**（真正产出结果的那次）。前面失败尝试的开销留在 `usage.attempts[]` 里，`nodus usage` 的合计只加顶层那个——失败尝试通常没花到钱，但不是永远为 0。
 - 并发只测了 2 个 run 同时跑；SQLite 单写者，10 个以上并发和跨小时长任务没测。
 - fix 回路只认最新一次审查；审查误报时没有自动驳回，只能靠 fixer 在回复里说明"不成立"。

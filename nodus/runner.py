@@ -651,9 +651,13 @@ class Runner:
         """Cost in order of trustworthiness, recorded per attempt.
 
         metered_request  a gateway read this session's log: exact, per call
+        calibrated       a measured per-token model for this endpoint's model
         metered          what the provider deducted over the attempt window
         list_price       tokens x published price, exact at list billing
         reported         the CLI's own price book, often another vendor's rates
+
+        `calibrated` outranks `metered` because the delta belongs to the
+        account, not to this run: two runs in flight both see the same spend.
         """
         usage = attempt["usage"]
         gateway = None
@@ -673,6 +677,26 @@ class Runner:
             return
         after = meter.read(provider, secrets, settle_from=before)
         metered = meter.delta(before, after)
+        calibration = (
+            providers.calibration_for(attempt.get("model") or "")
+            if provider.meter == "relay"
+            else None
+        )
+        if calibration is not None:
+            usage["cost"] = round(
+                calibration.cost(usage) * config.cost_rate("relay_unit"), 6
+            )
+            usage["currency"] = "CNY"
+            usage["cost_basis"] = "calibrated"
+            usage["calibration"] = calibration.as_json()
+            if metered is not None and before is not None:
+                # Keep the account-side number too. It is inflated whenever
+                # something else was spending, so it cannot be the answer — but
+                # it is the only way to notice the relay repriced overnight.
+                usage["meter_observed"] = round(
+                    metered * config.cost_rate(before.unit), 6
+                )
+            return
         if metered is not None and before is not None:
             usage["cost"] = round(metered * config.cost_rate(before.unit), 6)
             usage["currency"] = "CNY"

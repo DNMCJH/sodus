@@ -66,9 +66,55 @@ def add(sub) -> None:
     p = sub.add_parser("locks", help="which working directories have a writer")
     p.set_defaults(func=locks, needs_daemon=False)
 
+    p = sub.add_parser(
+        "cost", help="measured per-token prices, and how they compare to the bill"
+    )
+    p.add_argument("--runs", type=int, default=10, help="how many recent runs to compare")
+    p.set_defaults(func=cost, needs_daemon=False)
+
     p = sub.add_parser("unlock", help="force-release a directory a dead run left locked")
     p.add_argument("cwd")
     p.set_defaults(func=unlock, needs_daemon=False)
+
+
+def cost(args) -> int:
+    table = providers.all_calibrations()
+    if not table:
+        print("(no calibration; costs come from the account meter, which is shared)")
+        return 0
+    rate = config.cost_rate("relay_unit")
+    for model, cal in sorted(table.items()):
+        print(f"{model}  measured {cal.measured}")
+        print(f"  per output token       {cal.per_output:.4e}")
+        print(f"  per cache_read token   {cal.per_cache_read:.4e}")
+        print(f"  per cache_write token  {cal.per_cache_write:.4e}")
+        print(f"  per call               {cal.per_call:.4e}")
+    print(f"单位：站内余额；× cost_rate(relay_unit)={rate} = CNY")
+
+    calibrated = observed = 0.0
+    counted = 0
+    for run in db.list_runs(limit=200):
+        try:
+            usage = json.loads(run.get("usage_json") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if usage.get("cost_basis") != "calibrated":
+            continue
+        if not isinstance(usage.get("meter_observed"), (int, float)):
+            continue
+        calibrated += float(usage["cost"])
+        observed += float(usage["meter_observed"])
+        counted += 1
+        if counted >= args.runs:
+            break
+    if counted:
+        drift = (observed - calibrated) / calibrated * 100 if calibrated else 0.0
+        print(
+            f"\n最近 {counted} 个已标定的 run：标定合计 ¥{calibrated:.4f}，"
+            f"账单合计 ¥{observed:.4f}（{drift:+.1f}%）"
+        )
+        print("账单那侧含并发重叠，只作漂移参考；持续偏离说明 relay 调价了，重跑标定。")
+    return 0
 
 
 def locks(args) -> int:
@@ -282,6 +328,7 @@ def usage(args) -> int:
         if money:
             labels = {
                 "metered": "实测",
+                "calibrated": "标定",
                 "metered_request": "网关逐请求",
                 "list_price": "价目表",
                 "reported": "CLI 自报偏大",

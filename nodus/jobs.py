@@ -99,6 +99,10 @@ class Jobs:
             status = "stopped" if cancelled else ("failed" if result.get("ok") is False else "completed")
             if kind == "review" and result.get("ok") is False:
                 status = "failed"
+            # Emit before the status write: a watcher that sees a terminal
+            # status must find the events that explain it. Same reasoning as
+            # releasing the write lock before recording a run as finished.
+            _emit(pid, "pipeline.finished", {"status": status, "ok": bool(result.get("ok"))})
             db.update_pipeline(
                 pid,
                 status=status,
@@ -106,16 +110,15 @@ class Jobs:
                 result_json=json.dumps(result, ensure_ascii=False, default=str),
                 error=(result.get("error") or None) if status == "failed" else None,
             )
-            _emit(pid, "pipeline.finished", {"status": status, "ok": bool(result.get("ok"))})
         except Exception as exc:  # noqa: BLE001 - a job must always close
             traceback.print_exc()
+            _emit(pid, "pipeline.failed", {"error": f"{type(exc).__name__}: {exc}"})
             db.update_pipeline(
                 pid,
                 status="failed",
                 ended_at=db.now(),
                 error=f"{type(exc).__name__}: {exc}",
             )
-            _emit(pid, "pipeline.failed", {"error": f"{type(exc).__name__}: {exc}"})
         finally:
             with self._lock:
                 self._threads.pop(pid, None)
