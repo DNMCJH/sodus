@@ -192,11 +192,24 @@ class Runner:
         model: str = "",
         include_handoff: bool = True,
         session_id: str = "",
+        session_mode: str = "resume",
         profile: str = "",
+        provider: str = "",
         wait: float = 0.0,
     ) -> dict:
         profiles.ensure_ready()
         route = routes.resolve_for_run(route_name)
+        if provider:
+            # Continuing a session means going back to the endpoint that holds
+            # its history: `--resume` looks the id up inside that endpoint's own
+            # config home, so here the chain is not a preference, it is a fact.
+            route = routes.Route(
+                name=route.name,
+                agent=route.agent,
+                providers=(provider,),
+                model=route.model,
+                effort=route.effort,
+            )
         gap = routes.problems(route)
         if gap:
             raise RuntimeError(f"route {route.name} is not usable: {', '.join(gap)}")
@@ -231,7 +244,7 @@ class Runner:
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,
-                  include_handoff, session_id),
+                  include_handoff, session_id, session_mode),
             daemon=True,
         )
         thread.start()
@@ -293,11 +306,12 @@ class Runner:
         profile_name: str,
         include_handoff: bool,
         session_id: str,
+        session_mode: str,
     ) -> None:
         try:
             self._execute_inner(
                 rid, route, spec, task, workdir, secrets, profile_name,
-                include_handoff, session_id,
+                include_handoff, session_id, session_mode,
             )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
@@ -316,6 +330,7 @@ class Runner:
         profile_name: str,
         include_handoff: bool,
         session_id: str,
+        session_mode: str,
     ) -> None:
         run_dir = config.HOME / "runs" / rid
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -366,7 +381,7 @@ class Runner:
             model = (pinned if index == 0 else "") or provider.model
             attempt = self._attempt(
                 rid, index, spec, provider, workdir, secrets, profile_name,
-                prompt, effort, model, session_id,
+                prompt, effort, model, session_id, session_mode,
             )
             if first_started is None:
                 first_started = attempt["started_at"]
@@ -427,6 +442,7 @@ class Runner:
         effort: str,
         model: str,
         session_id: str,
+        session_mode: str,
     ) -> dict:
         attempt: dict = {
             "index": index,
@@ -453,7 +469,9 @@ class Runner:
         try:
             home = profiles.materialize(spec, provider, secrets, profile_name)
             env = agents.build_env(spec, provider, secrets, home=home)
-            argv = agents.argv(spec, provider, effort or None, session_id, model or None)
+            argv = agents.argv(
+                spec, provider, effort or None, session_id, model or None, session_mode
+            )
         except (OSError, ValueError) as exc:
             attempt["error"] = f"{type(exc).__name__}: {exc}"
             attempt["errors"].append(attempt["error"])

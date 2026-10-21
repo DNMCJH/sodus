@@ -173,11 +173,15 @@ def doctor(args) -> int:
             detail += f" gaps={','.join(missing)}"
         return bool(ready), detail
 
-    def sessions():
-        from ... import dsh_sessions
+    def sessions_check():
+        from ... import sessions as sessions_mod
 
-        found = dsh_sessions.session_files()
-        return bool(found), f"{len(found)} files under {dsh_sessions.ROOT}"
+        found = sessions_mod.scan()
+        by_vendor: dict[str, int] = {}
+        for session in found:
+            by_vendor[session.vendor] = by_vendor.get(session.vendor, 0) + 1
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(by_vendor.items())) or "none"
+        return bool(found), detail
 
     def secrets_check():
         keys = sorted(config.load_secrets())
@@ -199,7 +203,7 @@ def doctor(args) -> int:
         ("token", token),
         ("database", database),
         ("agents", agent_readiness),
-        ("dsh sessions", sessions),
+        ("sessions", sessions_check),
         ("secrets", secrets_check),
         ("write locks", write_locks),
         ("disk", disk),

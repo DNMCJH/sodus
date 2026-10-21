@@ -289,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
                     model=body.get("model", ""),
                     profile=body.get("profile", ""),
                     wait=float(body.get("wait") or 0.0),
+                    session_id=body.get("session_id", ""),
+                    session_mode=body.get("session_mode", "resume"),
+                    provider=body.get("provider", ""),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

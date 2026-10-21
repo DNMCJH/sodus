@@ -44,7 +44,10 @@ class AgentSpec:
     accepts: tuple[str, ...]
     #: extra secrets beyond the provider's own key, by name in secrets.json
     secrets: tuple[str, ...] = ()
-    can_resume_session: bool = False
+    #: how this CLI continues an existing conversation: "" | "flag" | "subcommand"
+    resume_mode: str = ""
+    #: how it branches one; empty means the vendor has no native fork
+    fork_mode: str = ""
     #: a local gateway tails this CLI's session files and can price each call
     gateway_sessions: bool = False
 
@@ -63,6 +66,8 @@ def _specs() -> dict[str, AgentSpec]:
             vendor="claude",
             command=tuple(CLAUDE_ARGS),
             accepts=(providers.ANTHROPIC,),
+            resume_mode="flag",
+            fork_mode="flag",
         ),
         "codex": AgentSpec(
             name="codex",
@@ -75,6 +80,8 @@ def _specs() -> dict[str, AgentSpec]:
                 "--dangerously-bypass-approvals-and-sandbox",
             ),
             accepts=(providers.OPENAI,),
+            resume_mode="subcommand",
+            fork_mode="subcommand",
         ),
         "dsh": AgentSpec(
             name="dsh",
@@ -87,7 +94,8 @@ def _specs() -> dict[str, AgentSpec]:
                 "-",
             ),
             accepts=(providers.DEEPSEEK,),
-            can_resume_session=True,
+            resume_mode="flag",
+            fork_mode="",  # no native fork; `branch` seeds a new session instead
             # DSH keeps its sessions in a location the gateway already tails.
             # Claude Code runs from an isolated config dir it does not scan.
             gateway_sessions=True,
@@ -169,6 +177,7 @@ def argv(
     effort: str | None = None,
     session_id: str = "",
     model: str | None = None,
+    session_mode: str = "resume",
 ) -> list[str]:
     """Build the command line for one attempt.
 
@@ -190,13 +199,35 @@ def argv(
             cmd += ["-c", f'model_reasoning_effort="{effort}"']
         # dsh has no per-run effort flag; its effort lives in the profile config.
     if session_id:
-        if not spec.can_resume_session:
-            raise ValueError(f"{spec.vendor} cannot resume a session")
-        # dsh reads the prompt from "-", so the flag must come before it
-        cmd = cmd[:-1] + ["--session-id", session_id, cmd[-1]]
+        cmd = _with_session(cmd, spec, session_id, session_mode)
     exe = shutil.which(cmd[0])
     if not exe:
         return cmd
     if exe.lower().endswith((".cmd", ".bat")):
         return ["cmd.exe", "/c", exe, *cmd[1:]]
     return [exe, *cmd[1:]]
+
+
+def _with_session(cmd: list[str], spec: AgentSpec, session_id: str, mode: str) -> list[str]:
+    """Splice the vendor's own continue/branch syntax into an argv.
+
+    Three shapes, and they are not interchangeable: a flag, a subcommand, and
+    a flag that has to sit before the stdin marker.
+    """
+    if mode == "fork" and not spec.fork_mode:
+        raise ValueError(f"{spec.vendor} has no native fork; seed a new session instead")
+    if not spec.resume_mode:
+        raise ValueError(f"{spec.vendor} cannot continue a session")
+    if spec.vendor == "dsh":
+        # dsh reads the prompt from "-", so the flag must come before it
+        return cmd[:-1] + ["--session-id", session_id, cmd[-1]]
+    if spec.vendor == "claude":
+        out = [*cmd, "--resume", session_id]
+        if mode == "fork":
+            out.append("--fork-session")
+        return out
+    if spec.vendor == "codex":
+        verb = "fork" if mode == "fork" else "resume"
+        # `codex exec resume <id> [flags]` — the subcommand sits right after exec
+        return [*cmd[:2], verb, session_id, *cmd[2:]]
+    raise ValueError(f"{spec.vendor} cannot continue a session")

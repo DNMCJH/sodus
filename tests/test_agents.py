@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from nodus import agents, providers
 
 
@@ -33,9 +31,10 @@ def test_dsh_without_resume_has_no_flag():
     assert "--session-id" not in argv
 
 
-def test_claude_rejects_session_id():
-    with pytest.raises(ValueError, match="cannot resume"):
-        agents.argv(agents.SPECS["claude"], _provider(), session_id="session-abc123")
+def test_claude_can_continue_a_session():
+    """It could not, until the CLI grew `--resume`; the flag is the capability."""
+    argv = agents.argv(agents.SPECS["claude"], _provider(), session_id="session-abc123")
+    assert argv[-2:] == ["--resume", "session-abc123"]
 
 
 def test_claude_effort_flag():

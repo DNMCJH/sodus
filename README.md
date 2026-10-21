@@ -42,10 +42,11 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
 | `nodus --version` | 版本 |
 | `nodus task "goal" --accept "..."` | 建任务，返回 task-id |
-| `nodus sessions [--query TEXT]` | 列出 DSH 会话（读本地 zstd 存储） |
-| `nodus session <id> [--tail N] [--reasoning]` | 打印另一个会话的对话 |
+| `nodus sessions [--vendor] [--query] [--source]` | 三家会话 + Nodus run，一张表 |
+| `nodus session <id>` | 统一格式的对话记录 |
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
-| `nodus resume <session> --note "..." [--force]` | 在 DSH 会话上续一轮（必须同 cwd） |
+| `nodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
+| `nodus branch <id> [--note]` | 从这段历史分叉/播种一个新会话 |
 | `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] --cwd PATH [--note "..."]` | 起一次执行并跟踪 |
 | `nodus watch <run>` | 跟踪已有 run |
 | `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
@@ -91,9 +92,12 @@ nodus/report.py          任务报告
 nodus/meter.py           计费表：run 前后读端点的账，求差
 nodus/decision.py        Jev 路由与分诊
 nodus/telemetry.py       探活、用量、余额
-nodus/dsh_sessions.py    读 DSH 会话（zstd JSONL）、brief、会话锁
+nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统一入口
+  dsh.py                 zstd JSONL
+  claude.py              projects/<cwd>/<uuid>.jsonl
+  codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（166 条）
+tests/                   自己的一套 pytest（170 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -188,6 +192,38 @@ nodus locks                                    # 谁占着，占多久
 
 已实测：A 跑着的时候 `nodus locks` 显示 `run-10080926f04d claude@minimax 5s`，B 在同目录 exit 1 并报出持有者，
 A 完成后 `nodus locks` 回到 `(no directory is locked)`。
+
+## 会话：查询、读取、接续、分支
+
+三家 CLI 各有一套自己的会话存储，Nodus 现在把它们当同一件事处理：
+
+| | claude | codex | dsh |
+|---|---|---|---|
+| 存储 | `<config>/projects/<cwd>/<uuid>.jsonl` | `sessions/YYYY/MM/DD/rollout-*.jsonl` | `sessions/<cwd>/<id>/session.v4.jsonl.zstd` |
+| 接续 | `--resume <id>` | `exec resume <id>` | `--session-id <id>` |
+| 分支 | `--resume <id> --fork-session` | `exec fork <id>` | **没有原生 fork**，用 brief 播种 |
+
+```powershell
+nodus sessions                      # 三家会话 + Nodus run，一张表
+nodus sessions --vendor claude --query 水印
+nodus session claude:be6acd2c       # 统一格式，工具调用和系统噪音都滤掉
+nodus resume  claude:be6acd2c --note "接着改"      # 同一会话加一轮
+nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话不动
+```
+
+`vendor:id` 是完整写法；只给 id 或唯一前缀也行，歧义会报错并列出候选。
+
+接续和分支都会回到**写这个会话的那个端点**：`--resume` 是在那个 endpoint 的配置目录里查 id 的，
+换一个 home 就会变成 "No conversation found"。所以 `resume` 会从会话路径反推出 `profile` 和 `provider`，
+用 `--route` 显式覆盖才换端。不是 Nodus 建的会话（比如你 `~/.claude` 里的）只能读，接续会被拒绝并告诉你该用什么命令。
+
+分支有两种质地，`branch` 会明说给的是哪一种：claude/codex 是**真 fork**（新 session id，历史原样搬过去），
+dsh 是**播种**（新会话从一份 brief 开始，不是原历史的副本）。
+
+实测（2026-10-21）：
+- 接续 `claude:be6acd2c` → run 的 session id 不变，下一轮答出"两个文件均已就位（wait-b.txt = b，wait-c.txt = c）"，是同一段历史
+- 分支 `claude:be6acd2c` → 新 session `63ff6726`，原会话消息数不变
+- 接续 codex / 播种 dsh 各一次真任务，均 exit 0
 
 ## 交接模型
 

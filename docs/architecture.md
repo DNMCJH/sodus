@@ -37,7 +37,7 @@ nodus/agents.py       CLI 注册表：可执行、参数方言、流格式、能
 nodus/providers.py    端点注册表：地址、凭据名、协议、单价、计量口径
 nodus/adapters.py     各家 JSONL → 统一事件（纯函数）
 nodus/verify.py       测试检测与执行（纯函数 + 落盘）
-nodus/dsh_sessions.py DSH 会话读取 / brief / 锁（只读为主）
+nodus/sessions/       会话层：三家存储统一读取 + 接续/分支（DSH/Claude/Codex 各一个适配器）
 nodus/meter.py        计费表：run 前后读端点的账
 nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁
 nodus/config.py       路径、token、secrets、用户配置、当前 profile
@@ -165,9 +165,18 @@ base URL、凭据和价目。0.4.0 把这个"差别"从 `AgentSpec` 的一个副
 代价：`review`/`fix` 会借走目标目录，目标 run 还在跑时会被拒；这是对的（审查一份正在变的树本来就没有意义），
 但报错信息必须点名持有者，否则用户会以为是 Nodus 坏了。
 
+**ADR-013 会话是能力，不是 DSH 的附属。** 查询、读取、接续、分支四个动作对三家都成立，
+差别只在 CLI 的语法和存储格式，所以有 `nodus/sessions/` 一层，每个厂商一个适配器，上层只认 `Session`。
+接续必须回到**写这个会话的那个端点**：`--resume` 在 endpoint 自己的配置目录里查 id，换 home 就变成
+"No conversation found"（0.4.0 实测踩到过一次，报错原文就是这句）。所以会话对象带 `profile` + `provider`，
+由路径反推；不在我们 profiles 里的会话（用户自己的 `~/.claude`）只能读，接续会明确拒绝。
+分支有两种质地，不假装一样：claude/codex 是真 fork（新 id，历史原样），dsh 没有原生 fork，用 brief 播种。
+代价：三家的 id 空间没有统一（dsh 是 `session-<uuid>`），所以 `find` 支持 `vendor:id`，并且只把**已知厂商名**当限定符——
+否则 `session:` 会被误读成厂商。codex 一个 thread 可能写多个 rollout 文件，扫描时按 id 取最新的一份。
+
 ## 6. 质量门槛
 
-- `python -m pytest -q`：166 条，覆盖解析、策略、隔离、写锁、报告、计费表、端点/路由/配置物化、
+- `python -m pytest -q`：170 条，覆盖解析、策略、隔离、写锁、报告、计费表、端点/路由/配置物化、
   以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
 - 每个新能力都要有一次真实调用记录：0.4.0 的四条 route（relay / minimax / relay-openai / deepseek）

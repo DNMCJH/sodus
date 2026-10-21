@@ -113,7 +113,16 @@ def parse_claude(line: str) -> list[dict]:
                 usage["cost"] = float(obj["total_cost_usd"])
             out.append({"type": "usage", **usage})
         if obj.get("is_error"):
-            out.append({"type": "error", "message": str(obj.get("result") or "claude error")})
+            # `result` is empty when the failure happened before any turn; the
+            # real reason sits in `errors` and is the difference between
+            # "claude error" and "no conversation found with that session id".
+            detail = (
+                obj.get("result")
+                or (obj.get("errors") or [None])[0]
+                or obj.get("subtype")
+                or "claude error"
+            )
+            out.append({"type": "error", "message": str(detail)})
         return out
     return [{"type": "raw", "data": obj}]
 
