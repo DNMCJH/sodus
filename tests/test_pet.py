@@ -92,6 +92,24 @@ def test_the_bridge_reports_failure_instead_of_raising(home, monkeypatch):
     assert pet.push("hello") is False
 
 
+def test_a_build_without_a_lock_still_gets_the_message(home, monkeypatch):
+    """dsh-pet 0.3.7 has no /lock route; broadcast works on its own."""
+    seen: list[str] = []
+    monkeypatch.setattr(
+        config, "load_config", lambda: {"pet_bridge": {"enabled": True, "pet": "main"}}
+    )
+
+    def fake_call(method, path, body=None, timeout=3.0):
+        seen.append(path)
+        if path.startswith("/lock?"):
+            return None  # this build rejects it
+        return {"ok": True}
+
+    monkeypatch.setattr(pet, "_call", fake_call)
+    assert pet.push("hi") is True
+    assert seen == ["/lock?pet=main", "/broadcast?pet=main"]
+
+
 def test_the_bridge_uses_the_pet_id_from_config(home, monkeypatch):
     seen: list[str] = []
     monkeypatch.setattr(
@@ -111,3 +129,4 @@ def test_the_bridge_uses_the_pet_id_from_config(home, monkeypatch):
     assert seen[0] == "/lock?pet=sidekick"
     assert seen[1].startswith("/broadcast?pet=sidekick&lock=L1")
     assert seen[2] == "/lock/release?pet=sidekick"
+    assert len(seen) == 3

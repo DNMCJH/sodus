@@ -123,28 +123,30 @@ def _call(method: str, path: str, body: dict | None = None, timeout: float = 3.0
 
 
 def push(text: str, duration_ms: int = 12000) -> bool:
-    """Make the pet say one line. Locked, so nothing else talks over it.
+    """Make the pet say one line, best effort.
 
-    Best effort by design: the pet is a light on the desk, not a dependency.
+    Newer builds expose an occupancy lock so the pet cannot be interrupted
+    mid-show; 0.3.7 does not have that route at all and rejects /lock, so the
+    lock is attempted and fallen back from rather than required. The pet is a
+    light on the desk, not a dependency: any failure here costs one sentence.
     """
     cfg = bridge()
     if not cfg.get("enabled"):
         return False
-    pet = str(cfg.get("pet") or "main")
-    lock = _call("POST", f"/lock?pet={pet}", {})
-    if not lock or not lock.get("lockId"):
-        return False
-    lock_id = lock["lockId"]
+    pet_id = str(cfg.get("pet") or "main")
+    lock_id = ""
+    lock = _call("POST", f"/lock?pet={pet_id}", {})
+    if isinstance(lock, dict) and lock.get("lockId"):
+        lock_id = str(lock["lockId"])
+    query = f"?pet={pet_id}" + (f"&lock={lock_id}" if lock_id else "")
     try:
-        return bool(
-            _call(
-                "POST",
-                f"/broadcast?pet={pet}&lock={lock_id}",
-                {"text": text, "duration": duration_ms, "anim": True},
-            )
+        result = _call(
+            "POST", f"/broadcast{query}", {"text": text, "duration": duration_ms, "anim": True}
         )
+        return bool(result and result.get("ok", True))
     finally:
-        _call("POST", f"/lock/release?pet={pet}", {"lockId": lock_id})
+        if lock_id:
+            _call("POST", f"/lock/release?pet={pet_id}", {"lockId": lock_id})
 
 
 def notify(text: str, duration_ms: int = 12000) -> None:
