@@ -324,6 +324,48 @@ branches: 只剩 main      worktrees: 只剩主树
 - 合并期间主树被别的 run 占着，merge 会把锁冲突说清楚。
 - 空提案（run 没改任何东西）不进列表，worktree 直接删掉——否则列表会被噪音训练成没人看。
 
+## 桌宠：把状态挂到桌面上
+
+不用命令行的人不会去看看板，但会看到桌面上那只东西。所以 Nodus 暴露一个**中立的**状态端点，
+任何小组件都能轮询：
+
+```
+GET http://127.0.0.1:4199/pet
+{"mood":"attention","bubble":"1 个提案等你决定","running":0,"red":0,
+ "proposals":1,"cost":{"CNY":2.96,"USD":0.0096},"updated_at":...}
+```
+
+mood 只有四种，按优先级：`error`（最近 10 分钟有失败或测试红）> `attention`（有提案等你决定）>
+`working`（有 run 在跑）> `idle`。**它是只读的、不鉴权的**——和 `/health` 一样只在本机环回上，
+理由是桌宠没法持有 token。
+
+如果要让 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 真的动起来，在 `config.json` 里开一层桥：
+
+```json
+"pet_bridge": {
+  "enabled": true,
+  "base": "http://127.0.0.1:3080/dsh-pet-7340",
+  "pet": "main"
+}
+```
+
+开了之后每个 run 结束会说一句（带验证结果和成本），走的是它自己的占用锁 + 气泡接口：
+
+```
+POST /lock?pet=main            → lockId
+POST /broadcast?pet=main&lock= → {"text": "claude 测试通过，¥0.0177"}
+POST /lock/release?pet=main
+```
+
+桥是**尽力而为**：没装桌宠、端口关了、版本不兼容，都只是这一句不出现，run 不受任何影响。
+
+装桌宠（DSH 插件，需要重启 DSH 生效）：
+
+```powershell
+dsh plugin --profile web add dsh-pet      # 装
+dsh plugin --profile web remove dsh-pet   # 撤销
+```
+
 ## 交接模型
 
 跨 agent 传的是文件，不是对话。每次 run 的上下文 =

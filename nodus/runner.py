@@ -25,7 +25,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter, profiles, propose, providers, routes, verify
+from . import adapters, agents, config, db, meter, pet, profiles, propose, providers, routes, verify
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -789,6 +789,7 @@ class Runner:
             error=err or None,
             provider=chosen["provider"],
         )
+        pet.notify(pet.describe(db.get_run(rid), verify_mark))
         self._emit(
             rid,
             "run.completed" if status == "completed" else "run.failed",

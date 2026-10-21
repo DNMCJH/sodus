@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agents, config, db, jobs, profiles, propose, providers, routes, runner, ui
+from . import agents, config, db, jobs, pet, profiles, propose, providers, routes, runner, ui
 
 MAX_BODY = 1_000_000
 
@@ -120,7 +120,8 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         # `/` is the board itself: it has to load before anything else can be
         # requested, and it carries the token for the requests it makes.
-        if self.path == "/" or self.path.startswith("/health") or self.path == "/favicon.ico":
+        if (self.path == "/" or self.path.startswith("/health")
+                or self.path == "/favicon.ico" or self.path.startswith("/pet")):
             return True
         return authorized(self.headers.get("Authorization", ""))
 
@@ -146,6 +147,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+
+        if path == "/pet":
+            # Public on purpose: a desktop widget has no way to hold the token,
+            # and this is the same loopback-only machine.
+            return _json(self, 200, pet.state())
 
         if path == "/health":
             return _json(
