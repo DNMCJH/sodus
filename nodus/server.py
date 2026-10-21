@@ -42,6 +42,210 @@ def body_allowed(length: int) -> bool:
     return 0 <= length <= MAX_BODY
 
 
+def _usage(raw: str | None) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _day_start(now: float | None = None) -> tuple[float, str]:
+    """Midnight in the operator's timezone.
+
+    "Today" has to be their day: a UTC boundary would move the total under
+    them at 08:00 local time.
+    """
+    lt = time.localtime(now)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    return midnight, time.strftime("%Y-%m-%d", lt)
+
+
+def _live_rows(conn, now: float) -> list[dict]:
+    """Runs that are still going, with what has been recorded so far.
+
+    `run.usage_json` is only written when a run finalises, so a live row has no
+    price yet. What it does have is its `usage` events, which is a real record
+    of what the CLI reported mid-flight — a lower bound, never presented as the
+    final `_price()` number.
+    """
+    rows = conn.execute(
+        "SELECT * FROM run WHERE workspace_id=? AND status IN ('queued','running')"
+        " ORDER BY started_at",
+        (config.workspace_id(),),
+    ).fetchall()
+    out = []
+    for row in rows:
+        run = dict(row)
+        tokens = {"input": 0, "output": 0}
+        reported: float | None = None
+        for ev in conn.execute(
+            "SELECT payload_json FROM event WHERE run_id=? AND type='usage'", (run["id"],)
+        ):
+            payload = _usage(ev["payload_json"])
+            tokens["input"] += int(payload.get("input_tokens") or 0)
+            tokens["output"] += int(payload.get("output_tokens") or 0)
+            if isinstance(payload.get("cost"), (int, float)):
+                reported = (reported or 0.0) + float(payload["cost"])
+        out.append(
+            {
+                "id": run["id"],
+                "agent": run.get("agent") or "",
+                "route": run.get("route") or run.get("agent") or "",
+                "provider": run.get("provider") or "",
+                "cwd": run.get("cwd") or "",
+                "note": run.get("note") or "",
+                "status": run.get("status") or "",
+                "started_at": run.get("started_at"),
+                "tokens": tokens,
+                "partial_cost": round(reported, 6) if reported is not None else None,
+                # The CLI's own `total_cost_usd`; different basis from _price().
+                "partial_currency": "USD" if reported is not None else "",
+            }
+        )
+    return out
+
+
+def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], dict]:
+    """Everything on this board that cannot move without a human."""
+    items: list[dict] = []
+    counts = {"proposal": 0, "red": 0, "failed": 0, "unverified": 0}
+
+    proposals = db.list_proposals("open")
+    counts["proposal"] = len(proposals)
+    for p in proposals[:5]:
+        files = [str(f.get("path") or "") for f in (p.get("files") or [])]
+        items.append(
+            {
+                "kind": "proposal",
+                "id": p.get("id") or "",
+                "run": p.get("run_id") or "",
+                "title": "提案在分支上，等你合入或丢弃",
+                "detail": p.get("stat") or "",
+                "note": ", ".join(files)[:160],
+                "at": p.get("created_at"),
+            }
+        )
+
+    red = [r for r in runs if states.get(r["id"]) == "red"]
+    counts["red"] = len(red)
+    for r in red[:3]:
+        items.append(
+            {
+                "kind": "red",
+                "id": r["id"],
+                "run": r["id"],
+                "title": "跑完了，测试是红的",
+                "detail": (r.get("note") or "")[:140],
+                "note": "",
+                "at": r.get("ended_at") or r.get("started_at"),
+            }
+        )
+
+    failed = [r for r in runs if r.get("status") == "failed"]
+    counts["failed"] = len(failed)
+    for r in failed[:3]:
+        items.append(
+            {
+                "kind": "failed",
+                "id": r["id"],
+                "run": r["id"],
+                "title": "执行失败，要不要重跑由你定",
+                "detail": (r.get("error") or "")[:160],
+                "note": "",
+                "at": r.get("ended_at") or r.get("started_at"),
+            }
+        )
+
+    unverified = [
+        r for r in runs if r.get("status") == "completed" and states.get(r["id"], "none") == "none"
+    ]
+    counts["unverified"] = len(unverified)
+    if unverified:
+        items.append(
+            {
+                "kind": "unverified",
+                "id": "",
+                "run": "",
+                "title": f"{len(unverified)} 个 run 跑完但没有测试证据（状态只代表进程退出码）",
+                "detail": "",
+                "note": "",
+                "at": unverified[0].get("ended_at") or unverified[0].get("started_at"),
+            }
+        )
+    return items, counts
+
+
+def _today(conn, start: float) -> dict:
+    """Cost recorded today, straight out of `run.usage_json`.
+
+    No re-derivation and no FX: `_price()` already chose the number and its
+    currency, and adding two currencies would invent an exchange rate.
+    """
+    rows = conn.execute(
+        "SELECT agent, route, usage_json FROM run"
+        " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
+        (config.workspace_id(), start),
+    ).fetchall()
+    by_agent: dict[str, dict] = {}
+    totals: dict[str, float] = {}
+    basis: dict[str, int] = {}
+    priced = 0
+    for row in rows:
+        usage = _usage(row["usage_json"])
+        agent = row["agent"] or "-"
+        bucket = by_agent.setdefault(
+            agent, {"agent": agent, "costs": {}, "runs": 0, "priced": 0, "routes": []}
+        )
+        bucket["runs"] += 1
+        route = row["route"] or ""
+        if route and route != agent and route not in bucket["routes"]:
+            bucket["routes"].append(route)
+        cost = usage.get("cost")
+        if not isinstance(cost, (int, float)):
+            continue
+        priced += 1
+        bucket["priced"] += 1
+        currency = str(usage.get("currency") or "USD")
+        bucket["costs"][currency] = round(bucket["costs"].get(currency, 0.0) + float(cost), 6)
+        totals[currency] = round(totals.get(currency, 0.0) + float(cost), 6)
+        key = str(usage.get("cost_basis") or "none")
+        basis[key] = basis.get(key, 0) + 1
+    ordered = sorted(by_agent.values(), key=lambda b: (-b["priced"], -b["runs"], b["agent"]))
+    return {
+        "runs": len(rows),
+        "priced": priced,
+        "unpriced": len(rows) - priced,
+        "totals": totals,
+        "by_agent": ordered,
+        "basis": basis,
+    }
+
+
+def board_state(now: float | None = None) -> dict:
+    """The first screen: what is running, what waits on a human, today's money."""
+    now = time.time() if now is None else now
+    start, day = _day_start(now)
+    runs = db.list_runs(limit=50)
+    states = db.verify_states([r["id"] for r in runs])
+    decisions, counts = _decisions(runs, states)
+    conn = db.connect()
+    try:
+        live = _live_rows(conn, now)
+        today = _today(conn, start)
+    finally:
+        conn.close()
+    return {
+        "now": now,
+        "day": day,
+        "profile": config.active_profile(),
+        "running": live,
+        "decisions": decisions,
+        "decision_counts": counts,
+        "today": {"window_start": start, **today},
+    }
+
+
 def _json(handler: BaseHTTPRequestHandler, code: int, payload) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(code)
@@ -123,7 +327,17 @@ class Handler(BaseHTTPRequestHandler):
         if (self.path == "/" or self.path.startswith("/health")
                 or self.path == "/favicon.ico" or self.path.startswith("/pet")):
             return True
-        return authorized(self.headers.get("Authorization", ""))
+        if authorized(self.headers.get("Authorization", "")):
+            return True
+        # EventSource cannot set an Authorization header. The stream is
+        # read-only, loopback-only and already public to anything on this
+        # machine (which can read ~/.nodus/token anyway), but the token still
+        # has to match — an unauthenticated stream would leak run payloads.
+        u = urlparse(self.path)
+        if u.path.rstrip("/") == "/events":
+            token = (parse_qs(u.query).get("token") or [""])[0]
+            return hmac.compare_digest(token, config.token())
+        return False
 
     def _get(self) -> None:
         if not self._authorized():
@@ -234,6 +448,9 @@ class Handler(BaseHTTPRequestHandler):
                     for name in (profiles.names() or ["default"])
                 ],
             )
+
+        if path == "/board":
+            return _json(self, 200, board_state())
 
         if path == "/tasks":
             return _json(self, 200, db.list_tasks())
