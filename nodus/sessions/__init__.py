@@ -386,6 +386,7 @@ def plan(
     route: str = "",
     profile: str = "",
     in_place: bool = False,
+    into: str = "",
 ) -> dict:
     """Everything a run needs to continue or branch this session.
 
@@ -395,10 +396,35 @@ def plan(
     and `in_place=True` is the explicit override. A session a Nodus run wrote
     is our own record and is continued in place.
 
+    `into` names a different vendor to hand the conversation to. That can only
+    ever be a *seed*: a session id is resolved by the CLI that wrote it, out of
+    its own store, so no vendor can resume another's conversation. What Nodus
+    can do is read any of them and start a new one on the target vendor with a
+    handoff as its first message.
+
     Raises with the reason when it cannot be honoured, instead of starting a run
     that would silently lose the history.
     """
     session = find(ref)
+    target = into or session.vendor
+    if target not in SOURCES:
+        raise ValueError(f"unknown vendor: {into} (known: {', '.join(SOURCES)})")
+    if target != session.vendor:
+        return {
+            "session": session,
+            "mode": "seed",
+            "cross": True,
+            "note": (
+                f"跨厂商交接：读 {session.vendor} 的对话，在 {target} 上开一个**新会话**。"
+                "不是接续——会话 id 由写它的那个 CLI 解释，谁也没法续别人的"
+            ),
+            "agent": target,
+            "provider": "",
+            "profile": profile or config.active_profile(),
+            "session_id": "",
+            "source": ref,
+        }
+
     if session.vendor in NEEDS_KNOWN_HOME and not session.provider:
         raise ValueError(
             f"{session.vendor}:{session.id} 在 {session.path.parent.parent} 下，"

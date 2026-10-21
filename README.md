@@ -244,6 +244,28 @@ nodus session dsh:session-efa2394b                        # 看它现在长什�
 
 接续时 CLI 会把**将要发送的原文**打出来，再告诉你它会出现在哪里，不用猜。
 
+### 跨厂商：只能读，不能续
+
+会话 id 由写它的那个 CLI 解释，从它自己的存储里查。所以：
+
+| 想做的事 | 能做到吗 |
+|---|---|
+| dsh 接续 claude 的会话 | **不能**。`--session-id` 只认 dsh 自己写的会话 |
+| claude 接续 codex 的会话 | **不能**。`--resume` 只在 `CLAUDE_CONFIG_DIR/projects` 里查 |
+| 一个 claude 会话读另一个 claude 会话 | **不能**（CLI 一次只载入一个会话；`--resume` 是切换，不是并行） |
+| 把 A 的对话交给 B 接着做 | **能**，但方式是 `--into`：读 A 的历史 → 在 B 上开**新会话**，第一句是交接文档 |
+
+```powershell
+nodus branch claude:63ff6726 --into dsh --note "总结这段对话在做什么"
+# 跨厂商交接：读 claude 的对话，在 dsh 上开一个新会话。不是接续
+```
+
+实测：源会话 7 条消息不变，新会话是 `session-032dce9b…`（dsh），它准确复述了 claude 那段对话
+（"先写 wait-b.txt，再补 wait-c.txt，最后 git init 出 feature/wait-d"）。
+
+`--into` 的代价：交接文档是 `brief`，默认取最近 12 轮、上限 4 万字符。**长对话会被截断**，
+所以它是"交接"不是"迁移"——真正需要原文的地方，得让对方自己去读路径。
+
 
 
 接续和分支都会回到**写这个会话的那个端点**：`--resume` 是在那个 endpoint 的配置目录里查 id 的，

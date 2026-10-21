@@ -318,6 +318,35 @@ def test_a_run_owned_session_is_continued_in_place(world):
     assert plan["session"].run_id == run["id"]
 
 
+def test_handing_a_conversation_to_another_vendor_is_a_seed(world):
+    """No CLI can resume another's session: the id is resolved out of its own store."""
+    plan = sessions.plan("claude:aaaa1111", fork=True, into="dsh")
+    assert plan["mode"] == "seed"
+    assert plan["agent"] == "dsh"
+    assert plan["session_id"] == ""
+    assert plan["cross"] is True
+    assert "不是接续" in plan["note"]
+
+
+def test_a_seed_needs_no_endpoint_for_the_source(world, monkeypatch, tmp_path):
+    """A claude session outside our profiles can still be read and handed over."""
+    from nodus.sessions import claude
+
+    home = tmp_path / "other"
+    monkeypatch.setattr(claude, "roots", lambda: [(home, "", "")])
+    make_claude(home, "x", "ffff7777-0000-7000-8000-000000000007", "D:\\mine")
+    plan = sessions.plan("claude:ffff7777", fork=True, into="dsh")
+    assert plan["mode"] == "seed"
+    with pytest.raises(ValueError, match="不是 Nodus 建的"):
+        sessions.plan("claude:ffff7777")
+
+
+def test_into_the_same_vendor_is_just_a_fork(world):
+    plan = sessions.plan("claude:aaaa1111", fork=True, into="claude")
+    assert plan["mode"] == "fork"
+    assert "cross" not in plan
+
+
 def test_a_dsh_branch_is_seeded_not_forked(world):
     plan = sessions.plan("dsh:cccc3333", fork=True)
     assert plan["mode"] == "seed"

@@ -53,6 +53,12 @@ def add(sub) -> None:
     p.add_argument("--note", default="", help="the first instruction of the new session")
     p.add_argument("--route", default="")
     p.add_argument("--profile", default="")
+    p.add_argument(
+        "--into",
+        default="",
+        choices=["", "claude", "codex", "dsh"],
+        help="hand the conversation to another vendor as a seeded new session",
+    )
     p.set_defaults(func=branch)
 
 
@@ -179,7 +185,7 @@ def _branch(plan: dict, args, kind: str = "branch") -> int:
         session_id = plan["session_id"]
         session_mode = "fork"
         _too_fresh(session, force=True)  # a fork reads, it does not write
-    route = args.route or session.vendor
+    route = args.route or plan.get("agent") or session.vendor
     task = _task_for(kind, session, note)
     run = call(
         "POST",
@@ -201,6 +207,8 @@ def _branch(plan: dict, args, kind: str = "branch") -> int:
 
 
 def branch(args) -> int:
-    plan = sessions.plan(args.session, fork=True, route=args.route, profile=args.profile)
+    plan = sessions.plan(
+        args.session, fork=True, route=args.route, profile=args.profile, into=args.into
+    )
     print(plan["note"])
     return _branch(plan, args)
