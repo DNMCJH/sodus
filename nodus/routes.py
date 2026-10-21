@@ -50,6 +50,29 @@ def _builtin() -> dict[str, Route]:
         "minimax": Route("minimax", "claude", ("minimax",)),
         "codex": Route("codex", "codex", ("relay-openai",)),
         "dsh": Route("dsh", "dsh", ("deepseek",)),
+        # opencode is the one agent whose endpoint Nodus does not choose: it
+        # reads `~/.config/opencode/opencode.json` itself, and *that* file is
+        # what dials https://9527.codes/v1. The `relay-openai` provider below
+        # is the same relay and the same key, so it is still the right pairing
+        # — but for metering and readiness, not for injection. Setting
+        # OPENAI_BASE_URL/OPENAI_API_KEY on this process changes nothing about
+        # where the CLI goes; edit opencode's own config to move it.
+        #
+        # `model` is `provider/model` in opencode's namespace, so it names both
+        # the CLI's provider block and the model, and it is what the run record
+        # stores as the model that actually ran.
+        "opencode-glm": Route(
+            "opencode-glm",
+            "opencode-glm",
+            ("relay-openai",),
+            model="codes9527/glm-5.3-flash",
+        ),
+        "opencode-gemini": Route(
+            "opencode-gemini",
+            "opencode-gemini",
+            ("relay-openai",),
+            model="codes9527/gemini-3.8-flash",
+        ),
     }
 
 

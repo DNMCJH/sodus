@@ -33,6 +33,12 @@ CLAUDE_ARGS = [
     "bypassPermissions",
 ]
 
+#: opencode's headless contract. Two differences from the others matter:
+#: the message is a positional argument (not stdin), and the endpoint plus key
+#: come from its own config file, so the provider on the route only decides
+#: what Nodus meters the run against.
+OPENCODE_ARGS = ("opencode", "run", "--format", "json")
+
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -100,6 +106,25 @@ def _specs() -> dict[str, AgentSpec]:
             # Claude Code runs from an isolated config dir it does not scan.
             gateway_sessions=True,
         ),
+        # One spec per model rather than one per CLI: opencode has no per-run
+        # default worth trusting, and the spec name is what a task asks for.
+        **{
+            name: AgentSpec(
+                name=name,
+                vendor="opencode",
+                command=OPENCODE_ARGS,
+                # opencode can be pointed at any OpenAI-compatible endpoint,
+                # which is what its config declares (`@ai-sdk/openai-compatible`
+                # against the relay's /v1). Nothing here injects that endpoint:
+                # `agents.build_env` still materialises OPENAI_BASE_URL/API_KEY
+                # for the provider, and opencode ignores both in favour of its
+                # own `~/.config/opencode/opencode.json`.
+                accepts=(providers.OPENAI,),
+                resume_mode="flag",
+                fork_mode="flag",
+            )
+            for name in ("opencode-glm", "opencode-gemini")
+        },
     }
 
 
@@ -178,11 +203,15 @@ def argv(
     session_id: str = "",
     model: str | None = None,
     session_mode: str = "resume",
+    prompt: str = "",
 ) -> list[str]:
     """Build the command line for one attempt.
 
     The model is pinned on the command line rather than left to a config file,
     so the run record names what actually ran instead of what was configured.
+
+    `prompt` is only used by a CLI that takes its message positionally; the
+    others read it from stdin and would see a stray argument.
     """
     cmd = list(spec.command)
     chosen = model or provider.model
@@ -191,15 +220,26 @@ def argv(
             cmd += ["-c", f'model="{chosen}"']
         elif spec.vendor == "claude":
             cmd += ["--model", chosen]
+        elif spec.vendor == "opencode":
+            # `-m` is `provider/model` in opencode's own namespace. The relay's
+            # OpenAI face names `gpt-6.1-sol`, which is not one of them, so only
+            # a qualified name is passed on rather than an invalid flag.
+            if "/" in chosen:
+                cmd += ["-m", chosen]
         # dsh has no per-run model flag; the run record still keeps the intent.
     if effort:
         if spec.vendor == "claude":
             cmd += ["--effort", effort]
         elif spec.vendor == "codex":
             cmd += ["-c", f'model_reasoning_effort="{effort}"']
-        # dsh has no per-run effort flag; its effort lives in the profile config.
+        # dsh and opencode keep effort in their own config (`--variant` for
+        # opencode is model-specific and would fail on a model that has none).
     if session_id:
         cmd = _with_session(cmd, spec, session_id, session_mode)
+    if prompt and spec.vendor == "opencode":
+        # `opencode run "<message>"`: positional and last, because the CLI
+        # collects every trailing argument into `message` before parsing flags.
+        cmd = [*cmd, prompt]
     exe = shutil.which(cmd[0])
     if not exe:
         return cmd
@@ -211,8 +251,9 @@ def argv(
 def _with_session(cmd: list[str], spec: AgentSpec, session_id: str, mode: str) -> list[str]:
     """Splice the vendor's own continue/branch syntax into an argv.
 
-    Three shapes, and they are not interchangeable: a flag, a subcommand, and
-    a flag that has to sit before the stdin marker.
+    Four shapes, and they are not interchangeable: a flag, a subcommand, a flag
+    that has to sit before the stdin marker, and a flag pair before a
+    positional prompt.
     """
     if mode == "fork" and not spec.fork_mode:
         raise ValueError(f"{spec.vendor} has no native fork; seed a new session instead")
@@ -230,4 +271,11 @@ def _with_session(cmd: list[str], spec: AgentSpec, session_id: str, mode: str) -
         verb = "fork" if mode == "fork" else "resume"
         # `codex exec resume <id> [flags]` — the subcommand sits right after exec
         return [*cmd[:2], verb, session_id, *cmd[2:]]
+    if spec.vendor == "opencode":
+        # `opencode run -s <id> [--fork] "<prompt>"`; the prompt is appended
+        # after this, so the flags stay ahead of the positional message.
+        out = [*cmd, "-s", session_id]
+        if mode == "fork":
+            out.append("--fork")
+        return out
     raise ValueError(f"{spec.vendor} cannot continue a session")

@@ -501,7 +501,7 @@ class Runner:
             home = profiles.materialize(spec, provider, secrets, profile_name)
             env = agents.build_env(spec, provider, secrets, home=home)
             argv = agents.argv(
-                spec, provider, effort or None, session_id, model or None, session_mode
+                spec, provider, effort or None, session_id, model or None, session_mode, prompt
             )
         except (OSError, ValueError) as exc:
             attempt["error"] = f"{type(exc).__name__}: {exc}"
@@ -536,7 +536,11 @@ class Runner:
             self.procs[rid] = proc
         try:
             assert proc.stdin is not None
-            proc.stdin.write(prompt)
+            if spec.vendor != "opencode":
+                # The other three read the brief from stdin. opencode took it
+                # as a positional argument instead, and writing the same bytes
+                # into a pipe it never drains would block once the buffer fills.
+                proc.stdin.write(prompt)
             proc.stdin.close()
         except OSError:
             pass

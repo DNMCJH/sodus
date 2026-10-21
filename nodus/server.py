@@ -324,8 +324,13 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         # `/` is the board itself: it has to load before anything else can be
         # requested, and it carries the token for the requests it makes.
-        if (self.path == "/" or self.path.startswith("/health")
-                or self.path == "/favicon.ico" or self.path.startswith("/pet")):
+        #
+        # Compare the *path* only. Comparing `self.path` directly fails for the
+        # natural way to open the board, `/?token=...` — the query string makes
+        # it unequal to "/", so a correct token still got 401.
+        path = urlparse(self.path).path or "/"
+        if (path == "/" or path.startswith("/health")
+                or path == "/favicon.ico" or path.startswith("/pet")):
             return True
         if authorized(self.headers.get("Authorization", "")):
             return True

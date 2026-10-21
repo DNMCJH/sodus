@@ -236,7 +236,104 @@ def parse_dsh(line: str) -> list[dict]:
     return [{"type": "raw", "data": obj}]
 
 
-PARSERS = {"claude": parse_claude, "codex": parse_codex, "dsh": parse_dsh}
+def parse_opencode(line: str) -> list[dict]:
+    """opencode's `--format json`: one line per finished part.
+
+    Every line is `{type, timestamp, sessionID, part}`. The payload is in
+    `part`, and its shape depends on `type`:
+
+        step_start   opens a step; the line still carries the session id
+        text         a complete assistant message (not deltas)
+        tool_use     a tool call, with its result already attached
+        step_finish  closes a step: token counts + a cost number
+        error        a transport/model failure
+
+    A run with tool calls has several steps, so token counts arrive once per
+    step and the runner sums them.
+    """
+    obj = _load(line)
+    if obj is None:
+        return []
+    t = obj.get("type")
+    part = obj.get("part") or {}
+    if t == "step_start":
+        session_id = obj.get("sessionID") or ""
+        return [{"type": "session", "session_id": session_id}] if session_id else []
+    if t == "text":
+        text = part.get("text") or ""
+        return [{"type": "message", "text": text}] if text else []
+    if t in ("tool_use", "tool"):
+        state = part.get("state") or {}
+        status = state.get("status")
+        call_id = part.get("callID") or part.get("id")
+        out: list[dict] = [
+            {
+                "type": "tool_call",
+                "id": call_id,
+                "name": part.get("tool"),
+                "input": state.get("input"),
+            }
+        ]
+        if status == "completed":
+            metadata = state.get("metadata") or {}
+            # A shell tool reports its exit code in metadata, not as an error.
+            ok = not state.get("error") and metadata.get("exit") in (0, None)
+            out.append(
+                {
+                    "type": "tool_result",
+                    "id": call_id,
+                    "ok": ok,
+                    "text": str(state.get("output") or "")[:4000],
+                }
+            )
+        elif status == "error":
+            out.append(
+                {
+                    "type": "tool_result",
+                    "id": call_id,
+                    "ok": False,
+                    "text": str(state.get("error") or "")[:4000],
+                }
+            )
+        return out
+    if t == "step_finish":
+        tokens = part.get("tokens")
+        if not isinstance(tokens, dict):
+            return []
+        cache = tokens.get("cache") or {}
+        # `reasoning` is billed as output and reported outside `output`, which
+        # is how the other vendors report thinking tokens too.
+        output = int(tokens.get("output") or 0) + int(tokens.get("reasoning") or 0)
+        # `part.cost` is deliberately dropped: opencode computes it from its
+        # price table, which has no entry for this custom provider, so it is
+        # 0 here — a reported zero would be worse than no number at all. The
+        # runner prices the run from the relay's meter instead.
+        return [
+            {
+                "type": "usage",
+                "input_tokens": int(tokens.get("input") or 0),
+                "output_tokens": output,
+                "cache_read": int(cache.get("read") or 0),
+                "cache_write": int(cache.get("write") or 0),
+            }
+        ]
+    if t == "reasoning":
+        text = part.get("text") or ""
+        return [{"type": "thinking", "text": text}] if text else []
+    if t == "error":
+        error = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+        data = error.get("data") if isinstance(error.get("data"), dict) else {}
+        message = data.get("message") or error.get("name") or "opencode error"
+        return [{"type": "error", "message": str(message)}]
+    return [{"type": "raw", "data": obj}]
+
+
+PARSERS = {
+    "claude": parse_claude,
+    "codex": parse_codex,
+    "dsh": parse_dsh,
+    "opencode": parse_opencode,
+}
 
 
 def parse(vendor: str, line: str) -> list[dict]:
