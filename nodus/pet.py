@@ -13,6 +13,7 @@ broken pet never delays or fails a run.
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 import time
 import urllib.error
@@ -124,13 +125,39 @@ def _alive(base: str) -> bool:
         return False
 
 
+def _listening_ports() -> list[int]:
+    """本机正在监听的 TCP 端口（Windows netstat）。
+
+    为什么不用固定端口表：DSH 桌面客户端自选端口，实测会落到 61634 这种
+    临时端口上。硬编码一张表，换一次宿主就静默失效——正是要避免的坏味道。
+    """
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    ports: set[int] = set()
+    for line in out.splitlines():
+        parts = line.split()
+        # 形如: TCP  127.0.0.1:61634  0.0.0.0:0  LISTENING  23332
+        if len(parts) >= 4 and parts[3].upper() == "LISTENING":
+            port = parts[1].rsplit(":", 1)[-1]
+            if port.isdigit():
+                ports.add(int(port))
+    return sorted(ports)
+
+
 def base_url() -> str:
     """Where the pet listens.
 
-    `auto` (the default) probes the usual ports instead of hardcoding 3080:
-    the desktop client is its own host and does not have to choose the same
-    port as `dsh web`, and a bridge that silently stops working after a switch
-    is worse than one that searches for two seconds.
+    `auto` (the default) probes instead of hardcoding 3080: the desktop client
+    is its own host and does not have to choose the same port as `dsh web`
+    (实测 61634），a bridge that silently stops working after a switch is worse
+    than one that searches for two seconds.
+
+    探测顺序：常见端口 → 本机所有监听端口。整体有上限，最坏情况约 2 秒。
     """
     global _DISCOVERED
     cfg = bridge()
@@ -139,11 +166,24 @@ def base_url() -> str:
         return raw.rstrip("/")
     if _DISCOVERED:
         return _DISCOVERED
+
+    tried: list[int] = []
     for port in (3080, 3081, 3082, 3083, 8080):
+        tried.append(port)
         candidate = f"http://127.0.0.1:{port}/dsh-pet-7340"
         if _alive(candidate):
             _DISCOVERED = candidate
             return candidate
+
+    for port in _listening_ports():
+        if port in tried or port < 1024:
+            continue
+        tried.append(port)
+        candidate = f"http://127.0.0.1:{port}/dsh-pet-7340"
+        if _alive(candidate):
+            _DISCOVERED = candidate
+            return candidate
+
     return "http://127.0.0.1:3080/dsh-pet-7340"
 
 
