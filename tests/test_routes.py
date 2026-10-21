@@ -16,6 +16,51 @@ def test_builtin_routes_pair_an_agent_with_an_ordered_chain():
     assert table["dsh"].providers == ("deepseek",)
 
 
+def test_opencode_routes_name_the_model_in_the_clis_own_namespace():
+    table = routes.load()
+    assert table["opencode-glm"].agent == "opencode-glm"
+    assert table["opencode-glm"].providers == ("relay-openai",)
+    assert table["opencode-glm"].model == "codes9527/glm-5.3-flash"
+    assert table["opencode-gemini"].agent == "opencode-gemini"
+    assert table["opencode-gemini"].model == "codes9527/gemini-3.8-flash"
+
+
+def test_an_opencode_route_validates_even_though_it_dials_its_own_config(tmp_path, monkeypatch):
+    """The provider is still real: same relay, same key, what the meter reads.
+
+    What it does *not* do is reach the CLI — opencode dials its own
+    `opencode.json` — so the pairing must validate on protocol and readiness
+    alone, and nothing may claim to control the URL.
+    """
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    assert routes.problems(routes.load()["opencode-glm"]) == []
+
+
+def test_opencode_cannot_be_pointed_at_the_anthropic_face(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    route = routes.Route(name="wrong", agent="opencode-glm", providers=("relay",))
+    assert any("cannot speak" in item for item in routes.problems(route))
+
+
+def test_opencode_readiness_is_the_relay_key(tmp_path, monkeypatch, installed):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    assert routes.ready("opencode-glm", {}) is False
+    assert routes.ready("opencode-glm", {"RELAY_API_KEY": "sk"}) is True
+
+
+def test_an_opencode_route_still_builds_a_runnable_argv():
+    from nodus import providers
+
+    route = routes.load()["opencode-glm"]
+    spec = agents.SPECS[route.agent]
+    argv = agents.argv(
+        spec, providers.load()["relay-openai"], model=route.model, prompt="回答两个字：收到"
+    )
+    assert argv[argv.index("-m") + 1] == "codes9527/glm-5.3-flash"
+    assert argv[argv.index("--format") + 1] == "json"
+    assert argv[-1] == "回答两个字：收到"
+
+
 def test_a_route_name_wins_over_a_bare_agent_name():
     assert routes.resolve("minimax").agent == "claude"
 

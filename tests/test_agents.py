@@ -52,13 +52,21 @@ def test_codex_effort_uses_config_override():
 def test_registry_holds_clis_not_endpoints():
     # `minimax` used to be an agent here. It was always "the Claude CLI pointed
     # at another URL", so it is a provider now and this list got shorter.
-    assert set(agents.registry()) == {"claude", "codex", "dsh"}
+    # opencode appears twice because the model is part of what a task asks for.
+    assert set(agents.registry()) == {
+        "claude",
+        "codex",
+        "dsh",
+        "opencode-glm",
+        "opencode-gemini",
+    }
 
 
 def test_each_cli_declares_the_protocols_it_speaks():
     assert agents.SPECS["claude"].accepts == (providers.ANTHROPIC,)
     assert agents.SPECS["codex"].accepts == (providers.OPENAI,)
     assert agents.SPECS["dsh"].accepts == (providers.DEEPSEEK,)
+    assert agents.SPECS["opencode-glm"].accepts == (providers.OPENAI,)
     assert not agents.SPECS["claude"].accepts_protocol(providers.OPENAI)
 
 
@@ -122,3 +130,109 @@ def test_codex_takes_its_model_as_a_config_override():
 def test_dsh_records_the_model_but_cannot_apply_it():
     argv = agents.argv(agents.SPECS["dsh"], _provider(protocol=providers.DEEPSEEK), model="x")
     assert "--model" not in argv
+
+
+# ---- opencode ----------------------------------------------------------
+
+
+def _relay_openai(**over) -> providers.Provider:
+    base = dict(
+        name="relay-openai",
+        protocol=providers.OPENAI,
+        base_url="https://relay.test/v1",
+        key_secret="RELAY_API_KEY",
+        model="gpt-6.1-sol",
+    )
+    base.update(over)
+    return providers.Provider(**base)
+
+
+def test_opencode_specs_exist_one_per_model():
+    for name in ("opencode-glm", "opencode-gemini"):
+        spec = agents.SPECS[name]
+        assert spec.vendor == "opencode"
+        assert spec.command[0] == "opencode"
+        assert spec.command[1] == "run"
+        assert spec.resume_mode == "flag"
+        assert spec.fork_mode == "flag"
+
+
+def test_opencode_runs_headless_json():
+    argv = agents.argv(agents.SPECS["opencode-glm"], _relay_openai())
+    assert argv[argv.index("--format") + 1] == "json"
+
+
+def test_opencode_model_is_namespace_qualified():
+    argv = agents.argv(
+        agents.SPECS["opencode-glm"], _relay_openai(), model="codes9527/glm-5.3-flash"
+    )
+    assert argv[argv.index("-m") + 1] == "codes9527/glm-5.3-flash"
+    assert argv.index("-m") > argv.index("run")
+
+
+def test_opencode_will_not_pass_a_bare_model_name():
+    """relay-openai's model is `gpt-6.1-sol`, which is not a `provider/model`
+    pair; passing it would be an invalid flag rather than a useful default."""
+    argv = agents.argv(agents.SPECS["opencode-glm"], _relay_openai())
+    assert "-m" not in argv
+
+
+def test_opencode_takes_the_prompt_positionally_and_last():
+    argv = agents.argv(
+        agents.SPECS["opencode-glm"], _relay_openai(), model="p/m", prompt="回答两个字：收到"
+    )
+    assert argv[-1] == "回答两个字：收到"
+
+
+def test_stdin_agents_are_given_no_positional_prompt():
+    """The other three read the brief from stdin; an extra argument would land
+    in the middle of their own flag parsing."""
+    cases = (
+        ("claude", providers.ANTHROPIC),
+        ("codex", providers.OPENAI),
+        ("dsh", providers.DEEPSEEK),
+    )
+    for name, protocol in cases:
+        argv = agents.argv(agents.SPECS[name], _provider(protocol=protocol), prompt="do it")
+        assert "do it" not in argv
+
+
+def test_opencode_resume_puts_the_session_before_the_prompt():
+    argv = agents.argv(
+        agents.SPECS["opencode-glm"],
+        _relay_openai(),
+        session_id="ses_abc",
+        model="p/m",
+        prompt="next",
+    )
+    assert argv[argv.index("-s") + 1] == "ses_abc"
+    assert argv[-1] == "next"
+    assert "--fork" not in argv
+
+
+def test_opencode_fork_adds_the_flag_after_the_session():
+    argv = agents.argv(
+        agents.SPECS["opencode-glm"],
+        _relay_openai(),
+        session_id="ses_abc",
+        session_mode="fork",
+        model="p/m",
+        prompt="next",
+    )
+    assert argv[argv.index("-s") + 1] == "ses_abc"
+    assert argv.index("--fork") > argv.index("-s")
+    assert argv[-1] == "next"
+
+
+def test_opencode_borrows_the_relay_for_metering_not_for_routing():
+    """The relay is borrowed for metering, not for routing.
+
+    opencode reads `~/.config/opencode/opencode.json`; the env below is what
+    `meter.read` uses, and the CLI ignores it. Saying so here keeps the next
+    person from "fixing" the route by editing a base URL that never applied.
+    """
+    spec = agents.SPECS["opencode-glm"]
+    assert spec.secrets == ()  # no extra credential is injected
+    env = agents.build_env(spec, _relay_openai(), {"RELAY_API_KEY": "sk"})
+    assert env["OPENAI_API_KEY"] == "sk"
+    assert env["NODUS_RUN"] == "1"
