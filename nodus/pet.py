@@ -23,6 +23,18 @@ from . import config, db
 #: How long a failure keeps the pet looking upset.
 RECENT = 600.0
 
+#: The pet's own work-status animation pool, from its shipped config. These are
+#: the names its right-click menu shows, so this is driving the pet through a
+#: supported door rather than poking at internals.
+ANIM = {
+    "thinking": "工作状态-思考冒泡",
+    "working": "工作状态-忙碌点按",
+    "tidying": "工作状态-清点归档",
+    "waiting": "工作状态-原地踱步张望",
+    "done": "工作状态-雀跃庆祝",
+    "error": "工作状态-垂头叹气冒汗",
+}
+
 
 def _usage(run: dict) -> dict:
     try:
@@ -100,10 +112,39 @@ def bridge() -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+_DISCOVERED = ""
+
+
+def _alive(base: str) -> bool:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(base + "/state", timeout=0.6) as resp:
+            return resp.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        return False
+
+
 def base_url() -> str:
+    """Where the pet listens.
+
+    `auto` (the default) probes the usual ports instead of hardcoding 3080:
+    the desktop client is its own host and does not have to choose the same
+    port as `dsh web`, and a bridge that silently stops working after a switch
+    is worse than one that searches for two seconds.
+    """
+    global _DISCOVERED
     cfg = bridge()
-    base = str(cfg.get("base") or "http://127.0.0.1:3080/dsh-pet-7340").rstrip("/")
-    return base
+    raw = str(cfg.get("base") or "auto")
+    if raw != "auto":
+        return raw.rstrip("/")
+    if _DISCOVERED:
+        return _DISCOVERED
+    for port in (3080, 3081, 3082, 3083, 8080):
+        candidate = f"http://127.0.0.1:{port}/dsh-pet-7340"
+        if _alive(candidate):
+            _DISCOVERED = candidate
+            return candidate
+    return "http://127.0.0.1:3080/dsh-pet-7340"
 
 
 def _call(method: str, path: str, body: dict | None = None, timeout: float = 3.0) -> dict | None:
@@ -149,8 +190,30 @@ def push(text: str, duration_ms: int = 12000) -> bool:
             _call("POST", f"/lock/release?pet={pet_id}", {"lockId": lock_id})
 
 
+def animate(name: str) -> bool:
+    """Play one animation from the pet's own pool."""
+    if not bridge().get("enabled") or not name:
+        return False
+    return bool(_call("POST", f"/anim?pet={bridge().get('pet') or 'main'}", {"name": name}))
+
+
 def notify(text: str, duration_ms: int = 12000) -> None:
     """Push in the background so a slow pet cannot slow a run down."""
     if not bridge().get("enabled"):
         return
     threading.Thread(target=push, args=(text, duration_ms), daemon=True).start()
+
+
+def narrate(text: str = "", mood: str = "") -> None:
+    """Say something and, if a mood is given, look like it."""
+    if not bridge().get("enabled"):
+        return
+
+    def work() -> None:
+        animation = ANIM.get(mood, "")
+        if animation:
+            animate(animation)
+        if text:
+            push(text)
+
+    threading.Thread(target=work, daemon=True).start()

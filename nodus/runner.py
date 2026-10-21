@@ -396,6 +396,7 @@ class Runner:
             },
         )
         db.update_run(rid, status="running", started_at=time.time())
+        pet.narrate("", "working")
 
         table = providers.load()
         attempts: list[dict] = []
@@ -789,7 +790,12 @@ class Runner:
             error=err or None,
             provider=chosen["provider"],
         )
-        pet.notify(pet.describe(db.get_run(rid), verify_mark))
+        mood = "done" if status == "completed" else "error"
+        if verify_mark == "red":
+            mood = "error"
+        elif status == "completed" and verify_mark == "none":
+            mood = "tidying"
+        pet.narrate(pet.describe(db.get_run(rid), verify_mark), mood)
         self._emit(
             rid,
             "run.completed" if status == "completed" else "run.failed",

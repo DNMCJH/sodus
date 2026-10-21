@@ -80,6 +80,36 @@ def test_describe_says_what_happened_in_one_line(home):
     assert "¥0.1234" in pet.describe(run, "ok")
 
 
+def test_the_animation_pool_names_are_the_ones_the_pet_ships(home):
+    """These are the labels its right-click menu shows; a rename breaks silently."""
+    assert pet.ANIM["done"] == "工作状态-雀跃庆祝"
+    assert pet.ANIM["error"] == "工作状态-垂头叹气冒汗"
+    assert all(name.startswith("工作状态-") for name in pet.ANIM.values())
+
+
+def test_narrate_is_off_until_configured(home):
+    assert pet.narrate("hello", "done") is None  # no thread, no error
+
+
+def test_animate_is_off_until_configured(home):
+    assert pet.animate("工作状态-雀跃庆祝") is False
+
+
+def test_a_broken_pet_never_breaks_the_caller(home, monkeypatch):
+    monkeypatch.setattr(
+        config, "load_config", lambda: {"pet_bridge": {"enabled": True, "base": "http://127.0.0.1:9"}}
+    )
+    assert pet.animate("工作状态-雀跃庆祝") is False
+    assert pet.push("hi") is False
+
+
+def test_auto_base_searches_instead_of_hardcoding_a_port(home, monkeypatch):
+    monkeypatch.setattr(config, "load_config", lambda: {"pet_bridge": {"enabled": True, "base": "auto"}})
+    monkeypatch.setattr(pet, "_alive", lambda base: base.startswith("http://127.0.0.1:3082"))
+    monkeypatch.setattr(pet, "_DISCOVERED", "")
+    assert pet.base_url().startswith("http://127.0.0.1:3082")
+
+
 def test_the_bridge_is_off_until_configured(home):
     assert pet.push("hello") is False
     assert pet.notify("hello") is None  # no thread, no error
