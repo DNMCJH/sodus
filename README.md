@@ -221,6 +221,31 @@ nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话�
 
 `vendor:id` 是完整写法；只给 id 或唯一前缀也行，歧义会报错并列出候选。
 
+### 接续往哪里写：按归属决定
+
+`resume` 把会话 id 交给 CLI（`--resume` / `exec resume` / `--session-id`），发出的是**你的 `--note` 原文**
+（不走任务模板），追加到**同一个 session id**里。所以它确实会改到那段对话。
+
+哪些对话可以被改，看是谁的：
+
+| 会话归属 | 默认 | 为什么 |
+|---|---|---|
+| Nodus 的 run 建的（`source=run`） | **原地接续** | 这是我们的记录，没有人在读它 |
+| 你自己建的（`source=user`） | **改成从它分叉** | 它就在你自己 CLI 读的存储里；DSH 更直接——GUI 里会多出一轮 |
+
+对 DSH 这条尤其重要：`resume` 写的是 `A:\dsh\home\sessions`，和你 GUI 是同一个存储。
+所以默认不碰你自己的会话，要原地接续得显式 `--in-place`。
+
+```powershell
+nodus resume dsh:session-efa2394b --note "..."            # 你自己的 → 分叉
+nodus resume dsh:session-efa2394b --note "..." --in-place  # 真的追加进原对话
+nodus session dsh:session-efa2394b                        # 看它现在长什么样（含 Nodus 加的轮次）
+```
+
+接续时 CLI 会把**将要发送的原文**打出来，再告诉你它会出现在哪里，不用猜。
+
+
+
 接续和分支都会回到**写这个会话的那个端点**：`--resume` 是在那个 endpoint 的配置目录里查 id 的，
 换一个 home 就会变成 "No conversation found"。所以 `resume` 会从会话路径反推出 `profile` 和 `provider`，
 用 `--route` 显式覆盖才换端。不是 Nodus 建的会话（比如你 `~/.claude` 里的）只能读，接续会被拒绝并告诉你该用什么命令。

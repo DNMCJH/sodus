@@ -354,25 +354,51 @@ def write_brief(ref: str, task: str, out: str = "", tail: int = 12) -> Path:
 # ---- continue / branch -------------------------------------------------
 
 
-def plan(ref: str, fork: bool = False, route: str = "", profile: str = "") -> dict:
+def _fork_plan(session: model.Session, profile: str, ref: str, note: str = "") -> dict:
+    if session.vendor == "dsh":
+        return {
+            "session": session,
+            "mode": "seed",
+            "note": note or (
+                "dsh 没有原生 fork，分支靠 brief 播种：新会话从这份交接开始，不是原历史的副本"
+            ),
+            "agent": session.vendor,
+            "provider": "",
+            "profile": profile or session.profile or config.active_profile(),
+            "session_id": "",
+            "source": ref,
+        }
+    return {
+        "session": session,
+        "mode": "fork",
+        "note": note,
+        "agent": session.vendor,
+        "provider": session.provider,
+        "profile": profile or session.profile or config.active_profile(),
+        "session_id": session.id,
+        "source": ref,
+    }
+
+
+def plan(
+    ref: str,
+    fork: bool = False,
+    route: str = "",
+    profile: str = "",
+    in_place: bool = False,
+) -> dict:
     """Everything a run needs to continue or branch this session.
+
+    A session **you** wrote is never continued in place by default: it lives in
+    the same store your own CLI reads, so appending a turn would show up in a
+    conversation you are still having. Those fork (or, on DSH, get seeded),
+    and `in_place=True` is the explicit override. A session a Nodus run wrote
+    is our own record and is continued in place.
 
     Raises with the reason when it cannot be honoured, instead of starting a run
     that would silently lose the history.
     """
     session = find(ref)
-    if fork and session.vendor == "dsh":
-        return {
-            "session": session,
-            "mode": "seed",
-            "note": "dsh 没有原生 fork，分支靠 brief 播种：新会话从这份交接开始，不是原历史的副本",
-            "agent": session.vendor,
-            "provider": "",
-            "profile": profile or config.active_profile(),
-            "session_id": "",
-            "source": ref,
-        }
-
     if session.vendor in NEEDS_KNOWN_HOME and not session.provider:
         raise ValueError(
             f"{session.vendor}:{session.id} 在 {session.path.parent.parent} 下，"
@@ -381,10 +407,18 @@ def plan(ref: str, fork: bool = False, route: str = "", profile: str = "") -> di
             f"{session.id}`"
         )
 
-    mode = "fork" if fork else "resume"
+    if fork:
+        return _fork_plan(session, profile, ref)
+    if session.source == "user" and not in_place:
+        return _fork_plan(
+            session,
+            profile,
+            ref,
+            note="这是你自己的会话：默认不往里写，改成从它分叉（要原地接续加 --in-place）",
+        )
     return {
         "session": session,
-        "mode": mode,
+        "mode": "resume",
         "note": "",
         "agent": session.vendor,
         "provider": session.provider,

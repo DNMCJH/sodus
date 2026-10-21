@@ -41,6 +41,11 @@ def add(sub) -> None:
     p.add_argument("--route", default="", help="override which endpoint takes the turn")
     p.add_argument("--profile", default="")
     p.add_argument("--force", action="store_true")
+    p.add_argument(
+        "--in-place",
+        action="store_true",
+        help="append to the session even if it is one of yours (default: branch instead)",
+    )
     p.set_defaults(func=resume)
 
     p = sub.add_parser("branch", help="start a new session from this one's history")
@@ -115,9 +120,24 @@ def _task_for(kind: str, session, note: str) -> dict:
 
 
 def resume(args) -> int:
-    plan = sessions.plan(args.session, fork=False, route=args.route, profile=args.profile)
+    plan = sessions.plan(
+        args.session, fork=False, route=args.route, profile=args.profile, in_place=args.in_place
+    )
     session = plan["session"]
+    if plan["mode"] != "resume":
+        # A session the user wrote is not continued in place by default: it is
+        # the same store their own CLI reads, so a turn appended here shows up
+        # in a conversation they are still having. Say so, then branch.
+        print(plan["note"] or "从这段历史分叉，不写回原会话")
+        return _branch(plan, args, kind="resume")
     _too_fresh(session, args.force)
+    print(f"接续 {session.vendor}:{session.id}（原地追加一轮）")
+    print("  发送的内容就是你给的 --note，原文：")
+    for line in args.note.splitlines():
+        print(f"    | {line}")
+    print(f"  它会出现在：nodus session {session.id}")
+    if session.vendor == "dsh":
+        print("  以及你自己的 DSH GUI（同一个 sessions 存储）")
     route = args.route or session.vendor
     with sessions.session_lock(session.id):
         task = _task_for("resume", session, args.note)
@@ -140,37 +160,37 @@ def resume(args) -> int:
         return watch(run["id"])
 
 
-def branch(args) -> int:
-    plan = sessions.plan(args.session, fork=True, route=args.route, profile=args.profile)
+def _branch(plan: dict, args, kind: str = "branch") -> int:
     session = plan["session"]
-    print(plan["note"])
+    note = args.note
     if plan["mode"] == "seed":
         # DSH has no native fork. A seeded session starts from a written
         # handoff, which is a different thing from replaying the history.
-        args.note = sessions.brief(
+        note = sessions.brief(
             f"{session.vendor}:{session.id}",
-            args.note or f"从 {session.id} 分叉，继续下去",
+            note or f"从 {session.id} 分叉，继续下去",
             tail=12,
         )
-        route = args.route or session.vendor
+        provider = ""
         session_id = ""
         session_mode = "resume"
     else:
-        route = args.route or session.vendor
+        provider = "" if args.route else plan["provider"]
         session_id = plan["session_id"]
         session_mode = "fork"
         _too_fresh(session, force=True)  # a fork reads, it does not write
-    task = _task_for("branch", session, args.note)
+    route = args.route or session.vendor
+    task = _task_for(kind, session, note)
     run = call(
         "POST",
         "/runs",
         {
             "task_id": task["id"],
             "route": route,
-            "provider": "" if args.route or plan["mode"] == "seed" else plan["provider"],
+            "provider": provider,
             "profile": plan["profile"],
             "cwd": session.cwd or None,
-            "note": args.note,
+            "note": note,
             "session_id": session_id,
             "session_mode": session_mode,
         },
@@ -178,3 +198,9 @@ def branch(args) -> int:
     print(f"task {task['id']}")
     print(f"run {run['id']} ({session.vendor} {plan['mode']} {session.id})")
     return watch(run["id"])
+
+
+def branch(args) -> int:
+    plan = sessions.plan(args.session, fork=True, route=args.route, profile=args.profile)
+    print(plan["note"])
+    return _branch(plan, args)

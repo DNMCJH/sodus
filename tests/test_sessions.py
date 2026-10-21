@@ -268,11 +268,17 @@ def test_session_roots_restrict_what_can_be_read(world, tmp_path, monkeypatch):
 
 
 def test_continue_plans_the_endpoint_that_wrote_the_session(world):
-    plan = sessions.plan("claude:aaaa1111")
-    assert plan["mode"] == "resume"
-    assert plan["provider"] == "relay"
-    assert plan["profile"] == "default"
-    assert plan["agent"] == "claude"
+    # the fixture session has no run behind it, so it counts as the user's own:
+    # branch by default, but the endpoint is still recovered from its path
+    branched = sessions.plan("claude:aaaa1111")
+    assert branched["mode"] == "fork"
+    assert branched["provider"] == "relay"
+    assert branched["profile"] == "default"
+    assert branched["agent"] == "claude"
+
+    inplace = sessions.plan("claude:aaaa1111", in_place=True)
+    assert inplace["mode"] == "resume"
+    assert inplace["provider"] == "relay"
 
 
 def test_continue_refuses_a_session_outside_our_profiles(tmp_path, monkeypatch):
@@ -285,6 +291,31 @@ def test_continue_refuses_a_session_outside_our_profiles(tmp_path, monkeypatch):
     make_claude(user_projects, "x", "ffff6666-0000-7000-8000-000000000006", "D:\\mine")
     with pytest.raises(ValueError, match="不是 Nodus 建的"):
         sessions.plan("claude:ffff6666")
+
+
+def test_your_own_session_is_branched_by_default(world):
+    """Resuming it would append a turn to a conversation you are still having."""
+    plan = sessions.plan("dsh:cccc3333")
+    assert plan["mode"] == "seed"
+    assert "--in-place" in plan["note"]
+
+
+def test_your_own_session_can_still_be_continued_explicitly(world):
+    plan = sessions.plan("dsh:cccc3333", in_place=True)
+    assert plan["mode"] == "resume"
+    assert plan["session_id"] == "session-cccc3333"
+
+
+def test_a_run_owned_session_is_continued_in_place(world):
+    task = db.create_task("t")
+    run = db.create_run(task["id"], "dsh", "D:\\work\\demo")
+    db.update_run(
+        run["id"],
+        session_ref_json=json.dumps({"provider": "dsh", "session_id": "session-cccc3333"}),
+    )
+    plan = sessions.plan("dsh:cccc3333")
+    assert plan["mode"] == "resume"
+    assert plan["session"].run_id == run["id"]
 
 
 def test_a_dsh_branch_is_seeded_not_forked(world):
