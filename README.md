@@ -47,7 +47,7 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
 | `nodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
 | `nodus branch <id> [--note]` | 从这段历史分叉/播种一个新会话 |
-| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] --cwd PATH [--note "..."]` | 起一次执行并跟踪 |
+| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] [--no-verify] --cwd PATH` | 起一次执行并跟踪（改过文件会自动跑测试） |
 | `nodus watch <run>` | 跟踪已有 run |
 | `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
 | `nodus locks` | 哪些工作目录正被占用、被谁 |
@@ -97,7 +97,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（170 条）
+tests/                   自己的一套 pytest（176 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -389,6 +389,26 @@ FAIL  exit=1  3384ms  [pytest] ...
 no test runner detected in C:\Users\35336\AppData\Local\Temp
 ```
 
+### run 结束时自动验一次
+
+`completed` 原本只等于"进程退出 0"。现在：**这个 run 确实写了文件、且检测到已知的测试命令**，就在关闭前跑一次，
+结果写成 `verify.green|red` 挂在这个 run 上（和 tdd 用的是同一套证据）。
+
+```
+· verify: A:\Anaconda\python.exe -m pytest -q (pyproject.toml present)
+· verify green: PASS exit=0 (3830ms)
+[completed] provider=minimax exit=0 ... 
+```
+
+三条边界：
+
+- 没改文件就不跑（纯读的 run 没有可验的东西）。
+- 检测不到已知测试命令就不跑。**不猜**——在没人看过的仓库里跑未知测试是这套东西少数能真正破坏工作的行为。
+- `nodus run --no-verify` 单次关掉；全局默认在 `config.json` 的 `auto_verify`，或 `NODUS_AUTO_VERIFY=0`。
+
+代价：run 会多花一次测试的时间（上面的例子 3.8 秒），而且这段时间它还是 `running`，写锁也还握着。
+测试如果挂住，`NODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。
+
 ## TDD 闭环（已验证）
 
 writer 写失败测试 → `verify` 必须红 → impl 实现（禁止改测试）→ `verify` 转绿；失败重试 ≤2 次，带失败输出。测试文件前后做 hash 比对，被改动就标记 suspicious。验收只看 exit code。
@@ -556,7 +576,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 ## 下一步
 
 1. 给 dsh 建隔离 profile（`DSH_HOME` 或独立 headless 配置），别让它带着全局指令和 MCP 跑；profile 层已经在了，缺的是 dsh 认哪个环境变量。
-2. `nodus run` 跑完后，如果能检测到测试器就自动验一次（可 `--no-verify` 关掉）。这是 `verify=none` 的正解，但要先想清楚副作用：未知仓库的测试可能有破坏性。
+2. ~~`nodus run` 跑完自动验一次~~ —— 已做（2026-10-21），见「验收：verify」。
 3. 打包：PyInstaller 单文件先试，失败就换 Go 重写这几百行。
 4. `nodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
 5. VS Code 扩展只做三件事：列表、派活、看事件流和 diff。

@@ -29,6 +29,11 @@ def add(sub) -> None:
     p.add_argument("--effort", default="")
     p.add_argument("--model", default="", help="pin the model for this run only")
     p.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="do not run the project's tests when the worker changed files",
+    )
+    p.add_argument(
         "--wait",
         type=float,
         default=0.0,
@@ -106,6 +111,7 @@ def run(args) -> int:
             "effort": effort,
             "model": args.model,
             "wait": args.wait,
+            "verify": not args.no_verify,
         },
     )
     print(f"run {r['id']} ({r.get('route') or route})")

@@ -25,15 +25,22 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter, profiles, providers, routes
+from . import adapters, agents, config, db, meter, profiles, providers, routes, verify
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
     ".pytest_cache", "dist", "build", ".next", ".cache",
 }
 
-# A child that stops writing for this long is treated as hung, not busy.
+#: A child that stops writing for this long is treated as hung, not busy.
 IDLE_TIMEOUT = float(os.environ.get("NODUS_IDLE_TIMEOUT", "900"))
+
+#: A run that changed files runs the project's tests before it closes. The
+#: detector only knows standard commands (pytest / npm test / cargo / go), and
+#: an unknown project is left alone: running arbitrary test suites in a tree
+#: nobody vetted is how an acceptance layer destroys work.
+AUTO_VERIFY = os.environ.get("NODUS_AUTO_VERIFY", "1") != "0"
+VERIFY_TIMEOUT = float(os.environ.get("NODUS_VERIFY_TIMEOUT", "600"))
 
 #: Text that marks a failure as belonging to the endpoint rather than the task.
 #: Only consulted when the attempt produced no tool call, so a false positive
@@ -196,8 +203,11 @@ class Runner:
         profile: str = "",
         provider: str = "",
         wait: float = 0.0,
+        verify_run: bool | None = None,
     ) -> dict:
         profiles.ensure_ready()
+        if verify_run is None:
+            verify_run = AUTO_VERIFY and config.auto_verify()
         route = routes.resolve_for_run(route_name)
         if provider:
             # Continuing a session means going back to the endpoint that holds
@@ -244,7 +254,7 @@ class Runner:
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,
-                  include_handoff, session_id, session_mode),
+                  include_handoff, session_id, session_mode, verify_run),
             daemon=True,
         )
         thread.start()
@@ -307,11 +317,12 @@ class Runner:
         include_handoff: bool,
         session_id: str,
         session_mode: str,
+        verify_run: bool,
     ) -> None:
         try:
             self._execute_inner(
                 rid, route, spec, task, workdir, secrets, profile_name,
-                include_handoff, session_id, session_mode,
+                include_handoff, session_id, session_mode, verify_run,
             )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
@@ -331,6 +342,7 @@ class Runner:
         include_handoff: bool,
         session_id: str,
         session_mode: str,
+        verify_run: bool,
     ) -> None:
         run_dir = config.HOME / "runs" / rid
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -410,7 +422,7 @@ class Runner:
 
         self._finalize(
             rid, route, spec, task, workdir, run_dir, attempts, chosen,
-            first_started or time.time(), session_id,
+            first_started or time.time(), session_id, verify_run,
         )
 
     @staticmethod
@@ -675,6 +687,7 @@ class Runner:
         chosen: dict,
         first_started: float,
         session_id: str,
+        verify_after: bool = True,
     ) -> None:
         final_text = chosen["texts"][-1] if chosen["texts"] else ""
         (run_dir / "final.md").write_text(final_text, encoding="utf-8")
@@ -709,6 +722,8 @@ class Runner:
 
         handoff_path = run_dir / "handoff.md"
         verify_mark = db.verify_states([rid]).get(rid, "none")
+        if verify_mark == "none" and verify_after and files:
+            verify_mark = self._auto_verify(rid, task["id"], workdir)
         handoff = build_handoff(
             task, rid, spec.name, status, final_text, files, err, verify_mark,
             provider=chosen["provider"], route=route.name, fallbacks=fallbacks,
@@ -743,6 +758,26 @@ class Runner:
                 "error": err,
             },
         )
+
+    def _auto_verify(self, rid: str, task_id: str, workdir: Path) -> str:
+        """Run the project's own tests and bind the result to this run.
+
+        `completed` only ever meant "the process exited 0". If the worker
+        changed something and the project has a test command we recognise, the
+        evidence is one command away and there is no reason to ship without it.
+        """
+        found = verify.detect(workdir)
+        if not found:
+            return "none"
+        self._emit(
+            rid,
+            "verify.started",
+            {"cmd": found["cmd"], "reason": found["reason"], "timeout_s": VERIFY_TIMEOUT},
+        )
+        result = verify.run(found["cmd"], workdir, timeout=VERIFY_TIMEOUT)
+        phase = "green" if result.get("ok") else "red"
+        verify.persist(rid, task_id, phase, result, note=f"auto after run ({found['reason']})")
+        return "ok" if phase == "green" else "red"
 
     # ---- helpers -------------------------------------------------------
 

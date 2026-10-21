@@ -292,6 +292,7 @@ class Handler(BaseHTTPRequestHandler):
                     session_id=body.get("session_id", ""),
                     session_mode=body.get("session_mode", "resume"),
                     provider=body.get("provider", ""),
+                    verify_run=body.get("verify"),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

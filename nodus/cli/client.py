@@ -120,6 +120,11 @@ def fmt_event(ev: dict) -> str | None:
             f"  !! {p.get('from')} failed before doing anything"
             f" ({p.get('reason')}) → retrying on {p.get('to')}"
         )
+    if t == "verify.started":
+        return f"  · verify: {' '.join(str(c) for c in p.get('cmd') or [])} ({p.get('reason')})"
+    if t in ("verify.green", "verify.red"):
+        flag = "PASS" if p.get("ok") else "FAIL"
+        return f"  · verify {p.get('phase')}: {flag} exit={p.get('exit')} ({p.get('duration_ms')}ms)"
     if t in ("run.completed", "run.failed"):
         u = p.get("usage") or {}
         money = ""

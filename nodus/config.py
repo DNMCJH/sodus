@@ -135,6 +135,17 @@ def cost_rate(unit: str) -> float:
         return defaults.get(unit, 1.0)
 
 
+def auto_verify() -> bool:
+    """Whether a run that changed files should run the project's tests.
+
+    On by default: an acceptance layer that reports "completed" without ever
+    executing anything is the thing this project exists to fix. Off is one
+    config key away, and `nodus run --no-verify` covers the single case.
+    """
+    raw = load_config().get("auto_verify")
+    return True if raw is None else bool(raw)
+
+
 def load_secrets(ws: str | None = None) -> dict[str, str]:
     """Secrets are per-workspace, falling back to the shared file."""
     secrets_map: dict[str, str] = {}
