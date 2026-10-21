@@ -12,6 +12,7 @@ broken pet never delays or fails a run.
 
 from __future__ import annotations
 
+import http.client
 import json
 import subprocess
 import threading
@@ -35,6 +36,28 @@ ANIM = {
     "done": "工作状态-雀跃庆祝",
     "error": "工作状态-垂头叹气冒汗",
 }
+
+# 别的角色的动作名跟蓝鱼娘完全不同（橙毛大小姐没有「工作状态-雀跃庆祝」，她只有
+# 「欢快舞蹈」）。所以每个宠物可以带一份自己的 mood → 动作名表，写在
+# `pet_bridge.anim_map` 里；没写的沿用上面的 ANIM。
+#
+# 为什么放配置不放代码：角色是素材，加一只不该动 Python。名字对不上时
+# `/anim` 会回 unknown-animation，表现成「宠物不跟着动」——所以宁可留空
+# 走默认，也不要猜。
+
+
+def anim_for(mood: str, agent: str = "") -> str:
+    """这个 mood 在目标宠物上该播哪一段。
+
+    每次现读配置：`bridge()` 不缓存，改 config.json 立刻生效，不用重启。
+    """
+    pet_id = pet_for(agent)
+    mapping = bridge().get("anim_map")
+    if isinstance(mapping, dict):
+        per_pet = mapping.get(pet_id)
+        if isinstance(per_pet, dict) and per_pet.get(mood):
+            return str(per_pet[mood])
+    return ANIM.get(mood, "")
 
 
 def _usage(run: dict) -> dict:
@@ -117,11 +140,23 @@ _DISCOVERED = ""
 
 
 def _alive(base: str) -> bool:
+    """这个 base 上是不是真有个桌宠在听。
+
+    扫端口时一定会碰到非 HTTP 的服务（数据库、Electron 调试口、别的插件的
+    裸 TCP）。它们回的不是 HTTP，urllib 会抛 `http.client.BadStatusLine`，
+    那是 HTTPException 而不是 OSError——只捕 OSError 会让整次扫描炸掉。
+    """
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         with opener.open(base + "/state", timeout=0.6) as resp:
             return resp.status == 200
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        http.client.HTTPException,
+        TimeoutError,
+        OSError,
+    ):
         return False
 
 
@@ -203,7 +238,29 @@ def _call(method: str, path: str, body: dict | None = None, timeout: float = 3.0
         return None
 
 
-def push(text: str, duration_ms: int = 12000) -> bool:
+def pet_for(agent: str = "") -> str:
+    """Which desktop pet speaks for this agent.
+
+    `pet_bridge.pet_agents` maps an agent/route name to a pet id, so a finished
+    claude run can light up 橙毛大小姐 while a dsh run lights up the whale. The
+    mapping lives in config rather than in code because pets are data: adding
+    a character is dropping files in `dsh-pet/pet/`, not shipping a release.
+
+        "pet_agents": {"dsh": "main", "claude": "claude", "codex": "gpt"}
+
+    Anything unmapped falls back to `pet` (the old single-pet field), which
+    keeps existing configs working unchanged.
+    """
+    cfg = bridge()
+    mapping = cfg.get("pet_agents")
+    if agent and isinstance(mapping, dict):
+        target = mapping.get(agent)
+        if isinstance(target, str) and target:
+            return target
+    return str(cfg.get("pet") or "main")
+
+
+def push(text: str, duration_ms: int = 12000, agent: str = "") -> bool:
     """Make the pet say one line, best effort.
 
     Newer builds expose an occupancy lock so the pet cannot be interrupted
@@ -214,7 +271,7 @@ def push(text: str, duration_ms: int = 12000) -> bool:
     cfg = bridge()
     if not cfg.get("enabled"):
         return False
-    pet_id = str(cfg.get("pet") or "main")
+    pet_id = pet_for(agent)
     lock_id = ""
     lock = _call("POST", f"/lock?pet={pet_id}", {})
     if isinstance(lock, dict) and lock.get("lockId"):
@@ -230,30 +287,34 @@ def push(text: str, duration_ms: int = 12000) -> bool:
             _call("POST", f"/lock/release?pet={pet_id}", {"lockId": lock_id})
 
 
-def animate(name: str) -> bool:
+def animate(name: str, agent: str = "") -> bool:
     """Play one animation from the pet's own pool."""
     if not bridge().get("enabled") or not name:
         return False
-    return bool(_call("POST", f"/anim?pet={bridge().get('pet') or 'main'}", {"name": name}))
+    return bool(_call("POST", f"/anim?pet={pet_for(agent)}", {"name": name}))
 
 
-def notify(text: str, duration_ms: int = 12000) -> None:
+def notify(text: str, duration_ms: int = 12000, agent: str = "") -> None:
     """Push in the background so a slow pet cannot slow a run down."""
     if not bridge().get("enabled"):
         return
-    threading.Thread(target=push, args=(text, duration_ms), daemon=True).start()
+    threading.Thread(target=push, args=(text, duration_ms, agent), daemon=True).start()
 
 
-def narrate(text: str = "", mood: str = "") -> None:
-    """Say something and, if a mood is given, look like it."""
+def narrate(text: str = "", mood: str = "", agent: str = "") -> None:
+    """Say something and, if a mood is given, look like it.
+
+    `agent` picks which pet speaks (see `pet_for`); leaving it empty keeps the
+    old single-pet behaviour.
+    """
     if not bridge().get("enabled"):
         return
 
     def work() -> None:
-        animation = ANIM.get(mood, "")
+        animation = anim_for(mood, agent)
         if animation:
-            animate(animation)
+            animate(animation, agent)
         if text:
-            push(text)
+            push(text, agent=agent)
 
     threading.Thread(target=work, daemon=True).start()

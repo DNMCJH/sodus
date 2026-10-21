@@ -396,7 +396,8 @@ class Runner:
             },
         )
         db.update_run(rid, status="running", started_at=time.time())
-        pet.narrate("", "working")
+        # agent= 选哪只桌宠说话（pet_bridge.pet_agents 映射），不写就落到默认那只
+        pet.narrate("", "working", route.name)
 
         table = providers.load()
         attempts: list[dict] = []
@@ -795,7 +796,7 @@ class Runner:
             mood = "error"
         elif status == "completed" and verify_mark == "none":
             mood = "tidying"
-        pet.narrate(pet.describe(db.get_run(rid), verify_mark), mood)
+        pet.narrate(pet.describe(db.get_run(rid), verify_mark), mood, route.name)
         self._emit(
             rid,
             "run.completed" if status == "completed" else "run.failed",
