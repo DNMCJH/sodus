@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agents, config, db, profiles, providers, routes, runner
+from . import agents, config, db, jobs, profiles, providers, routes, runner
 
 MAX_BODY = 1_000_000
 
@@ -250,6 +250,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/events":
             return _sse(self, None, 0)
 
+        if path == "/pipelines":
+            return _json(self, 200, db.list_pipelines((qs.get("status") or [""])[0]))
+
+        if path.startswith("/pipelines/"):
+            parts = path.split("/")
+            pid = parts[2]
+            row = db.get_pipeline(pid)
+            if not row:
+                return _json(self, 404, {"error": "not found"})
+            if len(parts) == 3:
+                return _json(self, 200, row)
+            if parts[3] == "events":
+                after = int((qs.get("after") or [0])[0])
+                return _json(self, 200, db.events_after(pid, after))
+
         return _json(self, 404, {"error": "not found"})
 
     def _post(self) -> None:
@@ -303,6 +318,21 @@ class Handler(BaseHTTPRequestHandler):
             rid = path.split("/")[2]
             return _json(self, 200, {"stopped": runner.RUNNER.stop(rid)})
 
+        if path == "/pipelines":
+            kind = body.get("kind", "")
+            params = body.get("params") or {}
+            if kind not in ("tdd", "review", "fix"):
+                return _json(self, 400, {"error": f"unknown pipeline: {kind}"})
+            try:
+                row = jobs.JOBS.submit(kind, params, body.get("label", ""))
+            except (ValueError, TypeError) as exc:
+                return _json(self, 400, {"error": str(exc)})
+            return _json(self, 201, row)
+
+        if path.startswith("/pipelines/") and path.endswith("/stop"):
+            pid = path.split("/")[2]
+            return _json(self, 200, {"stopped": jobs.JOBS.stop(pid)})
+
         return _json(self, 404, {"error": "not found"})
 
 
@@ -318,11 +348,14 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     # belongs to a process that is gone. Reap before accepting work, so a
     # restart never leaves clients waiting on a corpse.
     reaped = runner.RUNNER.reap_orphans()
+    stalled = jobs.reap(db.list_pipelines("running"))
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
     _log(f"nodusd {config.VERSION} listening on {host}:{port} (pid {os.getpid()})")
     if reaped:
         _log(f"reaped {len(reaped)} orphaned run(s): " + ", ".join(r["id"] for r in reaped))
+    if stalled:
+        _log(f"closed {len(stalled)} pipeline(s) the previous daemon left running")
     if sys.stderr.isatty():  # a detached daemon writes to the log, not the console
         print(f"nodusd listening on http://{host}:{port}", file=sys.stderr, flush=True)
     try:

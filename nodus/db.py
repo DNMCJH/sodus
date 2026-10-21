@@ -113,6 +113,21 @@ CREATE TABLE IF NOT EXISTS proposal (
   created_at REAL,
   closed_at REAL
 );
+-- A pipeline is a sequence of runs plus verification, owned by the daemon
+-- rather than by whichever terminal happened to start it.
+CREATE TABLE IF NOT EXISTS pipeline (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  kind TEXT,
+  label TEXT,
+  status TEXT DEFAULT 'queued',
+  params_json TEXT,
+  result_json TEXT,
+  error TEXT,
+  created_at REAL,
+  started_at REAL,
+  ended_at REAL
+);
 """
 
 
@@ -714,3 +729,50 @@ def close_proposal(pid: str, status: str) -> None:
             "UPDATE proposal SET status=?, closed_at=? WHERE id=?",
             (status, now(), pid),
         )
+
+
+# ---- pipelines ---------------------------------------------------------
+
+
+def create_pipeline(kind: str, params: dict, label: str = "") -> dict:
+    pid = new_id("pipe")
+    with connect() as c:
+        c.execute(
+            "INSERT INTO pipeline(id, workspace_id, kind, label, params_json, created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (pid, config.workspace_id(), kind, label, json.dumps(params, default=str), now()),
+        )
+    return get_pipeline(pid)
+
+
+def get_pipeline(pid: str) -> dict:
+    with connect() as c:
+        row = c.execute(
+            "SELECT * FROM pipeline WHERE id=? AND workspace_id=?",
+            (pid, config.workspace_id()),
+        ).fetchone()
+    return dict(row) if row else {}
+
+
+def list_pipelines(status: str = "", limit: int = 20) -> list[dict]:
+    with connect() as c:
+        if status:
+            rows = c.execute(
+                "SELECT * FROM pipeline WHERE status=? AND workspace_id=?"
+                " ORDER BY created_at DESC LIMIT ?",
+                (status, config.workspace_id(), limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM pipeline WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?",
+                (config.workspace_id(), limit),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_pipeline(pid: str, **fields: Any) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    with connect() as c:
+        c.execute(f"UPDATE pipeline SET {cols} WHERE id=?", (*fields.values(), pid))

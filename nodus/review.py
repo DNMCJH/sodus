@@ -386,6 +386,7 @@ def run_review(
     scope: str = "task",
     timeout: int = 1800,
     dry_run: bool = False,
+    on_run=None,
 ) -> dict:
     target = db.get_run(target_run_id)
     if not target:
@@ -423,6 +424,8 @@ def run_review(
         include_handoff=False,  # a reviewer must not inherit the previous verdict
     )
     rid = review_run["id"]
+    if on_run:
+        on_run(rid)
     base["review_run"] = rid
     db.append_event(
         target_run_id,

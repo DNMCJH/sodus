@@ -148,5 +148,8 @@ def handoff(args) -> int:
 
 
 def stop(args) -> int:
+    if args.run.startswith("pipe-"):
+        print(call("POST", f"/pipelines/{args.run}/stop"))
+        return 0
     print(call("POST", f"/runs/{args.run}/stop"))
     return 0

@@ -55,6 +55,7 @@ def run_tdd(
     dry_run: bool = False,
     review: bool = False,
     reviewer: str = "",
+    on_run=None,
 ) -> dict:
     cwd = Path(cwd).resolve()
     detected = plan(cwd, test_cmd)
@@ -88,6 +89,8 @@ def run_tdd(
 
     # 1. writer adds a failing test
     run = RUNNER.start(task_id, writer, str(cwd), note=WRITER_NOTE)
+    if on_run:
+        on_run(run["id"])
     result["runs"].append(run["id"])
     result["stage"] = "writer"
     writer_run = RUNNER.wait(run["id"])
@@ -116,6 +119,8 @@ def run_tdd(
     for attempt in range(retries + 1):
         note = IMPL_NOTE.format(failure=last["tail"][-1500:])
         impl_run = RUNNER.start(task_id, impl, str(cwd), note=note, parent_run_id=parent)
+        if on_run:
+            on_run(impl_run["id"])
         impl_run_id = impl_run["id"]
         result["runs"].append(impl_run_id)
         parent = impl_run_id

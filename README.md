@@ -67,9 +67,10 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus probe` | 探活各 provider（免费） |
 | `nodus status` | 探活结果 + 今日用量 |
 | `nodus verify --cwd DIR [--command "pytest -q"]` | 跑测试，返回 exit code（不花 token） |
-| `nodus tdd <task> --cwd DIR [--review]` | 红→绿 TDD；`--review` 追加交叉审查 |
-| `nodus review <run> [--by codex] [--scope task\|run] [--dry-run]` | 换一家审改动，落结构化 findings；有问题返回 exit 2 |
-| `nodus fix <run> [--by dsh] [--rounds 2] [--review-first]` | 审查→修→验证→复审，收敛才 exit 0 |
+| `nodus tdd <task> --cwd DIR [--review]` | 红→绿 TDD；`--review` 追加交叉审查（跑在 daemon 里） |
+| `nodus review <run> [--by codex] [--scope task\|run] [--dry-run]` | 换一家审改动，落结构化 findings；有问题返回 exit 2（跑在 daemon 里） |
+| `nodus fix <run> [--by dsh] [--rounds 2] [--review-first]` | 审查→修→验证→复审，收敛才 exit 0（跑在 daemon 里） |
+| `nodus pipelines [--status S]` | 谁在跑、跑完没有 |
 | `nodus report <task-id\|run-id> [--print]` | 生成任务报告到 `tasks/<id>/report.md` |
 
 `--agent` 仍然可用，是 `--route` 的旧名字。
@@ -95,6 +96,7 @@ nodus/fix.py             审查 finding → 换一家修 → 验证 → 复审
 nodus/report.py          任务报告
 nodus/meter.py           计费表：run 前后读端点的账，求差
 nodus/propose.py         提案：worktree / 提交 / patch / 合并 / 丢弃
+nodus/jobs.py            daemon 作业：tdd/review/fix 跑在 daemon 里而不是终端里
 nodus/decision.py        Jev 路由与分诊
 nodus/telemetry.py       探活、用量、余额
 nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统一入口
@@ -102,7 +104,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-tests/                   自己的一套 pytest（185 条）
+tests/                   自己的一套 pytest（190 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
@@ -615,7 +617,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 跨会话续跑只支持 dsh；claude/codex 的会话 ID 体系不同，没接。
 - DSH 会话文件没有"正在被 GUI 使用"的标记，只能按最近写入时间猜；`--force` 有双写风险。
 - 读会话依赖 `zstandard`（本机已装）；会话是 append-only，Nodus 只读不写。
-- 流水线命令（tdd/review/fix）在 CLI 进程里执行（ADR-004）：关终端会中断，`nodus stop` 也管不到别的进程里的 run。daemon 作业队列还没做。daemon 本身现在独立于客户端，这个问题只影响流水线，不影响 `nodus run`。
+- ~~流水线命令在 CLI 进程里执行（ADR-004）：关终端会中断~~ —— 2026-10-21 已改成 daemon 作业：`nodus tdd/review/fix` 提交给 daemon，CLI 只跟随；实测杀掉客户端进程后流水线照常跑完。
 - `nodus run` 不会自动跑验收：`completed` 只等于 exit 0，要不要验证得显式调 `nodus tdd` 或 `nodus verify`。`verify=none` 就是这个意思，别把它读成通过。
 - 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.nodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。
 - `nodus route` 的画像表里还没有 minimax，`--agent auto` 只会在 claude / codex / dsh 里选。

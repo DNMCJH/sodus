@@ -95,6 +95,7 @@ def run_fix(
     rounds: int = 2,
     review_first: bool = False,
     timeout: int = 1800,
+    on_run=None,
 ) -> dict:
     target = db.get_run(target_run_id)
     if not target:
@@ -157,6 +158,8 @@ def run_fix(
             note=note,
             include_handoff=False,
         )
+        if on_run:
+            on_run(fix_run["id"])
         db.append_event(
             fix_run["id"],
             db.next_seq(fix_run["id"]),

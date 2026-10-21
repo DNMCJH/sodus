@@ -40,6 +40,7 @@ nodus/verify.py       测试检测与执行（纯函数 + 落盘）
 nodus/sessions/       会话层：三家存储统一读取 + 接续/分支（DSH/Claude/Codex 各一个适配器）
 nodus/meter.py        计费表：run 前后读端点的账
 nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁
+nodus/jobs.py         daemon 作业：tdd/review/fix 的线程与持久化状态
 nodus/config.py       路径、token、secrets、用户配置、当前 profile
 ```
 
@@ -189,9 +190,16 @@ base URL、凭据和价目。0.4.0 把这个"差别"从 `AgentSpec` 的一个副
 代价：提案必须有 git（没有 git 就明确拒绝，而不是偷偷退回串行）；冲突不自动解决，merge 失败就 abort、
 提案留 open、主树不动；空提案不进列表，worktree 直接删——否则列表会被噪音训练成没人看。
 
+**ADR-016 流水线归 daemon，不归终端。** ADR-004 承认的代价是"关终端会中断流水线、`nodus stop` 管不到"。
+daemon 既然已经拥有 run，就该拥有 run 的序列：`nodus tdd/review/fix` 改成 `POST /pipelines`，
+daemon 起线程跑同一批函数，CLI 只跟随（`pipeline.child` 事件告诉它该去看哪个 run 的流）。
+行是持久的、线程不是——所以 daemon 重启会把 `running` 的流水线标失败，和孤儿 run 一个道理，不复活。
+`nodus stop` 现在同时认 run id 和 pipe id。代价：多一张 `pipeline` 表和一跳 HTTP；
+CLI 的进度靠轮询（0.5s），不是 SSE。
+
 ## 6. 质量门槛
 
-- `python -m pytest -q`：185 条，覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、报告、计费表、
+- `python -m pytest -q`：190 条，覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、报告、计费表、
   端点/路由/配置物化，以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
 - 每个新能力都要有一次真实调用记录：0.4.0 的四条 route（relay / minimax / relay-openai / deepseek）

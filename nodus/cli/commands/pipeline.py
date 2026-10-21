@@ -1,11 +1,18 @@
-"""Delivery pipeline commands: verify, tdd, review, fix, report."""
+"""Delivery pipeline commands: verify, tdd, review, fix, report.
+
+Only `verify` and `report` run in this process. `tdd` / `review` / `fix` are
+posted to the daemon as jobs, because a pipeline is a sequence of runs and used
+to die with the terminal that started it.
+"""
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
-from ... import config, fix, report, review, tdd, verify
-from ..client import call
+from ... import config, report, verify
+from ..client import call, fmt_event
 
 
 def add(sub) -> None:
@@ -47,6 +54,11 @@ def add(sub) -> None:
     p.add_argument("--print", action="store_true", dest="show_md")
     p.set_defaults(func=report_cmd)
 
+    p = sub.add_parser("pipelines", help="daemon-run pipelines (tdd/review/fix)")
+    p.add_argument("--status", default="")
+    p.add_argument("--limit", type=int, default=15)
+    p.set_defaults(func=pipelines)
+
 
 def verify_cmd(args) -> int:
     cwd = Path(args.cwd).resolve()
@@ -72,18 +84,65 @@ def verify_cmd(args) -> int:
     return 0 if result["ok"] else 1
 
 
+# ---- daemon-side pipelines --------------------------------------------
+
+TERMINAL = ("completed", "failed", "stopped")
+
+
+def _wait(pid: str) -> dict:
+    """Follow a pipeline and every run it starts, until it closes."""
+    cursor = 0
+    children: dict[str, int] = {}
+    while True:
+        row = call("GET", f"/pipelines/{pid}")
+        for ev in call("GET", f"/pipelines/{pid}/events?after={cursor}"):
+            cursor = max(cursor, ev["seq"])
+            if ev["type"] == "pipeline.child":
+                rid = ev["payload"].get("run_id")
+                if rid and rid not in children:
+                    children[rid] = 0
+                    print(f"  · run {rid} started", flush=True)
+        for rid, after in list(children.items()):
+            for ev in call("GET", f"/runs/{rid}/events?after={after}"):
+                children[rid] = max(children[rid], ev["seq"])
+                line = fmt_event(ev)
+                if line is not None:
+                    print(line, flush=True)
+        if row.get("status") in TERMINAL:
+            return row
+        time.sleep(0.5)
+
+
+def _submit(kind: str, params: dict, label: str = "") -> dict:
+    row = call("POST", "/pipelines", {"kind": kind, "params": params, "label": label})
+    print(f"pipeline {row['id']} ({kind}) — 跑在 daemon 里，关终端也不会断", flush=True)
+    done = _wait(row["id"])
+    if done.get("error"):
+        print(f"  {done['error']}")
+    try:
+        return {"row": done, "result": json.loads(done.get("result_json") or "{}")}
+    except json.JSONDecodeError:
+        return {"row": done, "result": {}}
+
+
 def tdd_cmd(args) -> int:
-    res = tdd.run_tdd(
-        args.task,
-        Path(args.cwd),
-        writer=args.writer,
-        impl=args.impl,
-        test_cmd=args.test,
-        retries=args.retries,
-        dry_run=args.dry_run,
-        review=args.review,
-        reviewer=args.reviewer,
-    )
+    res = _submit(
+        "tdd",
+        {
+            "task_id": args.task,
+            "cwd": str(Path(args.cwd).resolve()),
+            "writer": args.writer,
+            "impl": args.impl,
+            "test_cmd": args.test,
+            "retries": args.retries,
+            "dry_run": args.dry_run,
+            "review": args.review,
+            "reviewer": args.reviewer,
+        },
+        label=args.task,
+    )["result"]
+    if not res:
+        return 1
     if res.get("cmd"):
         print(f"test: {' '.join(res['cmd'])}  ({res.get('reason')})")
     if res.get("stage") == "dry_run":
@@ -131,13 +190,19 @@ def tdd_cmd(args) -> int:
 
 
 def review_cmd(args) -> int:
-    res = review.run_review(
-        args.run,
-        by=args.by,
-        focus=args.focus,
-        scope=args.scope,
-        dry_run=args.dry_run,
-    )
+    res = _submit(
+        "review",
+        {
+            "target_run_id": args.run,
+            "by": args.by,
+            "focus": args.focus,
+            "scope": args.scope,
+            "dry_run": args.dry_run,
+        },
+        label=args.run,
+    )["result"]
+    if not res:
+        return 1
     if args.dry_run:
         print(
             f"dry-run: reviewer={res['reviewer']} target={res['target_run']} "
@@ -173,12 +238,18 @@ def review_cmd(args) -> int:
 
 
 def fix_cmd(args) -> int:
-    res = fix.run_fix(
-        args.run,
-        by=args.by,
-        rounds=args.rounds,
-        review_first=args.review_first,
-    )
+    res = _submit(
+        "fix",
+        {
+            "target_run_id": args.run,
+            "by": args.by,
+            "rounds": args.rounds,
+            "review_first": args.review_first,
+        },
+        label=args.run,
+    )["result"]
+    if not res:
+        return 2
     before = res.get("review_before") or {}
     print(
         f"fix target={res.get('target_run')} agent={res.get('agent')} "
@@ -210,6 +281,20 @@ def fix_cmd(args) -> int:
     if after.get("review_run"):
         print(f"  detail: {config.HOME / 'runs' / after['review_run'] / 'review.md'}")
     return 0 if res.get("ok") else 2
+
+
+def pipelines(args) -> int:
+    rows = call("GET", f"/pipelines?status={args.status}")[: args.limit]
+    if not rows:
+        print("(no pipelines)")
+        return 0
+    for row in rows:
+        stamp = time.strftime("%m-%d %H:%M", time.localtime(row.get("created_at") or 0))
+        print(
+            f"{row['id']:<22} {row['kind']:<7} {row['status']:<10} {stamp}  "
+            f"{(row.get('label') or '')[:28]}"
+        )
+    return 0
 
 
 def report_cmd(args) -> int:
