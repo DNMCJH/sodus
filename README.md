@@ -577,6 +577,33 @@ no test runner detected in C:\Users\35336\AppData\Local\Temp
 代价：run 会多花一次测试的时间（上面的例子 3.8 秒），而且这段时间它还是 `running`，写锁也还握着。
 测试如果挂住，`NODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。
 
+## 失败恢复：能自己好的不交给人
+
+进程退出、daemon 重启、网络断掉，这些不是需要人做的决定。`nodus/recover.py` 把失败分成三类：
+
+| 类 | 例子 | 处理 |
+|---|---|---|
+| transient | owner 进程没了（`orphaned:`）、超时、`ECONNRESET`/`fetch failed`、429、上游 5xx | 自动重试 |
+| deterministic | 401/403/400、内容策略、模型不存在、参数错 | 不重试，看板上标"不会自动重试" |
+| human | 其余，包括裸的 `exit code 1` | 上"需要你决定" |
+
+重试是**子 run**，不是把失败记录改回 running：`parent_run_id` 指回失败那次，note 是
+`auto-retry 1/2`，task / cwd / route / model / session 全部沿用（有 session 就 resume）。
+一条链最多 2 次，退避 60s / 300s；orphaned 不用等——它的 owner 已经不在了。
+24 小时以前的失败当历史，不复活；`task.budget_json` 的 `max_runs` / `max_cost` 是硬上限。
+
+daemon 启动时，reap orphans 之后立刻跑一轮恢复，之后每 5 分钟一轮（`NODUS_AUTO_RECOVER_INTERVAL`）。
+`NODUS_AUTO_RECOVER=0` 全关。已成功的、没失败的、需要人工判断的、超预算的一律不碰。
+
+看板相应拆成三块：**需要你决定**（只有 human / 重试耗尽 / 超预算 / 红测试 / 未验证 / 提案，
+每条带项目、任务、目标、问题、改动、建议）、**自动重试中**（第几次 + 下次什么时候，没有按钮）、
+**不会自动重试**（deterministic，附"修好后再重跑"）。旧的 `/board.decisions` 保留给 MCP 和桌宠。
+
+```python
+from nodus import recover
+recover.auto_retry()   # {"retried": [...], "skipped": [{"class": "deterministic", "reason": "deterministic"}], ...}
+```
+
 ## TDD 闭环（已验证）
 
 writer 写失败测试 → `verify` 必须红 → impl 实现（禁止改测试）→ `verify` 转绿；失败重试 ≤2 次，带失败输出。测试文件前后做 hash 比对，被改动就标记 suspicious。验收只看 exit code。
