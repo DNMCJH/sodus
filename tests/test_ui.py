@@ -12,7 +12,7 @@ def test_the_page_asks_for_the_token_exactly_once():
 def test_the_sections_come_in_the_agreed_order():
     # The first screen is the three questions that need no scrolling; the
     # working sections sit behind <details> in this order.
-    order = ["正在跑", "等我决定", "今天的钱", "最近执行", "提案", "派活"]
+    order = ["正在跑", "需要你决定", "今天的钱", "最近执行", "提案", "派活"]
     positions = [ui.PAGE.index(name) for name in order]
     assert positions == sorted(positions)
 

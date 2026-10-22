@@ -14,6 +14,11 @@ has to get up: what is running, what is waiting on a human, and what today has
 cost so far. Everything below that (recent runs, proposals, dispatch) is one
 click away, because a dashboard that needs scrolling before it says anything
 is a log viewer.
+
+The first screen is also written for someone who has never seen Nodus: each
+row says what happened in one sentence, what it touched, and which button to
+press. Run ids and the agents' raw English errors live behind "详情", because
+they answer a debugging question, not the operator's "do I have to get up".
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ PAGE = """<!doctype html>
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
          font:14px/1.55 ui-sans-serif, "Segoe UI", "Microsoft YaHei", sans-serif; }
-  header { display:flex; gap:18px; align-items:baseline; padding:13px 20px;
+  header { display:flex; gap:20px; align-items:baseline; padding:13px 20px;
            border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:3; }
   header h1 { font-size:15px; margin:0; letter-spacing:.1em; }
   header .stat { color:var(--dim); font-variant-numeric:tabular-nums; }
@@ -45,23 +50,44 @@ PAGE = """<!doctype html>
   table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
   th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { color:var(--dim); font-weight:500; font-size:12px; }
-  tr:hover td { background:var(--panel); }
   td.nowrap, th.nowrap { white-space:nowrap; }
+  tr:hover td { background:var(--panel); }
   .mono { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); } .dim { color:var(--dim); }
   .pill { display:inline-block; padding:1px 7px; border:1px solid var(--line); border-radius:999px; font-size:11.5px; }
   .pill.bad { border-color:var(--bad); }
   .pill.warn { border-color:var(--warn); }
   button { background:transparent; color:var(--accent); border:1px solid var(--line);
-           border-radius:5px; padding:2px 9px; font:inherit; font-size:12px; cursor:pointer; }
+           border-radius:5px; padding:3px 10px; font:inherit; font-size:12.5px; cursor:pointer; }
   button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#0b0e12; font-weight:600; }
+  button.primary:hover { background:#8bbcff; border-color:#8bbcff; }
   button.danger { color:var(--bad); } button.danger:hover { border-color:var(--bad); }
-  .empty { color:var(--dim); padding:8px 10px; }
+  .empty { color:var(--dim); padding:8px 12px; }
   .task { color:var(--dim); font-size:12.5px; }
-  .scroll { max-height:300px; overflow:auto; }
-  .total { padding:4px 10px 8px; font-size:13px; color:var(--dim); }
-  .total b { color:var(--text); font-size:19px; font-weight:600; margin:0 6px;
+  .scroll { max-height:320px; overflow:auto; }
+  .total { padding:2px 12px 9px; font-size:13.5px; color:var(--dim); }
+  .total b { color:var(--text); font-size:19px; font-weight:600; margin:0 5px;
              font-variant-numeric:tabular-nums; }
+  .total.zero { font-size:13px; }
+  .money-row { display:flex; justify-content:space-between; align-items:baseline;
+               max-width:430px; padding:5px 12px; border-bottom:1px solid var(--line);
+               font-variant-numeric:tabular-nums; }
+  .money-row .amt { color:var(--text); }
+  .foot { color:var(--dim); font-size:11.5px; padding:7px 12px 0; }
+  .live-row, .ask { display:grid; grid-template-columns:1fr auto; gap:4px 16px;
+                    align-items:start; padding:9px 12px; border-bottom:1px solid var(--line); }
+  .live-row:hover, .ask:hover { background:var(--panel); }
+  .live-what, .ask-what { font-size:14.5px; color:var(--text); }
+  .live-what b { font-weight:600; }
+  .live-sub, .ask-about { color:var(--dim); font-size:12.5px; margin-top:1px; }
+  .ask-about .when { white-space:nowrap; }
+  .live-row > .act, .ask > .act { display:flex; gap:6px; align-items:center; padding-top:1px; }
+  .ask details.meta { border:0; margin:4px 0 0; padding:0; }
+  .ask details.meta summary { font-size:11.5px; }
+  .ask details.meta div { font-family:ui-monospace, Consolas, monospace; font-size:11.5px;
+                          color:var(--dim); margin-top:2px; word-break:break-all; }
+  .more-note { color:var(--dim); font-size:12px; padding:8px 12px 0; }
   #evidence { background:var(--panel); border:1px solid var(--line); border-radius:7px;
               padding:12px 14px; margin-top:10px; display:none; }
   #evidence h3 { margin:0 0 8px; font-size:13px; font-weight:600; }
@@ -86,28 +112,27 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>NODUS</h1>
-  <span class="stat" id="s-profile">—</span>
-  <span class="stat" id="s-live">—</span>
   <span class="stat" id="s-cost">—</span>
+  <span class="stat" id="s-live">—</span>
   <span class="rule">结束 ≠ 通过：只有测试证据变绿才算验收</span>
 </header>
 <main>
   <section>
     <h2>正在跑 <span class="hint" id="live-n"></span></h2>
-    <div id="live"></div>
+    <div id="live"><div class="empty">现在没有任务在跑</div></div>
   </section>
   <section>
-    <h2>等我决定 <span class="hint" id="todo-n"></span></h2>
-    <div id="todo"></div>
+    <h2>需要你决定 <span class="hint" id="todo-n"></span></h2>
+    <div id="todo"><div class="empty">正在读…</div></div>
   </section>
   <section>
-    <h2>今天的钱 <span class="hint" id="money-day"></span></h2>
+    <h2>今天的钱</h2>
     <div id="money"></div>
   </section>
   <details id="more">
     <summary>更多：最近执行 · 提案 · 派活</summary>
     <section>
-      <h2>最近执行 <span class="dim" style="text-transform:none;letter-spacing:0">（点"证据"看测试命令、退出码和改动文件）</span></h2>
+      <h2>最近执行 <span class="dim" style="text-transform:none;letter-spacing:0">（点「证据」看测试命令、退出码和改了哪些文件）</span></h2>
       <div id="runs"></div>
       <div id="evidence"></div>
     </section>
@@ -167,35 +192,78 @@ function flash(msg, bad) {
   el.style.borderColor = bad ? "var(--bad)" : "var(--line)";
   clearTimeout(el._t); el._t = setTimeout(() => el.style.display = "none", 5000);
 }
-const ago = ts => {
-  if (!ts) return "-";
-  const d = Date.now() / 1000 - ts;
-  if (d < 60) return Math.round(d) + "s";
-  if (d < 3600) return Math.round(d / 60) + "m";
-  if (d < 86400) return Math.round(d / 3600) + "h";
-  return Math.round(d / 86400) + "d";
-};
-function dur(seconds) {
-  if (!isFinite(seconds) || seconds < 0) return "-";
-  seconds = Math.round(seconds);
-  if (seconds < 60) return seconds + "s";
-  if (seconds < 3600) return Math.floor(seconds / 60) + "m" + String(seconds % 60).padStart(2, "0") + "s";
-  if (seconds < 86400) return Math.floor(seconds / 3600) + "h" + String(Math.floor(seconds % 3600 / 60)).padStart(2, "0") + "m";
-  return Math.floor(seconds / 86400) + "d" + Math.floor(seconds % 86400 / 3600) + "h";
+
+// ---- words, not ids ----
+const whoName = a => ({ claude: "Claude", codex: "Codex" }[a] || a || "agent");
+const clock = ts => ts ? new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false }) : "?";
+const tailPath = p => String(p || "").replace(/\\\\/g, "/").split("/").filter(Boolean).slice(-2).join("/");
+function ago(ts) {
+  if (!ts) return "";
+  const d = Math.max(0, Date.now() / 1000 - ts);
+  if (d < 60) return "刚刚";
+  if (d < 3600) return Math.round(d / 60) + " 分钟前";
+  if (d < 86400) return Math.round(d / 3600) + " 小时前";
+  if (d < 86400 * 30) return Math.round(d / 86400) + " 天前";
+  return new Date(ts * 1000).toLocaleDateString("zh-CN");
 }
+function span(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return "";
+  seconds = Math.round(seconds);
+  if (seconds < 60) return seconds + " 秒";
+  if (seconds < 3600) return Math.floor(seconds / 60) + " 分钟";
+  if (seconds < 86400) {
+    const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60);
+    return h + " 小时" + (m ? " " + m + " 分" : "");
+  }
+  const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600);
+  return d + " 天" + (h ? " " + h + " 小时" : "");
+}
+
 const SYMBOL = { CNY: "¥", USD: "$" };
 const money = (currency, value) =>
   (SYMBOL[currency] || currency + " ") + Number(value).toFixed(currency === "CNY" ? 2 : 4);
 const moneyParts = costs =>
   Object.entries(costs || {}).sort().map(([c, v]) => money(c, v)).join(" + ") || "—";
 const runMoney = u => (u && typeof u.cost === "number" ? money(u.currency || "USD", u.cost) : "-");
-const BASIS = { metered: "实测扣费", calibrated: "校准价", metered_request: "网关实测",
-                list_price: "价目表", reported: "CLI 自报", none: "无" };
 const VERIFY = { ok: ["通过", "ok"], red: ["测试红", "bad"], none: ["没验证", "warn"] };
-const shortId = id => (id || "").length > 14 ? id.slice(0, 4) + "…" + id.slice(-8) : (id || "");
+
+function whyFailed(err) {
+  const e = String(err || "");
+  if (/^orphaned/i.test(e)) return "跑到一半，启动它的进程退出了（不是模型出错）";
+  if (/timeout|timed out|超时/i.test(e)) return "跑太久，超时了";
+  if (/error|fail|denied|refused|invalid|quota|limit|429|5\\d\\d/i.test(e)) return "模型报错，任务中断";
+  return "任务中断了，没跑完";
+}
+function aboutRun(run, who) {
+  const note = String(run.note || "").split("\\n")[0].trim();
+  const bits = [];
+  if (who) bits.push(who);
+  if (note) bits.push(note.length > 44 ? note.slice(0, 44) + "…" : note);
+  else if (run.cwd) bits.push("目录 " + tailPath(run.cwd));
+  return bits.join(" · ") || "任务记录没写内容";
+}
+function fileChange(d) {
+  const files = String(d.note || "").split(",").map(s => s.trim()).filter(Boolean);
+  const m = /\\+(\\d+)\\s*[−-]\\s*(\\d+)/.exec(d.detail || "");
+  const plus = m ? Number(m[1]) : null, minus = m ? Number(m[2]) : null;
+  const size = plus == null ? "" : (minus ? `（+${plus} −${minus} 行）` : `（+${plus} 行）`);
+  if (files.length === 1) return "改了 " + files[0] + size;
+  if (files.length > 1) return "改了 " + files.length + " 个文件" + size;
+  return d.detail ? "改动：" + d.detail : "改动在分支上，主工作区没动";
+}
+function liveWhat(r) {
+  const who = whoName(r.agent || r.route);
+  const note = String(r.note || "").split("\\n")[0].trim();
+  const m = /[\\w.-]+\\.(?:py|js|ts|tsx|jsx|go|rs|java|rb|css|html|json|md|txt|yml|yaml|toml|sh)/i.exec(note);
+  let doing = "正在干活";
+  if (m) doing = "正在改 " + m[0];
+  else if (note) doing = "正在做：" + (note.length > 38 ? note.slice(0, 38) + "…" : note);
+  return `<b>${esc(who)}</b> ${esc(doing)}`;
+}
 
 let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [] };
 let sseLive = false, timer = 0, inflight = false;
+const count = k => ((state.board || {}).decision_counts || {})[k] || 0;
 
 function table(headers, rows, empty) {
   if (!rows.length) return `<div class="empty">${empty}</div>`;
@@ -205,47 +273,110 @@ function table(headers, rows, empty) {
 
 function renderHeader() {
   const b = state.board || {};
+  const t = b.today || {};
   const pipes = state.pipelines.filter(p => p.status === "running").length;
-  $("s-profile").innerHTML = "profile <b>" + esc(b.profile || "default") + "</b>";
-  $("s-live").innerHTML = "<b>" + ((b.running || []).length + pipes) + "</b> 在跑";
-  $("s-cost").innerHTML = "今日 <b>" + moneyParts((b.today || {}).totals) + "</b>";
+  const n = (b.running || []).length + pipes;
+  const runs = t.runs || 0;
+  const cost = Object.keys(t.totals || {}).length ? moneyParts(t.totals)
+    : (runs ? "待计价" : money("CNY", 0));
+  $("s-live").innerHTML = "<b>" + n + "</b> 个任务在跑";
+  $("s-cost").innerHTML = "今天 <b>" + cost + "</b>（" + runs + " 单）";
 }
 
 function renderLive() {
   const b = state.board || {};
   const live = b.running || [];
   const pipes = state.pipelines.filter(p => p.status === "running");
-  $("live-n").textContent = (live.length + pipes.length) ? (live.length + pipes.length) + " 个" : "";
+  const n = live.length + pipes.length;
+  $("live-n").textContent = n ? n + " 个" : "";
   const now = Date.now() / 1000;
   const rows = live.map(r => {
-    const t = r.tokens || {};
-    const spent = r.partial_cost == null
-      ? `<span class="dim">结算中</span>` + ((t.input || t.output) ? `<div class="task">${tokenLine(t)}</div>` : "")
-      : `<span class="warn">≈${money(r.partial_currency || "USD", r.partial_cost)}</span>
-         <div class="task">CLI 自报，未结算</div>`;
-    return `<tr><td class="mono nowrap">${esc(shortId(r.id))}</td>
-      <td class="nowrap">${esc(r.route || r.agent)}<span class="dim"> → ${esc(r.provider || "-")}</span>
-        <div class="task">${esc((r.note || "").split("\\n")[0].slice(0, 60))}</div></td>
-      <td class="dim">${esc((r.cwd || "").slice(-42))}</td>
-      <td class="nowrap"><span data-start="${r.started_at || 0}">${dur(now - (r.started_at || now))}</span></td>
-      <td class="nowrap">${spent}</td>
-      <td class="nowrap"><button class="danger" onclick="stopRun('${r.id}')">停止</button></td></tr>`;
+    const sub = [];
+    if (r.cwd) sub.push("目录 " + tailPath(r.cwd));
+    if (r.partial_cost == null) sub.push("跑完才知道花了多少");
+    else sub.push("约 " + money(r.partial_currency || "USD", r.partial_cost) + "（还没结算）");
+    return `<div class="live-row">
+      <div>
+        <div class="live-what">${liveWhat(r)} <span class="dim">· 已跑 <span data-start="${r.started_at || 0}">${span(now - (r.started_at || now))}</span></span></div>
+        <div class="live-sub">${esc(sub.join(" · "))}</div>
+      </div>
+      <div class="act"><button class="danger" onclick="stopRun('${r.id}')">停止</button></div>
+    </div>`;
   });
   for (const p of pipes) {
-    rows.push(`<tr><td class="mono nowrap">${esc(shortId(p.id))}</td>
-      <td>${esc(p.kind)}<span class="dim"> pipeline</span></td>
-      <td class="dim">${esc(p.label || "")}</td>
-      <td class="nowrap"><span data-start="${p.started_at || p.created_at || 0}">${dur(now - (p.started_at || p.created_at || now))}</span></td>
-      <td class="dim nowrap">流水线不计价</td>
-      <td class="nowrap"><button class="danger" onclick="stopPipe('${p.id}')">停止</button></td></tr>`);
+    const start = p.started_at || p.created_at || 0;
+    rows.push(`<div class="live-row">
+      <div>
+        <div class="live-what"><b>流水线</b> ${esc(p.kind)} 正在跑 <span class="dim">· 已跑 <span data-start="${start}">${span(now - (start || now))}</span></span></div>
+        <div class="live-sub">${esc(p.label || "后台批次")} · 不计入花费</div>
+      </div>
+      <div class="act"><button class="danger" onclick="stopPipe('${p.id}')">停止</button></div>
+    </div>`);
   }
-  $("live").innerHTML = `<div class="scroll">${table(
-    ["run", "谁在干", "目录", "开始多久", "当前花费", ""], rows, "现在没有在跑的 run。")}</div>`;
+  $("live").innerHTML = rows.length ? rows.join("") : `<div class="empty">现在没有任务在跑</div>`;
 }
 
-function tokenLine(t) {
-  const k = n => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n);
-  return "in " + k(t.input || 0) + " / out " + k(t.output || 0);
+function decisionRow(d) {
+  const run = state.runs.find(r => r.id && r.id === d.run) || {};
+  const who = whoName(run.agent || run.route || "");
+  const when = d.at ? "· " + ago(d.at) : "";
+  let what = "", about = "", act = "", meta = [];
+
+  if (d.kind === "proposal") {
+    what = (who !== "agent" && who ? who + " 改完了，等你验收" : "有改动，等你验收");
+    about = fileChange(d);
+    act = `<button class="primary" onclick="merge('${d.id}')">合并</button>
+           <button class="danger" onclick="reject('${d.id}')">丢弃</button>`;
+    const p = state.proposals.find(p => p.id === d.id) || {};
+    meta.push("提案 " + d.id + (p.branch ? " · 分支 " + p.branch : ""));
+    if (d.run) meta.push("来源 run " + d.run);
+    if (run.note) meta.push("任务：" + run.note);
+  } else if (d.kind === "failed") {
+    what = whyFailed(d.detail || run.error);
+    about = aboutRun(run, who);
+    act = `<button class="primary" onclick="rerun('${d.run}')">重跑</button>
+           <button onclick="showLog('${d.run}')">看日志</button>`;
+    meta.push("run " + d.id + (run.task_id ? " · 任务 " + run.task_id : ""));
+    if (run.cwd) meta.push("目录 " + run.cwd);
+    meta.push("原始报错：" + (d.detail || run.error || "（没有记录）"));
+  } else if (d.kind === "red") {
+    what = (who !== "agent" && who ? who + " 改完了，但测试没通过" : "改完了，但测试没通过");
+    about = aboutRun(run, "");
+    act = `<button class="primary" onclick="showEvidence('${d.run}')">看日志</button>
+           <button onclick="rerun('${d.run}')">重跑</button>`;
+    meta.push("run " + d.id + (run.task_id ? " · 任务 " + run.task_id : ""));
+    if (run.cwd) meta.push("目录 " + run.cwd);
+    meta.push("验证结果：测试红");
+  } else if (d.kind === "unverified") {
+    const n = count("unverified") || (/(\\d+)/.exec(d.title || "") || [])[1] || "";
+    what = n + " 次跑完了，但没有测试证据，所以不算通过";
+    const last = state.runs.find(r => r.status === "completed" && r.verify === "none");
+    const lastNote = last ? String(last.note || "").split("\\n")[0].trim() : "";
+    about = last
+      ? "最近一次：" + (ago(d.at) || "刚才") + " · " + whoName(last.agent || last.route) +
+        (lastNote ? " · " + (lastNote.length > 30 ? lastNote.slice(0, 30) + "…" : lastNote) : "")
+      : "这些改动都没跑过测试";
+    act = `<button class="primary" onclick="rerunRecent()"
+             title="重跑最近一次没验证的任务，这次跑完会自动跑测试">重跑并验收</button>`;
+    if (last) meta.push("最近一次 run " + last.id + (last.note ? " · 任务：" + last.note : ""));
+    meta.push("没有测试证据时，进程退出码 0 只说明它退出了，不说明改对了。");
+  } else {
+    what = d.title || "有一件事等你处理";
+    about = d.detail || "";
+    act = d.run ? `<button onclick="showLog('${d.run}')">看日志</button>` : "";
+    meta.push("类型：" + (d.kind || "未知"));
+  }
+
+  // the unverified row already says when the last one ran; do not repeat it
+  const stamp = d.kind === "unverified" ? "" : when;
+  return `<div class="ask">
+    <div>
+      <div class="ask-what">${esc(what)}</div>
+      <div class="ask-about">${esc(about)}${stamp ? ` <span class="when">${esc(stamp)}</span>` : ""}</div>
+      <details class="meta"><summary>详情</summary>${meta.map(m => `<div>${esc(m)}</div>`).join("")}</details>
+    </div>
+    <div class="act">${act}</div>
+  </div>`;
 }
 
 function renderTodo() {
@@ -253,46 +384,43 @@ function renderTodo() {
   const items = b.decisions || [];
   const counts = b.decision_counts || {};
   const parts = [];
-  if (counts.proposal) parts.push(counts.proposal + " 提案");
-  if (counts.red) parts.push(counts.red + " 测试红");
-  if (counts.failed) parts.push(counts.failed + " 失败");
-  if (counts.unverified) parts.push(counts.unverified + " 未验证");
+  if (counts.proposal) parts.push(counts.proposal + " 个等你验收");
+  if (counts.red) parts.push(counts.red + " 个测试没过");
+  if (counts.failed) parts.push(counts.failed + " 个失败");
+  if (counts.unverified) parts.push(counts.unverified + " 次没验证");
   $("todo-n").textContent = parts.join(" · ");
-  const KIND = { proposal: ["提案", "pill"], red: ["测试红", "pill bad"],
-                 failed: ["失败", "pill bad"], unverified: ["未验证", "pill warn"] };
-  const rows = items.map(d => {
-    const [label, cls] = KIND[d.kind] || [esc(d.kind), "pill"];
-    const actions = d.kind === "proposal"
-      ? `<button onclick="merge('${d.id}')">合并</button>
-         <button class="danger" onclick="reject('${d.id}')">丢弃</button>`
-      : (d.run ? `<button onclick="showEvidence('${d.run}')">看证据</button>` : "");
-    return `<tr><td class="nowrap"><span class="${cls}">${label}</span></td>
-      <td class="mono nowrap">${esc(d.id || "-")}</td>
-      <td>${esc(d.title)}${d.detail ? `<div class="task">${esc(d.detail)}</div>` : ""}
-        ${d.note ? `<div class="task mono">${esc(d.note)}</div>` : ""}</td>
-      <td class="dim nowrap">${d.at ? ago(d.at) : ""}</td>
-      <td class="nowrap">${actions}</td></tr>`;
-  });
-  $("todo").innerHTML = `<div class="scroll">${table(
-    ["", "对象", "要你定什么", "多久", ""], rows, "没有需要你决定的事。")}</div>`;
+  if (!items.length) {
+    $("todo").innerHTML = `<div class="empty">现在没有需要你决定的事。</div>`;
+    return;
+  }
+  const shownFailed = items.filter(d => d.kind === "failed").length;
+  const shownProposal = items.filter(d => d.kind === "proposal").length;
+  const more = [];
+  if ((counts.failed || 0) > shownFailed) more.push((counts.failed - shownFailed) + " 个失败");
+  if ((counts.proposal || 0) > shownProposal) more.push((counts.proposal - shownProposal) + " 个提案");
+  $("todo").innerHTML = items.map(decisionRow).join("") +
+    (more.length ? `<div class="more-note">另外 ${more.join("、")}没列出来，在下面「更多」里。</div>` : "");
 }
 
 function renderMoney(t) {
   t = t || {};
-  $("money-day").textContent = t.day ? t.day + " · " + t.runs + " 个 run" : "";
-  const rows = (t.by_agent || []).map(a => `<tr>
-      <td>${esc(a.agent)}${(a.routes || []).length
-        ? `<div class="task">route ${esc(a.routes.slice(0, 4).join(" · "))}</div>` : ""}</td>
-      <td class="nowrap">${moneyParts(a.costs)}</td>
-      <td class="dim nowrap">${a.runs}</td></tr>`);
-  const basis = Object.entries(t.basis || {})
-    .map(([k, n]) => (BASIS[k] || k) + " " + n).join(" / ");
-  $("money").innerHTML =
-    `<div class="total">今日合计 <b>${moneyParts(t.totals)}</b>
-       <span class="task">${t.priced || 0} 个已计价 · ${t.unpriced || 0} 个未计价</span></div>` +
-    table(["agent", "成本", "run"], rows, "今天还没有记到成本的 run。") +
-    `<div class="task">口径：<span class="mono">run.usage_json.cost</span> 原值，由 <span class="mono">runner._price()</span> 写入（${esc(basis || "-")}）。
-      不同币种不合并、不换算；跑完才有数，未计价的不按 0 计。</div>`;
+  const runs = t.runs || 0;
+  const agents = t.by_agent || [];
+  let html = "";
+  if (!runs) {
+    html = `<div class="total zero">今天还没有花钱</div>`;
+  } else if (!Object.keys(t.totals || {}).length) {
+    html = `<div class="total">今天 ${runs} 单，还没有记到金额</div>`;
+  } else {
+    html = `<div class="total">今天 ${runs} 单，共 <b>${moneyParts(t.totals)}</b></div>` +
+      agents.map(a => {
+        const amount = Object.keys(a.costs || {}).length ? moneyParts(a.costs) : "还没计价";
+        return `<div class="money-row"><span>${esc(a.agent)}</span>
+          <span class="amt">${esc(amount)}<span class="dim">（${a.runs} 单）</span></span></div>`;
+      }).join("") +
+      `<div class="foot">金额取自账单原值，不换算汇率</div>`;
+  }
+  $("money").innerHTML = html;
 }
 
 function renderRuns() {
@@ -301,7 +429,7 @@ function renderRuns() {
     const [label, cls] = VERIFY[r.verify] || ["-", "dim"];
     const status = r.status === "completed" ? '<span class="ok">完成</span>'
       : r.status === "failed" ? '<span class="bad">失败</span>'
-      : r.status === "running" ? '<span class="pill">跑着</span>' : esc(r.status);
+      : r.status === "running" ? '<span class="pill">在跑</span>' : esc(r.status);
     return `<tr>
       <td class="mono dim">${esc((r.id || "").slice(4, 14))}</td>
       <td class="nowrap">${status}</td>
@@ -317,17 +445,23 @@ function renderRuns() {
 }
 
 function renderProposals() {
+  const PSTATE = { open: "等你决定", merged: "已合并", rejected: "已丢弃" };
   const rows = state.proposals.map(p => `<tr>
       <td class="mono">${esc(p.id)}</td>
-      <td><span class="pill">${esc(p.status)}</span></td>
-      <td>${esc(p.stat || "")}</td>
+      <td><span class="pill">${esc(PSTATE[p.status] || p.status)}</span></td>
+      <td>${esc(String(p.stat || "").replace(/(\\d+) file\\(s\\)/, "$1 个文件"))}</td>
       <td class="task mono">${esc((p.branch || "").slice(0, 36))}</td></tr>`);
   $("proposals").innerHTML = table(["提案", "状态", "改动", "分支"], rows, "没有提案。");
 }
 
+function reveal(box) {
+  $("more").open = true;
+  box.style.display = "block";
+}
+
 async function showEvidence(rid) {
   const box = $("evidence");
-  box.style.display = "block";
+  reveal(box);
   box.innerHTML = `<h3>${esc(rid)}</h3><div class="dim">读取中…</div>`;
   try {
     const [events, artifacts] = await Promise.all([
@@ -352,17 +486,40 @@ async function showEvidence(rid) {
   } catch (e) {
     box.innerHTML = `<h3>${esc(rid)}</h3><div class="bad">读取失败：${esc(e.message)}</div>`;
   }
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+async function showLog(rid) {
+  const box = $("evidence");
+  reveal(box);
+  box.innerHTML = `<h3>日志 <span class="mono dim">${esc(rid)}</span></h3><div class="dim">读取中…</div>`;
+  try {
+    const [run, events] = await Promise.all([api("/runs/" + rid), api("/runs/" + rid + "/events")]);
+    const lines = events.slice(-18).map(e =>
+      clock(e.ts) + "  " + e.type + "  " + JSON.stringify(e.payload || {}));
+    box.innerHTML = `<h3>日志 <span class="mono dim">${esc(rid)}</span></h3>
+      <div class="bad">${esc(whyFailed(run.error))}</div>
+      <div class="task">原始报错：<span class="mono">${esc(run.error || "（没有记录）")}</span></div>
+      <div class="task">谁干：${esc(run.agent || "-")} · 目录：<span class="mono">${esc(run.cwd || "-")}</span>
+        · 开始：${esc(clock(run.started_at))}</div>
+      ${lines.length ? `<pre>${esc(lines.join("\\n"))}</pre>` : ""}
+      <div class="task">共 ${events.length} 条事件，这里显示最后 ${lines.length} 条。</div>`;
+  } catch (e) {
+    box.innerHTML = `<h3>日志</h3><div class="bad">读不到日志：${esc(e.message)}</div>`;
+  }
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 async function stopRun(id) {
-  if (!confirm("停止 " + id + "？已经改过的文件不会回滚。")) return;
-  try { await api("/runs/" + id + "/stop", "POST"); flash("已请求停止 " + id); }
+  const r = state.runs.find(x => x.id === id) || state.board.running.find(x => x.id === id) || {};
+  if (!confirm("停止 " + whoName(r.agent || r.route) + " 这个任务？已经改过的文件不会回滚。")) return;
+  try { await api("/runs/" + id + "/stop", "POST"); flash("已请求停止，几秒后刷新"); }
   catch (e) { flash("停止失败：" + e.message, true); }
   scheduleRefresh(300);
 }
 async function stopPipe(id) {
-  if (!confirm("停止流水线 " + id + "？")) return;
-  try { await api("/pipelines/" + id + "/stop", "POST"); flash("已请求停止 " + id); }
+  if (!confirm("停止这个流水线？")) return;
+  try { await api("/pipelines/" + id + "/stop", "POST"); flash("已请求停止，几秒后刷新"); }
   catch (e) { flash("停止失败：" + e.message, true); }
   scheduleRefresh(300);
 }
@@ -370,20 +527,44 @@ async function merge(id) {
   const p = state.proposals.find(x => x.id === id) || {};
   const run = state.runs.find(r => r.id === p.run_id) || {};
   const risky = run.verify && run.verify !== "ok";
-  let text = "把 " + id + " 合进主工作区？\\n\\n" + (p.stat || "");
-  if (risky) text += "\\n\\n注意：这个提案的 run " +
+  const files = (p.files || []).map(f => f.path).filter(Boolean);
+  let text = "把这次改动合进主工作区？\\n\\n" + (files.length ? files.join("、") : (p.stat || ""));
+  if (risky) text += "\\n\\n注意：这个改动" +
     (run.verify === "red" ? "测试是红的" : "没有验证记录") + "。";
   if (!confirm(text)) return;
   try { const r = await api("/proposals/" + id + "/merge", "POST");
-    flash(r.ok ? "已合入 " + (r.commit || "") : "合并失败：" + r.reason, !r.ok); }
+    flash(r.ok ? "已合入主工作区" + (r.commit ? "：" + String(r.commit).slice(0, 8) : "") : "合并失败：" + r.reason, !r.ok); }
   catch (e) { flash("合并失败：" + e.message, true); }
   scheduleRefresh(300);
 }
 async function reject(id) {
-  if (!confirm("丢弃 " + id + "？分支和工作区都会删掉，改动不会保留。")) return;
-  try { await api("/proposals/" + id + "/reject", "POST"); flash("已丢弃 " + id); }
+  if (!confirm("丢弃这次改动？分支和工作区都会删掉，改动不会保留。")) return;
+  try { await api("/proposals/" + id + "/reject", "POST"); flash("已丢弃"); }
   catch (e) { flash("丢弃失败：" + e.message, true); }
   scheduleRefresh(300);
+}
+async function rerun(rid, lead) {
+  const r = state.runs.find(x => x.id === rid);
+  if (!r) return flash("找不到这个任务的记录，刷新后再试", true);
+  const goal = String(r.note || "").split("\\n")[0];
+  if (!confirm((lead || "重跑一次？") + "\\n\\n谁干：" + (r.agent || r.route || "-") +
+      "\\n目录：" + (r.cwd || "默认") +
+      "\\n任务：" + (goal || "（没写）") +
+      "\\n\\n会消耗额度，也会直接改动这个目录里的文件；跑完会自动跑测试，过了才算通过。")) return;
+  try {
+    const run = await api("/runs", "POST", {
+      task_id: r.task_id, route: r.route || r.agent, cwd: r.cwd || null,
+      note: r.note || "", verify: true,
+    });
+    flash("已重新派活，跑完会跑测试");
+    if (run && run.id) state.runs.unshift({ ...run, agent: r.agent, route: r.route, cwd: r.cwd });
+    scheduleRefresh(300);
+  } catch (e) { flash("重跑失败：" + e.message, true); }
+}
+function rerunRecent() {
+  const r = state.runs.find(x => x.status === "completed" && x.verify === "none");
+  if (!r) return flash("找不到没验证的任务了，刷新看看", true);
+  rerun(r.id, "重跑最近一次没验证的任务？");
 }
 
 async function dispatch(ev) {
@@ -406,7 +587,7 @@ async function dispatch(ev) {
       task_id: task.id, route, cwd: cwd || null, note: goal,
       propose: proposeMode, verify,
     });
-    flash("已派活：" + run.id + "（" + route + "）");
+    flash("已派活（" + route + "）");
     $("f-goal").value = ""; $("f-accept").value = "";
     scheduleRefresh(300);
   } catch (e) { flash("派活失败：" + e.message, true); }
@@ -468,7 +649,7 @@ function tick() {
   const now = Date.now() / 1000;
   document.querySelectorAll("[data-start]").forEach(el => {
     const start = Number(el.dataset.start);
-    if (start) el.textContent = dur(now - start);
+    if (start) el.textContent = span(now - start);
   });
 }
 
