@@ -1,0 +1,6 @@
+{
+  "id": "word-metrics",
+  "title": "实现 word_stats（含边界用例）",
+  "prompt": "在工作目录下实现 metrics.py 里的 word_stats(text: str) -> dict，返回 {\"words\": int, \"chars\": int, \"longest\": str, \"unique\": int}。\n\n规则：\n- words：按任意空白（空格、制表符、换行、全角空格）切分后非空 token 的数量\n- chars：text 中非空白字符的数量\n- longest：最长的 token；长度相同时取最先出现的那个；没有任何 token 时为空字符串 \"\"\n- unique：不同 token 的数量，区分大小写\n- 空字符串或全空白时返回 {\"words\": 0, \"chars\": 0, \"longest\": \"\", \"unique\": 0}\n\n只改 metrics.py，不要修改其他文件。",
+  "timeout": 180
+}

@@ -1,0 +1,6 @@
+{
+  "id": "shop-tax",
+  "title": "新增税模块并接入购物车总价",
+  "prompt": "工作目录里有一个 shop/ 包和 tests/test_cart.py。做两件事：\n\n1. 新增 shop/tax.py：\n   - RATES = {\"cn\": 0.13, \"us\": 0.08, \"jp\": 0.10}\n   - def tax_for(amount: float, region: str) -> float：返回 amount * RATES[region]\n   - 未知 region 抛 ValueError，错误信息里带上这个 region\n\n2. 修改 shop/cart.py 的 total(items, region=\"none\")：\n   - region 为 \"none\" 时不计税，结果等于 subtotal(items)\n   - 其它 region 时总价为 subtotal(items) + tax_for(subtotal(items), region)\n   - 结果四舍五入到 2 位小数（round(x, 2)）\n   - 未知 region 继续向上抛 ValueError\n\n最终 tests/test_cart.py 必须全部通过，不要修改这个测试文件。",
+  "timeout": 180
+}

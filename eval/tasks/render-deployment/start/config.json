@@ -1,0 +1,14 @@
+{
+  "service": "checkout",
+  "replicas": 3,
+  "ports": [8080, 8443],
+  "features": {
+    "retry": true,
+    "timeout_s": 30
+  },
+  "environment": {
+    "LOG_LEVEL": "info",
+    "REGION": "cn-east"
+  },
+  "owner": "payments"
+}

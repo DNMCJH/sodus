@@ -1,0 +1,6 @@
+{
+  "id": "render-deployment",
+  "title": "读 JSON 配置生成部署描述",
+  "prompt": "工作目录里有一个 config.json。写一个 render.py，把它转换成部署描述：\n\n    def render(cfg: dict) -> dict\n\n转换规则（输出只能有这 7 个 key，输入里多出来的 key 一律丢弃）：\n- name: 输入 service 的值\n- image: f\"{service}:latest\"\n- replicas: 输入 replicas 的值\n- ports: 输入的每个端口 p 变成字符串 f\"{p}:{p}\"\n- env: 输入 environment 的值（原样）\n- features: 输入 features 的值（原样）\n- healthcheck: {\"path\": \"/health\", \"port\": 输入 ports 的第一个元素}\n\n命令行：python render.py <配置文件>\n- 成功：stdout 打印 render(json.load(f)) 的结果，JSON 用 indent=2、ensure_ascii=False、sort_keys=True，末尾恰好一个换行，退出码 0\n- 文件不存在或 JSON 不合法：stderr 打印一行以 \"error: \" 开头的说明，退出码 1\n\n不要修改 config.json，不要引入第三方依赖。",
+  "timeout": 180
+}

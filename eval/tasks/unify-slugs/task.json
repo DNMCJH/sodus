@@ -1,0 +1,6 @@
+{
+  "id": "unify-slugs",
+  "title": "把三份重复的 slug 逻辑抽成一个函数",
+  "prompt": "slugs.py 里 user_slug / team_slug / project_slug 是同一段归一化逻辑的三份拷贝，行为已经不一致了。\n\n把它重构成一个私有函数 _slug(name: str) -> str，三个公开函数都直接调用它，并让三者的行为统一为：\n1. 先做 Unicode NFKD 归一化并丢弃非 ASCII 字符（é -> e，中文 -> 空）\n2. 把连续的“非 [A-Za-z0-9]”字符替换成一个 \"-\"\n3. 去掉首尾的 \"-\"\n4. 全部转小写\n\n例子：\n- \"Café Déjà Vu\" -> \"cafe-deja-vu\"\n- \"  Hello,   World!! \" -> \"hello-world\"\n- \"API_v2\" -> \"api-v2\"\n- \"a--b\" -> \"a-b\"\n- \"中文\" -> \"\"\n- \"\" -> \"\"\n\n保持三个公开函数的名字和签名不变，不要新增依赖。",
+  "timeout": 180
+}
