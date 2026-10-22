@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter, pet, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, meter, pet, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -207,6 +207,13 @@ class Runner:
         verify_run: bool | None = None,
         propose_run: bool = False,
     ) -> dict:
+        # A per-task budget already exists; nothing stopped ten tasks from each
+        # staying inside theirs and adding up to a number nobody agreed to.
+        # This refuses *new* runs only — killing a run that is mid-edit would
+        # cost more than the money it saves.
+        spend = budget.check()
+        if spend["over"]:
+            raise RuntimeError(budget.refuse_message(spend))
         profiles.ensure_ready()
         if verify_run is None:
             verify_run = AUTO_VERIFY and config.auto_verify()

@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import (
+    budget as budget_mod,
     agents,
     config,
     db,
@@ -638,7 +639,7 @@ def board_state(now: float | None = None) -> dict:
         "auto_recovering": auto_recovering,
         "deterministic": deterministic,
         "history_failures": history_failures,
-        "today": {"window_start": start, **today},
+        "today": {"window_start": start, "budget": budget_mod.check(now), **today},
     }
 
 
