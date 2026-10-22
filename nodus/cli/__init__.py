@@ -19,22 +19,23 @@ def build_parser():
     import argparse
 
     from .commands import (
-    decisions,
-    memory,
-    pipeline,
-    proposals,
-    sessions,
-    system,
-    tasks,
-    topology,
-)
+        bench,
+        decisions,
+        memory,
+        pipeline,
+        proposals,
+        sessions,
+        system,
+        tasks,
+        topology,
+    )
 
     parser = argparse.ArgumentParser(
         prog="nodus", description="Nodus — task acceptance layer for agents"
     )
     parser.add_argument("--version", action="version", version=f"nodus {config.VERSION}")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for module in (system, tasks, pipeline, sessions, decisions, topology, proposals, memory):
+    for module in (system, tasks, pipeline, sessions, decisions, topology, proposals, bench, memory):
         module.add(sub)
     return parser
 
