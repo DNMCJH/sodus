@@ -540,3 +540,244 @@ def test_history_separates_finished_from_verified(monkeypatch, tmp_path):
         conn.execute("DELETE FROM task WHERE id=?", (task["id"],))
         conn.commit()
         conn.close()
+
+
+# ---- scoring: does the price actually change the route? ----------------
+#
+# The scorer is a pure function over per-route facts, so these tests feed it
+# synthetic measurements instead of depending on whatever bench happens to be
+# in `reports/`.
+
+
+def _synth(
+    route: str,
+    *,
+    solved: int = 3,
+    attempts: int = 3,
+    seconds: float | None = None,
+    cost: float | None = None,
+    tested: int = 4,
+    measured_by: str = "bench",
+    status: str = "measured",
+    tier: int | None = 2,
+) -> dict:
+    """One route's scoring facts, shaped like `policy._measure` returns them."""
+    return {
+        "route": route,
+        "status": status,
+        "measured_by": measured_by if attempts else "",
+        "solve_rate": (solved / attempts) if attempts else None,
+        "solved": solved if attempts else None,
+        "attempts": attempts or None,
+        "seconds": seconds,
+        "cost_cny": cost,
+        "cost_known": bool(cost is not None and cost > 0),
+        "tested_difficulty": tested if measured_by == "bench" else None,
+        "declared_cost_tier": tier,
+        "note": "",
+    }
+
+
+def test_scoring_takes_the_cheap_route_when_it_solves_the_same():
+    measures = {
+        "claude": _synth("claude", seconds=66.0, cost=0.30, tested=4),
+        "minimax": _synth("minimax", seconds=30.0, cost=0.03, tested=4),
+    }
+    route, _, scoring = policy._choose(2, "code", measures)
+
+    rows = {row["route"]: row for row in scoring["candidates"]}
+    assert route == "minimax"
+    assert rows["claude"]["cost_penalty"] > rows["minimax"]["cost_penalty"]
+    assert rows["minimax"]["score"] > rows["claude"]["score"]
+    assert any(rule["rule"] == "low-difficulty-cheap" for rule in scoring["guardrails"])
+
+
+def test_scoring_pays_for_the_stronger_route_on_a_hard_task():
+    measures = {
+        "claude": _synth("claude", solved=3, seconds=66.0, cost=0.30, tested=4, tier=3),
+        "minimax": _synth("minimax", solved=1, seconds=30.0, cost=0.03, tested=4),
+    }
+    route, _, scoring = policy._choose(4, "code", measures)
+
+    rows = {row["route"]: row for row in scoring["candidates"]}
+    assert route == "claude"
+    assert rows["claude"]["measured_solve_bonus"] > rows["minimax"]["measured_solve_bonus"]
+    assert any(rule["rule"] == "high-difficulty-proven" for rule in scoring["guardrails"])
+
+
+def test_a_single_bad_run_does_not_eliminate_a_route(home, rules_only, reports):
+    task = db.create_task(goal="one bad run")
+    _finish(task["id"], "codex", "failed", verify="red")
+
+    evidence = policy.evidence_for("codex")
+    measure = policy._measure("codex", evidence)
+
+    assert evidence["status"] == "insufficient"
+    assert measure["solve_rate"] is None
+    rows, _ = policy._score_candidates(
+        3,
+        "code",
+        {"codex": measure, "minimax": _synth("minimax", seconds=30.0, cost=0.03)},
+    )
+    codex = next(row for row in rows if row["route"] == "codex")
+    assert codex["excluded"] == ""
+    assert codex["solve_rate"] is None
+
+
+def test_unsupported_routes_are_excluded_from_scoring(home, rules_only, reports):
+    evidence = policy.evidence_for("claude", need="vision")
+    assert evidence["status"] == "unsupported"
+
+    measures = {
+        "claude": policy._measure("claude", evidence),
+        "opencode-gemini": _synth(
+            "opencode-gemini", attempts=0, seconds=15.0, measured_by="ab", status="unknown"
+        ),
+    }
+    route, _, scoring = policy._choose(2, "writing", measures)
+    rows = {row["route"]: row for row in scoring["candidates"]}
+
+    assert rows["claude"]["excluded"]
+    assert route == "opencode-gemini"
+
+
+def test_a_missing_price_is_unknown_not_free():
+    measures = {
+        "dsh": _synth("dsh", seconds=40.0, cost=None, tier=1),
+        "claude": _synth("claude", seconds=66.0, cost=0.30, tier=3),
+        "opencode-glm": _synth("opencode-glm", seconds=50.0, cost=0.02, tier=None),
+    }
+    rows, _ = policy._score_candidates(1, "writing", measures)
+    by_route = {row["route"]: row for row in rows}
+
+    dsh = by_route["dsh"]
+    # Two known penalties: claude ~0.457, glm 0. The median is ~0.228, not 0.
+    assert dsh["cost_known"] is False
+    assert dsh["cost_penalty"] > 0
+    assert dsh["cost_basis"].startswith("unknown")
+    assert dsh["cost_penalty"] == pytest.approx(0.228, abs=0.01)
+
+
+def test_bench_outranks_live_history_for_comparison(home, rules_only, reports):
+    """A controlled 3-task bench beats this repo's self-selected run history."""
+    task = db.create_task(goal="same task on every route")
+    for _ in range(3):
+        _finish(task["id"], "claude", "completed", cost=9.0, verify="green")
+    (reports / "bench-claude.json").write_text(
+        json.dumps(
+            {
+                "route": "claude",
+                "totals": {
+                    "attempts": 3,
+                    "solved": 2,
+                    "mean_s": 10.0,
+                    "cost_cny": 0.3,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = policy.evidence_for("claude")
+    measure = policy._measure("claude", evidence)
+
+    assert evidence["measured_by"] == "bench"
+    assert evidence["stats"]["solve_rate"] == pytest.approx(0.667, abs=0.001)
+    assert evidence["history"]["samples"] == 3
+    assert measure["cost_cny"] == pytest.approx(0.1)  # 0.3 / 3, not the 9.0 run cost
+    assert measure["solve_rate"] == pytest.approx(0.667, abs=0.001)
+
+
+def test_bench_with_partial_pricing_keeps_cost_unknown(home, rules_only, reports):
+    """deepseek has no price table: two of three runs record cost 0.0."""
+    (reports / "bench-dsh.json").write_text(
+        json.dumps(
+            {
+                "route": "dsh",
+                "totals": {
+                    "attempts": 3,
+                    "solved": 3,
+                    "mean_s": 40.7,
+                    "cost_cny": 0.1,
+                },
+                "attempts": [
+                    {"title": "修复 ranges 的差一错误", "cost": 0.0, "duration_s": 30.5},
+                    {"title": "把 slug 逻辑抽成函数", "cost": 0.0, "duration_s": 24.8},
+                    {"title": "写一个单位换算 CLI", "cost": 0.1, "duration_s": 66.9},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = policy.evidence_for("dsh")
+    measure = policy._measure("dsh", evidence)
+
+    assert evidence["stats"]["cost_complete"] is False
+    assert evidence["stats"]["priced_attempts"] == 1
+    assert measure["cost_cny"] is None
+    assert measure["cost_known"] is False
+    assert "价格数据不完整" in evidence["note"]
+
+
+def test_a_tie_goes_to_the_route_with_measurements(home, rules_only, reports):
+    """Same score, one route measured and one not: measured wins the tie."""
+    measures = {
+        "claude": _synth(
+            "claude", attempts=0, seconds=None, cost=None, measured_by="", status="unknown"
+        ),
+        "codex": _synth("codex", solved=0, seconds=None, cost=None, tested=3, status="measured"),
+    }
+    route, _, scoring = policy._choose(3, "code", measures)
+    assert route == "codex"
+    assert scoring["candidates"][0]["measured_by"] == "bench"
+
+
+def test_every_score_is_the_sum_of_its_parts():
+    measures = {
+        "claude": _synth("claude", solved=2, seconds=66.0, cost=0.30, tested=4, tier=3),
+        "codex": _synth("codex", seconds=62.5, cost=0.036),
+        "opencode-glm": _synth("opencode-glm", seconds=52.5, cost=0.022, tier=None),
+    }
+    rows, _ = policy._score_candidates(3, "code", measures)
+    for row in rows:
+        assert row["score"] == pytest.approx(
+            row["capability_fit"]
+            + row["measured_solve_bonus"]
+            - row["cost_penalty"]
+            - row["time_penalty"],
+            abs=0.001,
+        )
+
+
+def test_the_decision_event_carries_every_candidate_breakdown(home, rules_only, reports):
+    task = db.create_task(goal="fix the login bug")
+    run = db.create_run(task["id"], "codex", str(home), route="codex")
+    assessment = policy.assess("修一下 login.py 里 token 过期没刷新的 bug")
+    recommendation = policy.recommend(assessment)
+
+    policy.record(run["id"], assessment, recommendation)
+
+    payload = next(
+        event["payload"]
+        for event in db.events_after(run["id"])
+        if event["type"] == "policy.decision"
+    )
+    scoring = payload["scoring"]
+    candidates = {row["route"]: row for row in scoring["candidates"]}
+
+    assert scoring["winner"] == recommendation["route"]
+    assert payload["recommend"]["scoring"]["winner"] == recommendation["route"]
+    assert set(candidates) == set(policy.ROUTE_NAMES)
+    for row in candidates.values():
+        for key in (
+            "score",
+            "capability_fit",
+            "measured_solve_bonus",
+            "cost_penalty",
+            "time_penalty",
+            "cost_basis",
+            "time_basis",
+            "excluded",
+        ):
+            assert key in row, (row["route"], key)

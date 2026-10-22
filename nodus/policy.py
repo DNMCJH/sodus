@@ -27,13 +27,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
+import statistics
 import time
 from pathlib import Path
 
 from . import config, db, decision, routes
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 #: The six routes that actually exist in `routes._builtin()`. A recommendation
 #: is only allowed to name one of these.
@@ -59,6 +61,28 @@ REPORTS = Path(__file__).resolve().parent.parent / "reports"
 #: not evidence, and neither is a benchmark that never shows a price.
 HISTORY_WINDOW = 30
 HISTORY_MIN = 3
+
+#: Scoring constants. `score = capability_fit + measured_solve_bonus
+#: - cost_penalty - time_penalty`; every term is written to the decision event
+#: so a reader can re-add the numbers instead of trusting a total.
+#:
+#: - Solving matters more as the task gets harder; a 10x price gap must not
+#:   decide an architecture question, so the price/time penalties are scaled
+#:   down by `_PRICE_SENSITIVITY`.
+#: - The bench's three tasks are small; their solve rate is discounted by
+#:   `_OUT_OF_SCOPE` when the task is harder than anything the bench ran.
+#: - A missing price is not zero: it gets the median penalty of the routes
+#:   that do have one, so "unknown" sits in the middle of the field.
+_SOLVE_WEIGHT = {1: 0.30, 2: 0.30, 3: 0.55, 4: 0.85, 5: 0.85}
+_COST_WEIGHT = 0.12
+_COST_CAP = 0.50
+_TIME_WEIGHT = 0.10
+_TIME_CAP = 0.35
+_PRICE_SENSITIVITY = {1: 1.0, 2: 1.0, 3: 0.7, 4: 0.4, 5: 0.25}
+_OUT_OF_SCOPE = 0.35
+_CHEAP_RATIO = 1.5
+_CHEAP_SOLVE = 2 / 3
+_HIGH_SOLVE_GAP = 0.15
 
 
 # ---- rule signals ------------------------------------------------------
@@ -588,8 +612,11 @@ _ROUTE_CAPS = {
     "minimax": {
         "label": "claude 同协议备用",
         "cost_tier": None,
-        "strengths": "与 claude 同 CLI/协议，routes.py 明确说是更弱的模型；没有价格数据",
-        "source": "routes.py (declared weaker; no cost data)",
+        "strengths": (
+            "与 claude 同 CLI/协议，routes.py 明确说是更弱的模型；"
+            "bench 实测 3/3、¥0.0289/run"
+        ),
+        "source": "routes.py (declared weaker) + reports/2026-10-23_bench_minimax.json",
     },
     "codex": {
         "label": "单点修复/命令验证",
@@ -617,6 +644,48 @@ _ROUTE_CAPS = {
     },
 }
 
+#: `opencode-gemini` is the only route the operator ledger assigns to images.
+#: Declared, not measured: there is no vision benchmark in `reports/`.
+_VISION_ROUTES = frozenset({"opencode-gemini"})
+
+#: Declared fitness, *not* measurement: how well each route is said to fit a
+#: task kind, and the difficulty band it is declared for. Derived from
+#: `_ROUTE_CAPS` labels and `decision.AGENT_PROFILE`; scoring adds measured
+#: data on top rather than replacing this. Outside the band the fit decays, so
+#: a route declared for small tasks cannot win a refactor on price alone.
+_ROUTE_FIT = {
+    "claude": {
+        "kinds": {"code": 1.0, "analysis": 1.0, "ops": 0.9, "writing": 0.7, "retrieval": 0.7},
+        "floor": 2,
+        "ceiling": 5,
+    },
+    "minimax": {
+        "kinds": {"code": 0.8, "ops": 0.7, "analysis": 0.7, "writing": 0.6, "retrieval": 0.6},
+        "floor": 1,
+        "ceiling": 3,
+    },
+    "codex": {
+        "kinds": {"code": 1.0, "ops": 0.9, "analysis": 0.6, "writing": 0.4, "retrieval": 0.6},
+        "floor": 1,
+        "ceiling": 3,
+    },
+    "dsh": {
+        "kinds": {"writing": 1.0, "retrieval": 0.8, "analysis": 0.7, "code": 0.4, "ops": 0.3},
+        "floor": 1,
+        "ceiling": 3,
+    },
+    "opencode-glm": {
+        "kinds": {"code": 0.9, "ops": 0.8, "retrieval": 0.7, "analysis": 0.6, "writing": 0.6},
+        "floor": 1,
+        "ceiling": 3,
+    },
+    "opencode-gemini": {
+        "kinds": {"code": 0.85, "ops": 0.7, "retrieval": 0.7, "analysis": 0.6, "writing": 0.6},
+        "floor": 1,
+        "ceiling": 3,
+    },
+}
+
 
 def _bench_evidence() -> dict[str, dict]:
     """Aggregate any `nodus bench` result files under `REPORTS`.
@@ -624,6 +693,15 @@ def _bench_evidence() -> dict[str, dict]:
     Tolerant by design: the bench module owns the schema, this only reads the
     fields a recommendation needs. A malformed or unrelated JSON is skipped,
     never allowed to break dispatch.
+
+    Two extra facts are derived, because the totals alone lie:
+
+    - `priced_attempts` vs `attempts`: a missing model price is written as
+      `cost: 0.0`, so a total that covers only one of three runs must not be
+      averaged as if the route were cheap. Incomplete pricing stays unknown.
+    - `tested_difficulty`: the hardest task title in the report, scored by the
+      same rule table used for live tasks. It is how scoring knows that a
+      solve rate measured on small tasks does not prove a hard one.
     """
     found: dict[str, dict] = {}
     if not REPORTS.is_dir():
@@ -648,15 +726,65 @@ def _bench_evidence() -> dict[str, dict]:
             continue
         if attempts <= 0:
             continue
+        rows = data.get("attempts")
+        priced = 0
+        unpriced = 0
+        tested = 0
+        durations: list[float] = []
+        if isinstance(rows, list) and rows:
+            for item in rows:
+                if not isinstance(item, dict):
+                    unpriced += 1
+                    continue
+                title = str(item.get("title") or "").strip()
+                if title:
+                    tested = max(tested, int(_rules(title, "")["difficulty"]))
+                duration = _number(item.get("duration_s"))
+                if duration is not None and duration >= 0:
+                    durations.append(duration)
+                cost = _number(item.get("cost"))
+                if cost is not None and cost > 0:
+                    priced += 1
+                else:
+                    # 0.0 is how a provider without a price table reports a
+                    # run; it is not a free run.
+                    unpriced += 1
+        else:
+            # No per-attempt rows: a non-zero total is the only evidence that
+            # the run was priced at all.
+            priced = attempts if cost_cny > 0 else 0
+            unpriced = attempts - priced
         row = found.setdefault(
             route,
-            {"attempts": 0, "solved": 0, "seconds": 0.0, "cost_cny": 0.0, "sources": []},
+            {
+                "attempts": 0,
+                "solved": 0,
+                "seconds": 0.0,
+                "cost_cny": 0.0,
+                "priced_attempts": 0,
+                "unpriced_attempts": 0,
+                "tested_difficulty": 0,
+                "durations": [],
+                "sources": [],
+            },
         )
         row["attempts"] += attempts
         row["solved"] += solved
         row["seconds"] += mean_s * attempts
         row["cost_cny"] += cost_cny
+        row["priced_attempts"] += priced
+        row["unpriced_attempts"] += unpriced
+        row["tested_difficulty"] = max(row["tested_difficulty"], tested)
+        row["durations"].extend(durations)
         row["sources"].append(path.name)
+    for row in found.values():
+        durations = row.pop("durations")
+        # The task asks for a median: one stuck run must not define the route.
+        row["median_s"] = (
+            round(statistics.median(durations), 1)
+            if durations
+            else round(row["seconds"] / row["attempts"], 1)
+        )
     return found
 
 
@@ -800,7 +928,10 @@ def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
 
 
 def evidence_for(
-    route: str, need: str | None = None, history: dict | None = None
+    route: str,
+    need: str | None = None,
+    history: dict | None = None,
+    bench: dict | None = None,
 ) -> dict:
     """What do we actually know about this route for this task?
 
@@ -809,57 +940,65 @@ def evidence_for(
     `HISTORY_MIN` local runs earn ``measured``; a docstring about a model's
     strengths does not, and neither does one lucky dispatch.
 
-    `history` lets a caller that is already judging every route pass the
-    computed block in, so one recommendation does not query the same table ten
-    times. It is always echoed under `history` so the cost data survives even
-    when the primary evidence came from a bench report.
+    Precedence is **bench, then local history, then A/B**. A bench compares the
+    routes on the same tasks, which is the only fair way to rank them; local
+    history is this workspace's real work but each route saw different tasks,
+    so an easy-run average must not outvote a controlled comparison. History
+    is still echoed under `history` for cost/speed context and fills the gap
+    when no bench row exists.
+
+    `history` and `bench` let a caller that is already judging every route pass
+    the computed blocks in, so one recommendation does not re-read the same
+    table or the same JSON six times.
     """
     if route not in ROUTE_NAMES:
         raise ValueError(f"unknown route: {route}")
 
     hist = _run_history(route) if history is None else history
-    bench = _bench_evidence().get(route)
+    bench_table = _bench_evidence() if bench is None else bench
+    row = bench_table.get(route)
     ab = _AB.get(route)
 
     def with_sources(block: dict) -> dict:
+        block["route"] = route
         block["history"] = hist
-        if bench:
+        if row:
             block["bench"] = {
-                "attempts": bench["attempts"],
-                "solved": bench["solved"],
-                "sources": list(bench["sources"]),
+                "attempts": row["attempts"],
+                "solved": row["solved"],
+                "sources": list(row["sources"]),
+                "tested_difficulty": row["tested_difficulty"],
+                "priced_attempts": row["priced_attempts"],
             }
         if ab:
             block["ab"] = dict(ab)
         return block
 
-    # Local history is the only source that knows what this repo's tasks cost.
-    # It is still not a vision test: a route can have thirty green text runs
-    # and no proof it can read a screenshot.
-    if hist["status"] == "measured" and need != "vision":
-        stats = hist["stats"]
+    # Vision is a declared ability, not a measurement: the ledger assigns
+    # multimodal work to one route. Saying "unknown" for the others would let
+    # scoring dispatch a screenshot to a text-only route.
+    if need == "vision" and route not in _VISION_ROUTES:
         return with_sources(
             {
-                "status": "measured",
-                "source": f"local run history (last {stats['runs']} finished runs)",
-                "scope": (
-                    f"本地历史：{stats['runs']} 次已结束 run，"
-                    f"成功 {stats['verified_green']}/{stats['runs']}，"
-                    f"均值 {stats['mean_s']}s"
-                ),
-                "stats": dict(stats),
-                "note": hist["note"],
+                "status": "unsupported",
+                "measured_by": None,
+                "source": "route declaration",
+                "scope": "no declared vision path",
+                "stats": {},
+                "note": "未声明视觉能力（这是能力声明缺失，不是测量结论）",
             }
         )
 
-    if bench:
-        attempts = bench["attempts"]
-        solved = bench["solved"]
-        mean_s = round(bench["seconds"] / attempts, 1) if attempts else 0.0
+    if row:
+        attempts = row["attempts"]
+        solved = row["solved"]
+        mean_s = round(row["seconds"] / attempts, 1) if attempts else 0.0
+        complete = attempts > 0 and row["priced_attempts"] >= attempts and row["cost_cny"] > 0
         return with_sources(
             {
                 "status": "measured",
-                "source": ", ".join(bench["sources"]),
+                "measured_by": "bench",
+                "source": ", ".join(row["sources"]),
                 "scope": (
                     f"repo bench: {attempts} attempts, solve {solved}/{attempts},"
                     f" mean {mean_s}s"
@@ -869,9 +1008,37 @@ def evidence_for(
                     "solved": solved,
                     "solve_rate": round(solved / attempts, 3),
                     "mean_s": mean_s,
-                    "cost_cny": round(bench["cost_cny"], 4),
+                    "median_s": row["median_s"],
+                    "cost_cny": round(row["cost_cny"], 4),
+                    "cost_complete": complete,
+                    "priced_attempts": row["priced_attempts"],
+                    "tested_difficulty": row["tested_difficulty"],
                 },
-                "note": "measured on this repo's eval set",
+                "note": (
+                    "measured on this repo's eval set"
+                    + ("" if complete else "；价格数据不完整，成本按未知处理")
+                ),
+            }
+        )
+
+    # Local history is the only source that knows what this repo's tasks cost.
+    # It is still not a vision test (handled above), and its success rate only
+    # means "tests went green", so it is used when no controlled benchmark row
+    # exists for this route.
+    if hist["status"] == "measured":
+        stats = hist["stats"]
+        return with_sources(
+            {
+                "status": "measured",
+                "measured_by": "history",
+                "source": f"local run history (last {stats['runs']} finished runs)",
+                "scope": (
+                    f"本地历史：{stats['runs']} 次已结束 run，"
+                    f"有测试证据的 {stats['verified_samples']} 次里绿 "
+                    f"{stats['verified_green']} 次，中位耗时 {stats['median_s']}s"
+                ),
+                "stats": dict(stats),
+                "note": hist["note"],
             }
         )
 
@@ -881,6 +1048,7 @@ def evidence_for(
             return with_sources(
                 {
                     "status": "unknown",
+                    "measured_by": None,
                     "source": _AB_SOURCE,
                     "scope": "no vision benchmark",
                     "stats": stats,
@@ -890,6 +1058,7 @@ def evidence_for(
         return with_sources(
             {
                 "status": "measured",
+                "measured_by": "ab",
                 "source": _AB_SOURCE,
                 "scope": _AB_SCOPE,
                 "stats": stats,
@@ -909,6 +1078,7 @@ def evidence_for(
     return with_sources(
         {
             "status": status,
+            "measured_by": None,
             "source": caps["source"],
             "scope": (
                 f"only {hist['samples']} local run(s), below the {HISTORY_MIN} needed"
@@ -941,68 +1111,433 @@ def _route_spec(name: str) -> dict:
 # ---- recommend ---------------------------------------------------------
 
 
-def _choose(difficulty: int, kind: str, needs: list[str]) -> tuple[str, str]:
-    """The rule table. Returns (route, why-this-route)."""
-    if "vision" in needs:
-        return (
-            "opencode-gemini",
-            "任务需要看图/截图；六条路由里只有 opencode-gemini 被总账指定给多模态，"
-            "但那是操作约定，本仓库没有视觉评测。",
+def _capability_fit(route: str, difficulty: int, kind: str) -> float:
+    """How well the route's *declared* profile fits this task, 0-1.
+
+    Declared, not measured: this is the `_ROUTE_FIT` table. Outside the band a
+    route is declared for the fit decays, so a small-task route does not win a
+    refactor just because it is cheap.
+    """
+    spec = _ROUTE_FIT[route]
+    fit = float(spec["kinds"].get(kind, 0.3))
+    if difficulty > spec["ceiling"]:
+        fit *= max(0.25, 1.0 - 0.35 * (difficulty - spec["ceiling"]))
+    elif difficulty < spec["floor"]:
+        fit *= max(0.5, 1.0 - 0.15 * (spec["floor"] - difficulty))
+    return round(fit, 3)
+
+
+def _measure(route: str, evidence: dict) -> dict:
+    """The numbers scoring is allowed to use, and where each came from.
+
+    Bench numbers win over history when both exist: only the bench ran the
+    routes on the same tasks. `solve_rate` is left `None` unless the sample is
+    big enough to mean something, which is what keeps one bad run from
+    eliminating a route. A price is known only when it is positive and
+    complete; `cost: 0.0` from a provider without a price table is unknown,
+    not free.
+    """
+    caps = _ROUTE_CAPS[route]
+    out = {
+        "route": route,
+        "status": evidence.get("status") or "unknown",
+        "measured_by": evidence.get("measured_by") or "",
+        "solve_rate": None,
+        "solved": None,
+        "attempts": None,
+        "seconds": None,
+        "cost_cny": None,
+        "cost_known": False,
+        "tested_difficulty": None,
+        "declared_cost_tier": caps.get("cost_tier"),
+        "note": "",
+    }
+    if out["status"] == "unsupported":
+        out["note"] = evidence.get("note") or "unsupported"
+        return out
+
+    stats = evidence.get("stats") or {}
+    source = out["measured_by"]
+
+    if source == "bench":
+        notes: list[str] = []
+        out["solve_rate"] = _number(stats.get("solve_rate"))
+        out["solved"] = stats.get("solved")
+        out["attempts"] = stats.get("attempts")
+        out["seconds"] = _number(stats.get("median_s")) or _number(stats.get("mean_s"))
+        out["tested_difficulty"] = stats.get("tested_difficulty") or None
+        attempts = int(out["attempts"] or 0)
+        if attempts and attempts < HISTORY_MIN:
+            # Same guard as history: one sample is not a solve rate.
+            out["solve_rate"] = None
+            notes.append(f"bench 只有 {attempts} 次，solve 按未知处理")
+        total = _number(stats.get("cost_cny"))
+        if stats.get("cost_complete") and attempts and total and total > 0:
+            out["cost_cny"] = round(total / attempts, 6)
+            out["cost_known"] = True
+        elif total is not None:
+            notes.append("价格数据不完整，成本按未知处理")
+        if notes:
+            out["note"] = "；".join(notes)
+    elif source == "history":
+        verified = int(stats.get("verified_samples") or 0)
+        rate = _number(stats.get("verified_ok_rate"))
+        # One green/red run is not a solve rate. Below HISTORY_MIN the run
+        # history stays context, not a reason to drop the route.
+        if rate is not None and verified >= HISTORY_MIN:
+            out["solve_rate"] = rate
+            out["solved"] = round(rate * verified)
+            out["attempts"] = verified
+        out["seconds"] = _number(stats.get("median_s")) or _number(stats.get("mean_s"))
+        cny = (stats.get("cost") or {}).get("CNY") or {}
+        mean = _number(cny.get("mean"))
+        if mean is not None and mean > 0:
+            out["cost_cny"] = mean
+            out["cost_known"] = True
+    elif source == "ab":
+        # The A/B recorded speed and format checks, not a solve count.
+        out["seconds"] = _number(stats.get("mean_s"))
+    return out
+
+
+def _covers(measure: dict, difficulty: int) -> bool:
+    """Does this measurement actually cover a task this hard?"""
+    if measure.get("measured_by") == "bench":
+        return int(measure.get("tested_difficulty") or 0) >= difficulty
+    if measure.get("measured_by") == "history":
+        # History has no difficulty label; it can speak to small work only.
+        return difficulty <= 2
+    return False
+
+
+def _is_cheap(row: dict, cheapest: float | None) -> bool:
+    if row["cost_known"] and cheapest:
+        return row["cost_cny"] <= cheapest * _CHEAP_RATIO
+    tier = row["declared_cost_tier"]
+    return row["cost_cny"] is None and tier is not None and tier <= 2
+
+
+def _score_candidates(
+    difficulty: int, kind: str, measures: dict[str, dict]
+) -> tuple[list[dict], list[dict]]:
+    """Score every route and apply the guardrails. Pure: no DB, no files.
+
+    `score = capability_fit + measured_solve_bonus - cost_penalty
+    - time_penalty`. Cost and time are relative to the cheapest/fastest route
+    in this same pool; an unknown price takes the median penalty of the routes
+    that do have one, so "unknown" is neither free nor the worst.
+    """
+    rows: list[dict] = []
+    for route, measure in measures.items():
+        cap = _capability_fit(route, difficulty, kind)
+        rows.append(
+            {
+                "route": route,
+                "score": cap,
+                "capability_fit": cap,
+                "measured_solve_bonus": 0.0,
+                "cost_penalty": 0.0,
+                "time_penalty": 0.0,
+                "solve_rate": measure.get("solve_rate"),
+                "solved": measure.get("solved"),
+                "attempts": measure.get("attempts"),
+                "seconds": measure.get("seconds"),
+                "cost_cny": measure.get("cost_cny"),
+                "cost_known": bool(measure.get("cost_known")),
+                "measured_by": measure.get("measured_by") or "",
+                "tested_difficulty": measure.get("tested_difficulty"),
+                "covers_difficulty": _covers(measure, difficulty),
+                "declared_cost_tier": measure.get("declared_cost_tier"),
+                "cost_basis": "unknown",
+                "time_basis": "unknown",
+                "excluded": "",
+                "pool": False,
+                "note": measure.get("note") or "",
+            }
         )
-    if difficulty >= 4:
-        if kind == "ops":
-            return (
-                "claude",
-                "高难度 ops 需要判断影响面，claude 的元数据定位是跨文件改写/长上下文/设计权衡；"
-                "没有实测数据，属于值得先测的推荐。",
+        if measure.get("status") == "unsupported":
+            rows[-1]["excluded"] = measure.get("note") or "unsupported"
+
+    eligible = [row for row in rows if not row["excluded"]]
+    known_costs = [row["cost_cny"] for row in eligible if row["cost_known"] and row["cost_cny"]]
+    known_times = [row["seconds"] for row in eligible if row["seconds"] and row["seconds"] > 0]
+    cheapest = min(known_costs) if known_costs else None
+    fastest = min(known_times) if known_times else None
+
+    raw_cost: dict[str, float] = {}
+    raw_time: dict[str, float] = {}
+    for row in eligible:
+        if row["cost_known"] and cheapest:
+            raw_cost[row["route"]] = min(
+                _COST_CAP, _COST_WEIGHT * math.log2(row["cost_cny"] / cheapest)
             )
-        if kind in ("code", "analysis", "writing", "retrieval"):
-            return (
-                "claude",
-                "高难度任务需要跨文件推理和取舍，claude 的元数据定位正好是跨文件改写/"
-                "长上下文/设计权衡；但六条路由都没有高难度实测，这条依据薄弱。",
+        if row["seconds"] and fastest:
+            raw_time[row["route"]] = min(
+                _TIME_CAP, _TIME_WEIGHT * math.log2(row["seconds"] / fastest)
             )
-        return "claude", "高难度任务优先选元数据上最强的路由。"
-    if difficulty == 3:
-        if kind in ("code", "ops"):
-            return (
-                "codex",
-                "中等难度代码/ops 需要边改边跑命令，codex 的元数据定位是单点修复/"
-                "命令验证/快速迭代，成本档 2/3 比 claude 低。",
-            )
-        if kind == "analysis" and "reasoning" in needs:
-            return (
-                "claude",
-                "中等难度分析且需要推理，claude 的长上下文推理定位比便宜路由更合适；"
-                "但无实测。",
-            )
-        return (
-            "dsh",
-            "中等难度的写作/整理/检索不需要强代码能力；dsh 是已知成本档最低的路由，"
-            "元数据定位中文写作/知识整理/长文档。",
+    # A missing number takes the middle of the measured field, not zero.
+    neutral_cost = statistics.median(raw_cost.values()) if raw_cost else 0.0
+    neutral_time = statistics.median(raw_time.values()) if raw_time else 0.0
+
+    sensitivity = _PRICE_SENSITIVITY.get(difficulty, 0.4)
+    solve_weight = _SOLVE_WEIGHT.get(difficulty, 0.55)
+    for row in eligible:
+        row["cost_penalty"] = round(
+            raw_cost.get(row["route"], neutral_cost) * sensitivity, 3
         )
-    if kind == "code":
-        return (
-            "codex",
-            "低难度单点改动，codex 的元数据定位是单点修复/命令验证/快速迭代，"
-            "成本档 2/3；比 claude 便宜，比没测过的路由有更明确的定位。",
+        row["time_penalty"] = round(
+            raw_time.get(row["route"], neutral_time) * sensitivity, 3
         )
-    if kind == "ops":
-        return (
-            "codex",
-            "低难度 ops 需要执行命令并看结果，codex 的命令验证定位最贴合，成本档 2/3。",
+        if row["cost_known"]:
+            row["cost_basis"] = "measured"
+        elif known_costs:
+            row["cost_basis"] = "unknown (median of measured)"
+        else:
+            row["cost_basis"] = "unknown (no measured cost)"
+        if row["seconds"]:
+            row["time_basis"] = "measured"
+        elif known_times:
+            row["time_basis"] = "unknown (median of measured)"
+        else:
+            row["time_basis"] = "unknown (no measured time)"
+        rate = row["solve_rate"]
+        if rate is None:
+            bonus = 0.0
+        else:
+            discount = 1.0 if row["covers_difficulty"] else _OUT_OF_SCOPE
+            bonus = solve_weight * float(rate) * discount
+        row["measured_solve_bonus"] = round(bonus, 3)
+        row["score"] = round(
+            row["capability_fit"] + bonus - row["cost_penalty"] - row["time_penalty"], 3
         )
-    if kind == "analysis":
-        return (
-            "dsh",
-            "低难度分析/整理不需要强代码能力；dsh 成本档最低（1/3），"
-            "元数据定位中文写作/知识整理/长文档。",
+
+    rows.sort(
+        key=lambda row: (
+            -round(row["score"], 3),
+            0 if row["measured_by"] else 1,
+            row["route"],
         )
-    return (
-        "dsh",
-        "低难度写作/检索不需要强代码能力；dsh 成本档最低（1/3），"
-        "元数据定位中文写作/知识整理/长文档。",
     )
+
+    # ---- guardrails ----------------------------------------------------
+    guardrails: list[dict] = []
+    pool = list(eligible)
+
+    if difficulty <= 2:
+        qualified = [
+            row
+            for row in eligible
+            if row["solve_rate"] is not None
+            and float(row["solve_rate"]) >= _CHEAP_SOLVE
+            and _is_cheap(row, cheapest)
+        ]
+        if qualified:
+            qualified_routes = {row["route"] for row in qualified}
+            dropped = [
+                row["route"] for row in eligible if row["route"] not in qualified_routes
+            ]
+            pool = qualified
+            guardrails.append(
+                {
+                    "rule": "low-difficulty-cheap",
+                    "reason": (
+                        f"难度 {difficulty}/5：solve 至少 {_CHEAP_SOLVE:.2f} 的便宜路由优先，"
+                        "不用贵路由改错别字"
+                    ),
+                    "kept": sorted(qualified_routes),
+                    "dropped": dropped,
+                }
+            )
+
+    if difficulty >= 4 and pool:
+        covered = [
+            row
+            for row in pool
+            if row["solve_rate"] is not None and row["covers_difficulty"]
+        ]
+        if len(covered) >= 2:
+            covered.sort(key=lambda row: float(row["solve_rate"]), reverse=True)
+            top = float(covered[0]["solve_rate"])
+            second = float(covered[1]["solve_rate"])
+            if top - second >= _HIGH_SOLVE_GAP:
+                proven_routes = {
+                    row["route"]
+                    for row in covered
+                    if float(row["solve_rate"]) >= top - 1e-9
+                }
+                narrowed = [row for row in pool if row["route"] in proven_routes]
+                if narrowed:
+                    dropped = [
+                        row["route"]
+                        for row in pool
+                        if row["route"] not in proven_routes
+                    ]
+                    pool = narrowed
+                    guardrails.append(
+                        {
+                            "rule": "high-difficulty-proven",
+                            "reason": (
+                                f"难度 {difficulty}/5：{covered[0]['route']} 实测 solve "
+                                f"{top:.2f}，比次高 {second:.2f} 高 "
+                                f"{top - second:.2f}，贵也选它"
+                            ),
+                            "kept": sorted(proven_routes),
+                            "dropped": dropped,
+                        }
+                    )
+
+    if not pool:
+        # Every route was excluded (should not happen with the built-ins). Fall
+        # back to declaration order rather than raising during dispatch.
+        pool = eligible or rows
+        guardrails.append(
+            {
+                "rule": "fallback",
+                "reason": "没有可用候选，退回声明顺序",
+                "kept": [row["route"] for row in pool],
+                "dropped": [],
+            }
+        )
+
+    kept = {row["route"] for row in pool}
+    for row in rows:
+        row["pool"] = row["route"] in kept
+    return rows, guardrails
+
+
+def _compare(winner: dict, rival: dict) -> str:
+    """One sentence comparing the winner with the next-best route."""
+    clauses: list[str] = []
+    if abs(winner["capability_fit"] - rival["capability_fit"]) >= 0.05:
+        clauses.append(
+            f"能力声明 {winner['capability_fit']:.2f} vs {rival['capability_fit']:.2f}"
+        )
+    measured: list[str] = []
+    if winner["seconds"] and rival["seconds"]:
+        ratio = rival["seconds"] / winner["seconds"]
+        if ratio >= 1.05:
+            measured.append(f"快 {ratio:.1f} 倍")
+        elif ratio <= 0.95:
+            measured.append(f"慢 {1 / ratio:.1f} 倍")
+        else:
+            measured.append("耗时相近")
+    if winner["cost_known"] and rival["cost_known"]:
+        ratio = rival["cost_cny"] / winner["cost_cny"]
+        if ratio >= 1.05:
+            measured.append(f"便宜 {ratio:.1f} 倍")
+        elif ratio <= 0.95:
+            measured.append(f"贵 {1 / ratio:.1f} 倍")
+        else:
+            measured.append("价格相近")
+    if winner["solve_rate"] is not None and rival["solve_rate"] is not None:
+        if abs(winner["solve_rate"] - rival["solve_rate"]) < 0.01:
+            measured.append(f"同样 {winner['solved']}/{winner['attempts']}")
+        else:
+            measured.append(
+                f"solve {winner['solved']}/{winner['attempts']}"
+                f" vs {rival['solved']}/{rival['attempts']}"
+            )
+    if measured:
+        clauses.append(f"{winner['route']} " + "、".join(measured))
+    scope = max(
+        int(winner.get("tested_difficulty") or 0), int(rival.get("tested_difficulty") or 0)
+    )
+    if (
+        winner["solve_rate"] is not None
+        and not (winner["covers_difficulty"] and rival["covers_difficulty"])
+        and scope
+    ):
+        clauses.append(f"bench 只测到难度 {scope}，solve 已按 {_OUT_OF_SCOPE:.2f} 折减")
+    if not clauses:
+        clauses.append(
+            f"{winner['route']} 与 {rival['route']} 都缺同口径实测，按能力声明与成本档排序"
+        )
+    return "；".join(clauses)
+
+
+def _explain(rows: list[dict], winner: dict, rival: dict | None) -> str:
+    scores = " / ".join(f"{row['route']} {row['score']:.2f}" for row in rows if not row["excluded"])
+    text = scores + (f"（{_compare(winner, rival)}）" if rival else "")
+    excluded: dict[str, list[str]] = {}
+    for row in rows:
+        if row["excluded"]:
+            excluded.setdefault(row["excluded"], []).append(row["route"])
+    if excluded:
+        text += "；" + "、".join(
+            f"{'/'.join(routes)}（排除：{reason}）" for reason, routes in excluded.items()
+        )
+    return text
+
+
+def _fit_sentence(winner: dict, rival: dict | None) -> str:
+    text = (
+        f"打分 {winner['route']} {winner['score']:.2f}"
+        f"（能力 {winner['capability_fit']:.2f} + solve {winner['measured_solve_bonus']:.2f}"
+        f" - 成本 {winner['cost_penalty']:.2f} - 耗时 {winner['time_penalty']:.2f}）"
+    )
+    if rival:
+        text += f"；次选 {rival['route']} {rival['score']:.2f}"
+    return text
+
+
+def _live_measures(
+    need: str | None = None, present: list[str] | None = None
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    """(scoring facts, evidence blocks) for every route present on this machine."""
+    names = present or _present_routes()
+    bench = _bench_evidence()
+    measures: dict[str, dict] = {}
+    table: dict[str, dict] = {}
+    for name in names:
+        history = _run_history(name)
+        evidence = evidence_for(name, need, history, bench)
+        table[name] = evidence
+        measures[name] = _measure(name, evidence)
+    return measures, table
+
+
+def _choose(
+    difficulty: int, kind: str, measures: dict[str, dict] | None = None
+) -> tuple[str, str, dict]:
+    """Score the routes, apply guardrails, return (route, why, scoring).
+
+    `measures` maps route name to one fact dict (`_measure`'s output). A caller
+    with the old `(difficulty, kind, needs)` shape may pass the needs list; it
+    is ignored and the live facts are read, because needs are already reflected
+    in each route's evidence status.
+    """
+    if isinstance(measures, (list, tuple, set)):
+        measures = None
+    if measures is None:
+        measures, _ = _live_measures()
+    rows, guardrails = _score_candidates(difficulty, kind, measures)
+    pool = [row for row in rows if row["pool"]]
+    if not pool:
+        pool = [row for row in rows if not row["excluded"]] or rows
+    winner = pool[0]
+    rival = next((row for row in pool if row["route"] != winner["route"]), None)
+    scoring = {
+        "version": 1,
+        "formula": (
+            "score = capability_fit + measured_solve_bonus - cost_penalty - time_penalty"
+        ),
+        "weights": {
+            "solve_by_difficulty": dict(_SOLVE_WEIGHT),
+            "cost_per_log2": _COST_WEIGHT,
+            "cost_cap": _COST_CAP,
+            "time_per_log2": _TIME_WEIGHT,
+            "time_cap": _TIME_CAP,
+            "price_sensitivity_by_difficulty": dict(_PRICE_SENSITIVITY),
+            "out_of_scope_solve": _OUT_OF_SCOPE,
+            "cheap_ratio": _CHEAP_RATIO,
+            "cheap_solve": round(_CHEAP_SOLVE, 3),
+        },
+        "candidates": rows,
+        "guardrails": guardrails,
+        "winner": winner["route"],
+        "explain": _explain(rows, winner, rival),
+    }
+    return winner["route"], _fit_sentence(winner, rival), scoring
 
 
 def _alternative_pool(primary: str, kind: str, needs: list[str]) -> list[str]:
@@ -1031,10 +1566,11 @@ def _capability(route: str) -> str:
     return f"{cap['label']}；{tier}；元数据：{cap['strengths']}"
 
 
-def _why_alternative(route: str, need: str | None, history: dict | None = None) -> str:
-    evidence = evidence_for(route, need, history)
+def _why_alternative(route: str, evidence: dict) -> str:
     if evidence["status"] == "measured":
         return f"{_capability(route)}。有实测：{evidence['scope']}，注意样本范围。"
+    if evidence["status"] == "unsupported":
+        return f"{_capability(route)}。不适用：{evidence['note']}。"
     return f"{_capability(route)}。无实测（unknown）：{evidence['note']}。"
 
 
@@ -1079,14 +1615,14 @@ def recommend(assessment: dict) -> dict:
     present = _present_routes()
     # One query per route, not one per mention: `unmeasured` alone would ask
     # for every route and then the alternatives would ask again.
-    histories = {name: _run_history(name) for name in present}
-    primary, fit = _choose(difficulty, kind, needs)
+    measures, table = _live_measures(need, present)
+    primary, fit, scoring = _choose(difficulty, kind, measures)
     if primary not in present:
         primary = present[0]
 
-    evidence = evidence_for(primary, need, histories.get(primary))
+    evidence = table[primary]
     need_text = ", ".join(needs) if needs else "无特殊能力"
-    rationale = f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}"
+    rationale = f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}。"
     if evidence["status"] == "measured":
         rationale += f" 实测范围：{evidence['scope']}。"
     else:
@@ -1099,17 +1635,21 @@ def recommend(assessment: dict) -> dict:
         alternatives.append(
             {
                 "route": route,
-                "why": _why_alternative(route, need, histories.get(route)),
-                "evidence": evidence_for(route, need, histories.get(route)),
+                "why": _why_alternative(route, table[route]),
+                "evidence": table[route],
             }
         )
-        if len(alternatives) >= 3:
-            break
+    # Same order as the score line: the strongest alternative is the one a
+    # reader wants to compare against, not whichever the declaration list
+    # happens to name first.
+    scored = {row["route"]: row for row in scoring.get("candidates") or []}
+    alternatives.sort(
+        key=lambda alt: (-(scored.get(alt["route"]) or {}).get("score", -1.0), alt["route"])
+    )
+    alternatives = alternatives[:3]
 
     unmeasured = [
-        name
-        for name in present
-        if evidence_for(name, need, histories.get(name))["status"] != "measured"
+        name for name in present if table[name]["status"] != "measured"
     ]
     return {
         "route": primary,
@@ -1118,6 +1658,7 @@ def recommend(assessment: dict) -> dict:
         "confidence": _recommendation_confidence(assessment, evidence),
         "evidence": evidence,
         "unmeasured": unmeasured,
+        "scoring": scoring,
         "route_spec": _route_spec(primary),
         "basis": assessment.get("basis") or "rules-only",
         "assessment": {
@@ -1170,6 +1711,9 @@ def record(
         "requested_route": requested_route or chosen_route or "",
         "assess": assess_result,
         "recommend": recommend_result,
+        # First-class copy of the scoring table: "why not codex?" is a query
+        # against this, not a re-run of the recommendation.
+        "scoring": (recommend_result or {}).get("scoring") or {},
     }
     if fallback:
         payload["fallback"] = fallback
