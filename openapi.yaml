@@ -1,0 +1,1523 @@
+openapi: 3.1.0
+info:
+  title: Nodus HTTP API
+  version: 0.4.0
+  summary: Nodus daemon 的 HTTP + SSE 接口
+  description: |
+    这份契约对应 `nodus/server.py` 里实际存在的每一条路由，默认地址
+    `http://127.0.0.1:4199`（`nodus up` 或 `python -m nodus serve`）。
+
+    鉴权：除公开端点外，所有请求都要带
+    `Authorization: Bearer <token>`。token 存在 `~/.nodus/token`
+    （Windows 为 `%USERPROFILE%\.nodus\token`；`NODUS_HOME` 可改根目录），
+    首次运行 daemon 时自动生成。token 不对返回 `401 {"error":"unauthorized"}`。
+
+    公开端点（`security: []`）：`GET /`、`GET /health`、`GET /pet`、
+    `GET /favicon.ico`、`GET /openapi.yaml`。`/` 是看板页面，页面里带 token；
+    `/pet` 给拿不到 token 的桌面小组件轮询。
+
+    `GET /events` 是 EventSource 端点，浏览器不能给它设请求头，所以额外接受
+    `?token=<token>`（header 和 query 二选一）。
+
+    约定：所有时间戳都是 Unix epoch 秒（number）；未匹配的路径返回
+    `404 {"error":"not found"}`；handler 内未捕获异常返回
+    `500 {"error":"internal error"}`。POST 的 JSON 解析失败返回
+    `400 {"error":"invalid json"}`，请求体超过 1,000,000 字节返回
+    `413 {"error":"body too large"}`。
+
+    安全边界：daemon 默认只绑定环回地址，非环回绑定需要
+    `NODUS_ALLOW_REMOTE=1`。HTTP 层只有这一枚本地 token，没有多用户/RBAC。
+  contact:
+    name: Nodus
+servers:
+  - url: http://127.0.0.1:4199
+    description: 默认 daemon 地址（端口可用 --port 改）
+security:
+  - bearerAuth: []
+tags:
+  - name: public
+    description: 不需要 Authorization 的端点（仅环回监听）
+  - name: board
+  - name: catalog
+  - name: tasks
+  - name: runs
+  - name: pipelines
+  - name: proposals
+  - name: events
+paths:
+  /:
+    get:
+      tags: [public]
+      operationId: getBoardPage
+      summary: 看板 HTML 页面
+      description: |
+        返回内嵌 token 的单页看板。公开是刻意的：页面必须先加载，才能带着
+        token 去请求下面的 JSON 端点。
+      security: []
+      responses:
+        '200':
+          description: 看板 HTML
+          content:
+            text/html:
+              schema:
+                type: string
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health:
+    get:
+      tags: [public]
+      operationId: getHealth
+      summary: 存活探针
+      security: []
+      responses:
+        '200':
+          description: daemon 在跑
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pet:
+    get:
+      tags: [public]
+      operationId: getPet
+      summary: 桌宠/状态灯状态
+      description: |
+        只读状态，给桌面小组件轮询。公开的原因和 `/health` 一样：桌宠没法持有
+        token。mood 优先级为 error > attention > working > idle。
+      security: []
+      responses:
+        '200':
+          description: 当前状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PetState'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /favicon.ico:
+    get:
+      tags: [public]
+      operationId: getFavicon
+      summary: 空 favicon
+      security: []
+      responses:
+        '204':
+          description: 没有图标，空响应体
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /openapi.yaml:
+    get:
+      tags: [public]
+      operationId: getOpenApiDocument
+      summary: 这份 OpenAPI 文档
+      description: |
+        直接返回仓库根目录的 `openapi.yaml`。公开：schema 泄露的风险低于
+        用不起来的成本，客户端可以直接拉契约生成代码。
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 文档（YAML）
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /board:
+    get:
+      tags: [board]
+      operationId: getBoard
+      summary: 首屏聚合：在跑的 run、等人的决定、今日花费
+      description: |
+        看板第一屏的唯一数据源。`running` 只含 queued/running 的 run；
+        `decisions` 只列前几条（提案 5、红/失败各 3），完整数量看
+        `decision_counts`。`today` 从本地零点起算。
+      responses:
+        '200':
+          description: 首屏状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Board'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /agents:
+    get:
+      tags: [catalog]
+      operationId: listAgents
+      summary: 已注册的 agent CLI
+      description: |
+        `ready` 表示这台机器上能跑（可执行文件存在、不用端点凭据）；
+        `missing` 是具体缺什么。端点凭据缺失不算在 `ready` 里。
+      responses:
+        '200':
+          description: agent 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /providers:
+    get:
+      tags: [catalog]
+      operationId: listProviders
+      summary: 已注册的模型端点
+      description: |
+        `ready` 只看凭据是否齐全；`pricing` 是每百万 token 的单价，
+        没有标价时为 null。
+      responses:
+        '200':
+          description: 端点列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Provider'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /routes:
+    get:
+      tags: [catalog]
+      operationId: listRoutes
+      summary: 路由组（agent + 有序 provider 回退链）
+      description: |
+        `problems` 汇总路由本身和每个 provider 的缺失项；`ready` 为
+        `problems` 为空。
+      responses:
+        '200':
+          description: 路由组列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RouteInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /profiles:
+    get:
+      tags: [catalog]
+      operationId: listProfiles
+      summary: 配置快照
+      description: 没有 profile 文件时返回一个名为 `default` 的空 profile。
+      responses:
+        '200':
+          description: profile 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Profile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: 最近 50 个任务
+      responses:
+        '200':
+          description: 任务列表（按 created_at 倒序）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: 建任务
+      description: 所有字段都可省略；`goal` 为空也能建。`title` 为空时取 `goal` 前 60 字。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreate'
+      responses:
+        '201':
+          description: 建好的任务
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/tasks/{id}":
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: 按 id 取任务
+      description: 任务不存在时返回 `200 {}`（不是 404），调用方要自己判断空对象。
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: 任务记录；不存在时为空对象
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Task'
+                  - $ref: '#/components/schemas/EmptyObject'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /runs:
+    get:
+      tags: [runs]
+      operationId: listRuns
+      summary: 最近 50 个 run
+      parameters:
+        - name: task_id
+          in: query
+          required: false
+          description: 只取这个任务的 run
+          schema:
+            type: string
+      responses:
+        '200':
+          description: run 列表（按 started_at 倒序），每条带 verify 标记
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RunWithVerify'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [runs]
+      operationId: startRun
+      summary: 起一个 run
+      description: |
+        `task_id` 不存在、route 不可用、cwd 已被别的 run 占用时返回
+        `400 {"error": "..."}`。`wait` 大于 0 会阻塞 HTTP 请求直到 run
+        结束（或超时），别在 UI 的普通请求里用。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCreate'
+      responses:
+        '201':
+          description: 已排队的 run
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          description: 任务/路由/目录锁问题，或 JSON 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/runs/{id}":
+    get:
+      tags: [runs]
+      operationId: getRun
+      summary: 按 id 取 run
+      description: run 不存在时返回 `200 {}`（不是 404）。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: run 记录；不存在时为空对象
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Run'
+                  - $ref: '#/components/schemas/EmptyObject'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/runs/{id}/events":
+    get:
+      tags: [runs, events]
+      operationId: getRunEvents
+      summary: run 的事件流（JSON 或 SSE）
+      description: |
+        默认返回从 `after` 之后最多 500 条事件（JSON 数组）。`stream=1` 或
+        `stream=true` 时改为 SSE：先补发 backlog，再推实时事件，帧格式是
+        `data: <Event JSON>\n\n`；约每 15 秒发一次 `: ping`。SSE 连接会一直
+        挂着。`after` 不是整数会 500。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - name: after
+          in: query
+          required: false
+          description: 只取 seq 大于它的 backlog
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: stream
+          in: query
+          required: false
+          description: '`1` 或 `true` 走 SSE，其余值走 JSON'
+          schema:
+            type: string
+            enum: ['0', '1', 'true']
+            default: '0'
+      responses:
+        '200':
+          description: 事件数组，或一条 SSE 流
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/runs/{id}/artifacts":
+    get:
+      tags: [runs]
+      operationId: listRunArtifacts
+      summary: run 的产物文件
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: artifact 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Artifact'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/runs/{id}/handoff":
+    get:
+      tags: [runs]
+      operationId: getRunHandoff
+      summary: run 所属任务的最新交接单
+      description: |
+        取该 run 的 task 最近一份 handoff 并读出正文。run 或 handoff 不存在时
+        返回 `{"path": null, "text": ""}`；文件读不了时 text 为空串。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 交接单路径与正文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Handoff'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/runs/{id}/stop":
+    post:
+      tags: [runs]
+      operationId: stopRun
+      summary: 杀掉 run 的进程树
+      description: |
+        run 不在当前进程的 `procs` 表里时返回 `{"stopped": false}`，但仍然
+        是 HTTP 200；不会把数据库状态直接改成 failed。
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: 是否真的找到了进程并杀掉
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /pipelines:
+    get:
+      tags: [pipelines]
+      operationId: listPipelines
+      summary: 最近的 pipeline（默认 20 条）
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: 按状态精确过滤；空串返回全部
+          schema:
+            type: string
+            enum: ['', queued, running, completed, failed, stopped]
+      responses:
+        '200':
+          description: pipeline 列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pipeline'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [pipelines]
+      operationId: submitPipeline
+      summary: 提交 tdd / review / fix 作业
+      description: |
+        pipeline 在 daemon 的后台线程里跑，接口只负责落一行记录并立即返回
+        201。参数错误（例如缺 target_run_id）通常在后台线程里才暴露，落到
+        pipeline 的 `status=failed` 和 `error`，不会变成这里的 4xx。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PipelineCreate'
+      responses:
+        '201':
+          description: 已提交的 pipeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '400':
+          description: 未知 kind，或 JSON 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/pipelines/{id}":
+    get:
+      tags: [pipelines]
+      operationId: getPipeline
+      summary: 按 id 取 pipeline
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+      responses:
+        '200':
+          description: pipeline 记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pipeline'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/pipelines/{id}/events":
+    get:
+      tags: [pipelines, events]
+      operationId: getPipelineEvents
+      summary: pipeline 的事件（JSON 数组）
+      description: |
+        和 run events 的区别是这里没有 SSE；`after` 之后最多 500 条。
+        pipeline 不存在时 404（和 `/pipelines/{id}` 一致）。
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+        - name: after
+          in: query
+          required: false
+          description: 只取 seq 大于它的记录
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: 事件数组
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/pipelines/{id}/stop":
+    post:
+      tags: [pipelines]
+      operationId: stopPipeline
+      summary: 取消 pipeline
+      description: |
+        标记取消并停掉当前子 run。无论 id 是否存在都返回
+        `{"stopped": true}`（200）；不校验归属。
+      parameters:
+        - $ref: '#/components/parameters/PipelineId'
+      responses:
+        '200':
+          description: 已请求取消
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /proposals:
+    get:
+      tags: [proposals]
+      operationId: listProposals
+      summary: 提案列表
+      parameters:
+        - name: all
+          in: query
+          required: false
+          description: |
+            任意非空值（包括 `0`）都会返回全部状态；省略或空串只返回 open。
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 提案列表（按 created_at 倒序）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Proposal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/proposals/{id}/merge":
+    post:
+      tags: [proposals]
+      operationId: mergeProposal
+      summary: 把提案分支合入主树
+      description: |
+        在目标仓库的写锁下执行 `git merge --no-ff`。成功时删掉 worktree 和
+        分支、把提案标成 merged；冲突或锁被占用时主树不动，返回 409 且
+        `ok=false`。提案不存在返回 404。
+      parameters:
+        - $ref: '#/components/parameters/ProposalId'
+      responses:
+        '200':
+          description: 合并成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 没合进去（冲突或主树被占用），提案保持 open
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeResult'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  "/proposals/{id}/reject":
+    post:
+      tags: [proposals]
+      operationId: rejectProposal
+      summary: 丢弃提案
+      description: 删 worktree 和分支，把提案标成 rejected。提案不存在返回 404。
+      parameters:
+        - $ref: '#/components/parameters/ProposalId'
+      responses:
+        '200':
+          description: 已丢弃
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RejectResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: 全局事件流（SSE）
+      description: |
+        只推订阅之后的实时事件，不补历史。EventSource 不能设请求头，所以
+        token 走 `?token=`（也接受 Authorization 头）。每帧
+        `data: <Event JSON>\n\n`，空闲时约每 15 秒发 `: ping`。
+      security:
+        - bearerAuth: []
+        - eventsToken: []
+      parameters:
+        - $ref: '#/components/parameters/StreamToken'
+      responses:
+        '200':
+          description: SSE 流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `~/.nodus/token` 的内容（Windows 为
+        `%USERPROFILE%\.nodus\token`；`NODUS_HOME` 可改根目录）。请求头写法
+        `Authorization: Bearer <token>`。首次启动 daemon 时自动生成。
+    eventsToken:
+      type: apiKey
+      in: query
+      name: token
+      description: |
+        `/events` 专用：EventSource 不能设置 Authorization 头，所以允许把
+        同一个 token 放在查询参数里。其他端点不接受 query token。
+
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: 任务 id（`task-...`）或任意字符串；不存在返回空对象
+      schema:
+        type: string
+    RunId:
+      name: id
+      in: path
+      required: true
+      description: run id（`run-...`）
+      schema:
+        type: string
+    PipelineId:
+      name: id
+      in: path
+      required: true
+      description: pipeline id（`pipe-...`）
+      schema:
+        type: string
+    ProposalId:
+      name: id
+      in: path
+      required: true
+      description: 提案 id（`prop-...`）
+      schema:
+        type: string
+    StreamToken:
+      name: token
+      in: query
+      required: false
+      description: '本地 token；省略时必须带 `Authorization: Bearer`'
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: token 缺失或不匹配
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BadRequest:
+      description: JSON 无效或 Content-Length 无法解析
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PayloadTooLarge:
+      description: 请求体超过 1,000,000 字节
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 路径或资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: handler 内未捕获异常；细节只写进 `~/.nodus/daemon.log`
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          examples: [unauthorized, 'not found', 'invalid json', 'body too large', 'internal error']
+
+    EmptyObject:
+      type: object
+      description: 资源不存在时接口返回的空对象
+      maxProperties: 0
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [ok, version, profile]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        version:
+          type: string
+          examples: [0.4.0]
+        profile:
+          type: string
+          description: 当前 active profile
+
+    PetState:
+      type: object
+      additionalProperties: false
+      required: [mood, bubble, running, failed, red, proposals, cost, updated_at]
+      properties:
+        mood:
+          type: string
+          enum: [error, attention, working, idle]
+        bubble:
+          type: string
+          description: 一句人话
+        running:
+          type: integer
+          description: queued + running 的 run 数
+        failed:
+          type: integer
+          description: 最近 10 分钟内失败的 run 数
+        red:
+          type: integer
+          description: 最近 10 分钟内测试红的 run 数
+        proposals:
+          type: integer
+          description: open 提案数
+        cost:
+          type: object
+          description: 最近 50 个 run 里已计价的花费，按币种分组
+          additionalProperties:
+            type: number
+        updated_at:
+          type: number
+          description: 计算时的 epoch 秒
+
+    Agent:
+      type: object
+      required: [name, vendor, protocols, ready, missing]
+      properties:
+        name:
+          type: string
+        vendor:
+          type: string
+        protocols:
+          type: array
+          description: 这个 CLI 能说的协议
+          items:
+            type: string
+        ready:
+          type: boolean
+        missing:
+          type: array
+          description: 不可用的原因；空数组表示可用
+          items:
+            type: string
+
+    Pricing:
+      type: object
+      additionalProperties: false
+      required: [input, output, cache_read, currency]
+      properties:
+        input:
+          type: number
+          description: 每百万 input token 的单价
+        output:
+          type: number
+        cache_read:
+          type: number
+        currency:
+          type: string
+          examples: [USD, CNY]
+
+    Provider:
+      type: object
+      required: [name, protocol, base_url, model, tiers, pricing, meter, note, ready, missing]
+      properties:
+        name:
+          type: string
+        protocol:
+          type: string
+        base_url:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        tiers:
+          type: object
+          additionalProperties:
+            type: string
+        pricing:
+          oneOf:
+            - $ref: '#/components/schemas/Pricing'
+            - type: 'null'
+        meter:
+          type: [string, 'null']
+        note:
+          type: string
+        ready:
+          type: boolean
+        missing:
+          type: array
+          description: 缺的凭据/配置项
+          items:
+            type: string
+
+    RouteInfo:
+      type: object
+      required: [name, agent, providers, model, effort, ready, problems]
+      properties:
+        name:
+          type: string
+        agent:
+          type: string
+        providers:
+          type: array
+          description: 有序回退链
+          items:
+            type: string
+        model:
+          type: [string, 'null']
+        effort:
+          type: [string, 'null']
+        ready:
+          type: boolean
+        problems:
+          type: array
+          items:
+            type: string
+
+    Profile:
+      type: object
+      required: [name, route, model, effort, created_at, active]
+      properties:
+        name:
+          type: string
+        route:
+          type: [string, 'null']
+        model:
+          type: [string, 'null']
+        effort:
+          type: [string, 'null']
+        created_at:
+          type: number
+        active:
+          type: boolean
+
+    Task:
+      type: object
+      description: '`task` 表的一行；`budget_json` 是 JSON 字符串，不是对象。'
+      required: [id, workspace_id, title, goal, acceptance, status, created_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        session_id:
+          type: [string, 'null']
+        title:
+          type: string
+        goal:
+          type: string
+        acceptance:
+          type: string
+        status:
+          type: string
+          enum: [open, done, needs_review, failed]
+        budget_json:
+          type: [string, 'null']
+          description: JSON 编码的预算；目前没有写入方
+        created_at:
+          type: number
+
+    TaskCreate:
+      type: object
+      properties:
+        goal:
+          type: string
+          default: ''
+        acceptance:
+          type: string
+          default: ''
+        session_id:
+          type: [string, 'null']
+          description: 省略时自动建一个 session
+        title:
+          type: string
+          default: ''
+          description: 省略时取 goal 前 60 字
+
+    Run:
+      type: object
+      description: |
+        `run` 表的一行。`usage_json`、`session_ref_json` 是 JSON 字符串，
+        需要客户端二次解析；`usage_json` 里可能有 input_tokens、
+        output_tokens、cache_read、cost、currency、cost_basis。
+      required: [id, workspace_id, agent, status, cwd]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        task_id:
+          type: string
+        agent:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        parent_run_id:
+          type: [string, 'null']
+        cwd:
+          type: string
+        note:
+          type: string
+        effort:
+          type: string
+        model:
+          type: [string, 'null']
+        route:
+          type: [string, 'null']
+        provider:
+          type: [string, 'null']
+        profile:
+          type: [string, 'null']
+        session_ref_json:
+          type: [string, 'null']
+        usage_json:
+          type: [string, 'null']
+        owner_pid:
+          type: [integer, 'null']
+        owner_host:
+          type: [string, 'null']
+        started_at:
+          type: [number, 'null']
+        ended_at:
+          type: [number, 'null']
+        error:
+          type: [string, 'null']
+
+    RunWithVerify:
+      allOf:
+        - $ref: '#/components/schemas/Run'
+        - type: object
+          required: [verify]
+          properties:
+            verify:
+              type: string
+              description: 执行证据，不参与 run.status
+              enum: [ok, red, none]
+
+    RunCreate:
+      type: object
+      required: [task_id]
+      properties:
+        task_id:
+          type: string
+        route:
+          type: string
+          default: claude
+          description: 路由组名
+        agent:
+          type: string
+          description: '`route` 的旧名字，仅在 route 缺失时使用'
+        cwd:
+          type: [string, 'null']
+          description: 工作目录；省略时用 daemon 进程的 cwd
+        note:
+          type: string
+          default: ''
+        effort:
+          type: string
+          default: ''
+        model:
+          type: string
+          default: ''
+        profile:
+          type: string
+          default: ''
+        provider:
+          type: string
+          default: ''
+          description: 指定端点时覆盖回退链（用于接续会话）
+        parent_run_id:
+          type: [string, 'null']
+        session_id:
+          type: string
+          default: ''
+        session_mode:
+          type: string
+          enum: [resume, fork]
+          default: resume
+        wait:
+          type: number
+          default: 0
+          description: 大于 0 时阻塞这么多秒等 run 结束
+        verify:
+          type: [boolean, 'null']
+          description: null 表示按全局 auto_verify 策略决定
+        propose:
+          type: boolean
+          default: false
+          description: 在独立 worktree 里跑，产出提案
+
+    Event:
+      type: object
+      description: |
+        事件表的 HTTP 形状。`payload` 的结构随 `type` 变化（run.started、
+        run.attempt、run.fallback、usage、verify.green/red、run.completed、
+        run.failed、pipeline.* 等）；数据库里的 `version` 列不在响应里。
+      required: [run_id, seq, type, payload, ts]
+      properties:
+        run_id:
+          type: string
+          description: run id；pipeline 事件里是 pipeline id
+        seq:
+          type: integer
+        type:
+          type: string
+          examples: [run.started, run.attempt, usage, verify.green, verify.red]
+        payload:
+          type: object
+          additionalProperties: true
+        ts:
+          type: number
+
+    Artifact:
+      type: object
+      required: [id, workspace_id, run_id, task_id, kind, path, hash, created_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        run_id:
+          type: string
+        task_id:
+          type: string
+        kind:
+          type: string
+          examples: [file, handoff, verify, review]
+        path:
+          type: string
+        rel_path:
+          type: string
+        hash:
+          type: string
+        summary:
+          type: string
+        created_at:
+          type: number
+
+    Handoff:
+      type: object
+      additionalProperties: false
+      required: [path, text]
+      properties:
+        path:
+          type: [string, 'null']
+          description: 交接单文件路径；没有交接单时为 null
+        text:
+          type: string
+          description: 文件正文；读不到时为空串
+
+    StopResult:
+      type: object
+      additionalProperties: false
+      required: [stopped]
+      properties:
+        stopped:
+          type: boolean
+
+    ProposalFile:
+      type: object
+      additionalProperties: false
+      required: [path, added, removed]
+      properties:
+        path:
+          type: string
+        added:
+          type: integer
+        removed:
+          type: integer
+
+    Proposal:
+      type: object
+      description: |
+        `proposal` 表的一行。`files` 已解析成数组；`files_json` 仍是原始
+        JSON 字符串，同时返回。
+      required: [id, workspace_id, run_id, task_id, repo, branch, status, files, created_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        run_id:
+          type: string
+        task_id:
+          type: string
+        repo:
+          type: string
+        branch:
+          type: string
+        worktree:
+          type: string
+        base:
+          type: string
+        patch_path:
+          type: string
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProposalFile'
+        files_json:
+          type: string
+          description: JSON 编码的文件列表
+        stat:
+          type: string
+          examples: ['3 file(s), +120 −4']
+        status:
+          type: string
+          enum: [open, merged, rejected]
+        created_at:
+          type: number
+        closed_at:
+          type: [number, 'null']
+
+    MergeResult:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        commit:
+          type: string
+          description: 成功时的 merge commit（短 hash）
+        branch:
+          type: string
+          description: 成功时被合入的分支
+        reason:
+          type: string
+          description: 失败原因（含冲突/锁占用）
+        conflict:
+          type: boolean
+          description: 失败是否由 git 冲突导致
+
+    RejectResult:
+      type: object
+      additionalProperties: false
+      required: [ok, proposal, status]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        proposal:
+          type: string
+        status:
+          type: string
+          const: rejected
+
+    Pipeline:
+      type: object
+      description: |
+        `pipeline` 表的一行。`params_json` 和 `result_json` 是 JSON 字符串，
+        这个接口不替客户端解析。
+      required: [id, workspace_id, kind, status, created_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        kind:
+          type: string
+          enum: [tdd, review, fix]
+        label:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed, stopped]
+        params_json:
+          type: string
+        result_json:
+          type: [string, 'null']
+        error:
+          type: [string, 'null']
+        created_at:
+          type: number
+
+    PipelineCreate:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [tdd, review, fix]
+        params:
+          type: object
+          additionalProperties: true
+          description: |
+            按 kind 传给对应入口：
+            - tdd: `task_id`、`cwd`（必填），可选 `writer`、`impl`、
+              `test_cmd`、`retries`、`dry_run`、`review`、`reviewer`。
+            - review: `target_run_id`（必填），可选 `by`、`focus`、
+              `scope`、`timeout`、`dry_run`。
+            - fix: `target_run_id`（必填），可选 `by`、`rounds`、
+              `review_first`、`timeout`。
+            这里不做参数校验，错误会落到 pipeline 的 status/error。
+          default: {}
+        label:
+          type: string
+          default: ''
+
+    LiveRun:
+      type: object
+      description: 还在 queued/running 的 run 的实时摘要
+      required: [id, agent, route, provider, cwd, note, status, tokens]
+      properties:
+        id:
+          type: string
+        agent:
+          type: string
+        route:
+          type: string
+        provider:
+          type: string
+        cwd:
+          type: string
+        note:
+          type: string
+        status:
+          type: string
+          enum: [queued, running]
+        started_at:
+          type: [number, 'null']
+        tokens:
+          type: object
+          additionalProperties: false
+          required: [input, output]
+          properties:
+            input:
+              type: integer
+            output:
+              type: integer
+        partial_cost:
+          type: [number, 'null']
+          description: 按 usage 事件累加的下界，不是最终计价
+        partial_currency:
+          type: string
+          description: 有 partial_cost 时为 USD，否则空串
+
+    Decision:
+      type: object
+      required: [kind, id, run, title, detail, note, at]
+      properties:
+        kind:
+          type: string
+          enum: [proposal, red, failed, unverified]
+        id:
+          type: string
+        run:
+          type: string
+        title:
+          type: string
+        detail:
+          type: string
+        note:
+          type: string
+        at:
+          type: [number, 'null']
+
+    DecisionCounts:
+      type: object
+      additionalProperties: false
+      required: [proposal, red, failed, unverified]
+      properties:
+        proposal:
+          type: integer
+        red:
+          type: integer
+        failed:
+          type: integer
+        unverified:
+          type: integer
+
+    AgentCost:
+      type: object
+      required: [agent, costs, runs, priced, routes]
+      properties:
+        agent:
+          type: string
+        costs:
+          type: object
+          additionalProperties:
+            type: number
+        runs:
+          type: integer
+        priced:
+          type: integer
+        routes:
+          type: array
+          items:
+            type: string
+
+    Today:
+      type: object
+      required: [window_start, runs, priced, unpriced, totals, by_agent, basis]
+      properties:
+        window_start:
+          type: number
+          description: 本地零点（epoch 秒）
+        runs:
+          type: integer
+        priced:
+          type: integer
+        unpriced:
+          type: integer
+        totals:
+          type: object
+          additionalProperties:
+            type: number
+        by_agent:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentCost'
+        basis:
+          type: object
+          description: cost_basis 的计数（list_price/metered/...）
+          additionalProperties:
+            type: integer
+
+    Board:
+      type: object
+      additionalProperties: false
+      required: [now, day, profile, running, decisions, decision_counts, today]
+      properties:
+        now:
+          type: number
+        day:
+          type: string
+          format: date
+        profile:
+          type: string
+        running:
+          type: array
+          items:
+            $ref: '#/components/schemas/LiveRun'
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Decision'
+        decision_counts:
+          $ref: '#/components/schemas/DecisionCounts'
+        today:
+          $ref: '#/components/schemas/Today'
