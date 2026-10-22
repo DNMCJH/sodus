@@ -380,3 +380,170 @@ def test_start_runs_one_pass_and_only_once(home, work, monkeypatch):
     assert recover.start(log=seen.append) is True
     assert recover.start(log=seen.append) is False
     assert seen == []
+
+
+# ---- the stage-1 contract: attempts, next_retry_at, dry_run -----------
+
+
+def test_attempts_counts_the_whole_chain(home, work):
+    original = make_run(work, ORPHAN)
+    assert recover.attempts(original) == 0
+
+    first = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=original["id"],
+        note="auto-retry 1/2\n继续",
+    )
+    assert recover.attempts(original) == 1
+    assert recover.attempts(first) == 1
+
+    second = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=first["id"],
+        note="auto-retry 2/2\n继续",
+    )
+    assert recover.attempts(original) == 2
+    assert recover.attempts(first) == 2
+    assert recover.attempts(second) == 2
+
+
+def test_attempts_do_not_leak_between_chains(home, work):
+    task = db.create_task(goal="two chains", acceptance="pytest -q")
+    left = make_run(work, ORPHAN, task=task)
+    make_run(
+        work,
+        ORPHAN,
+        task=task,
+        parent=left["id"],
+        note="auto-retry 1/2\n继续",
+    )
+
+    right = make_run(work, ORPHAN, task=task)
+    right_first = make_run(
+        work,
+        ORPHAN,
+        task=task,
+        parent=right["id"],
+        note="auto-retry 1/2\n继续",
+    )
+    make_run(
+        work,
+        ORPHAN,
+        task=task,
+        parent=right_first["id"],
+        note="auto-retry 2/2\n继续",
+    )
+
+    assert recover.attempts(left) == 1
+    assert recover.attempts(right) == 2
+
+
+def test_next_retry_at_names_the_backoff(home, work):
+    now = time.time()
+    network = make_run(work, "ECONNRESET", ended=now)
+    assert recover.next_retry_at(network) == pytest.approx(now + recover.BACKOFF[0])
+    assert recover.should_retry(network) is False
+
+    # An orphan has no process left to race, so it is due immediately.
+    orphan = make_run(work, ORPHAN, ended=now)
+    assert recover.next_retry_at(orphan) == pytest.approx(now)
+    assert recover.should_retry(orphan) is True
+
+    auth = make_run(work, "401 Unauthorized", ended=now - 3600)
+    assert recover.next_retry_at(auth) is None
+
+
+def test_next_retry_at_is_none_when_the_chain_is_spent(home, work):
+    now = time.time()
+    original = make_run(work, ORPHAN, ended=now - 10_000)
+    first = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=original["id"],
+        note="auto-retry 1/2\n继续",
+        ended=now - 9_000,
+    )
+    second = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=first["id"],
+        note="auto-retry 2/2\n继续",
+        ended=now - 8_000,
+    )
+
+    assert recover.attempts(second) == 2
+    assert recover.should_retry(second) is False
+    assert recover.next_retry_at(second) is None
+
+
+def test_dry_run_on_the_real_database_writes_nothing(home, work):
+    old = time.time() - 3600
+    retryable = make_run(work, ORPHAN, ended=old)
+    fixed = make_run(work, "401 Unauthorized", ended=old)
+    done = make_run(work, ORPHAN, status="completed", ended=old)
+    before = [run["id"] for run in db.list_runs(limit=100)]
+
+    result = recover.auto_retry(dry_run=True)
+
+    assert set(result) >= {"retried", "skipped", "errors"}
+    assert [item["run_id"] for item in result["retried"]] == [retryable["id"]]
+    assert result["retried"][0]["child_run_id"] == ""
+    assert result["retried"][0]["attempt"] == 1
+    assert result["retried"][0]["limit"] == 2
+    reasons = {item["run_id"]: item["reason"] for item in result["skipped"]}
+    assert reasons[fixed["id"]] == "deterministic"
+    assert done["id"] not in reasons
+    assert result["errors"] == []
+
+    assert [run["id"] for run in db.list_runs(limit=100)] == before
+    assert db.get_run(retryable["id"])["status"] == "failed"
+
+
+def test_auto_retry_starts_two_children_for_two_failures(home, work, monkeypatch):
+    calls = fake_start(monkeypatch)
+    old = time.time() - 3600
+    make_run(work, ORPHAN, ended=old)
+    make_run(work, "ECONNRESET", ended=old)
+
+    result = recover.auto_retry()
+
+    assert result["errors"] == []
+    assert len(result["retried"]) == 2
+    for item in result["retried"]:
+        child = db.get_run(item["child_run_id"])
+        parent = db.get_run(item["run_id"])
+        assert child["parent_run_id"] == item["run_id"]
+        assert child["task_id"] == parent["task_id"]
+        assert child["cwd"] == parent["cwd"]
+        assert child["route"] == parent["route"]
+        assert child["note"].splitlines()[0] == "auto-retry 1/2"
+    assert len(calls) == 2
+
+
+def test_a_retry_that_cannot_start_is_an_error(home, work, monkeypatch):
+    run = make_run(work, ORPHAN, ended=time.time() - 3600)
+
+    def broken(**kwargs):
+        raise RuntimeError("unknown route: claude")
+
+    monkeypatch.setattr(runner.RUNNER, "start", broken)
+    result = recover.auto_retry()
+
+    assert result["retried"] == []
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["run_id"] == run["id"]
+    assert "unknown route" in result["errors"][0]["error"]
+    assert not any(item["run_id"] == run["id"] for item in result["skipped"])
+
+
+def test_summary_mentions_a_start_error():
+    text = recover.summary(
+        {"retried": [], "skipped": [], "errors": [{"run_id": "run-1"}]}
+    )
+    assert "could not start" in text

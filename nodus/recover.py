@@ -50,6 +50,9 @@ SWEEP_SECONDS = float(os.environ.get("NODUS_AUTO_RECOVER_INTERVAL", "300"))
 
 NOTE_PREFIX = "auto-retry"
 
+#: A corrupt `parent_run_id` chain must terminate. Nobody retries 50 times.
+MAX_CHAIN = 50
+
 #: Failure signals, checked in this order. Deterministic reasons come before
 #: network ones on purpose: a 401 wrapped in a connection reset is still a
 #: rejected key, and retrying it burns a retry that a transient error needs.
@@ -163,6 +166,38 @@ def _is_retry(run: dict) -> bool:
     return str(run.get("note") or "").lstrip().startswith(NOTE_PREFIX)
 
 
+_RETRY_NUMBER = re.compile(
+    r"^\s*auto-retry(?:\s+(\d+)(?:\s*/\s*\d+)?)?(?![a-z])", re.I
+)
+
+
+def _retry_label(note) -> int:
+    """The attempt number in an `auto-retry N/M` note, or 0 for anything else."""
+    match = _RETRY_NUMBER.match(str(note or ""))
+    if not match:
+        return 0
+    return int(match.group(1)) if match.group(1) else 1
+
+
+def _chain_root(run: dict, rows: dict[str, dict]) -> str:
+    """Walk `parent_run_id` to the top of the chain, bounded against a cycle."""
+    current = str(run.get("id") or "")
+    seen: set[str] = set()
+    while current and current not in seen and len(seen) < MAX_CHAIN:
+        seen.add(current)
+        row = rows.get(current)
+        if row is None:
+            row = db.get_run(current)
+            if not row:
+                break
+            rows[current] = row
+        parent = str(row.get("parent_run_id") or "")
+        if not parent:
+            break
+        current = parent
+    return current
+
+
 def retry_depth(run: dict) -> int:
     """How many automatic retries already sit above/including this run.
 
@@ -184,6 +219,32 @@ def retry_depth(run: dict) -> int:
         parent = str(cur.get("parent_run_id") or "")
         cur = db.get_run(parent) if parent else None
     return depth
+
+
+def attempts(run: dict) -> int:
+    """How many automatic retries this run's chain has already used.
+
+    The convention is the `parent_run_id` chain plus the note: every run in the
+    same chain whose note starts with `auto-retry` counts. The original failure
+    and all of its descendants therefore report the same number — 2 after two
+    retries — which is the "this task has been retried N times" figure the
+    board shows. Two independent failures of one task each count their own
+    chain, so they do not share a budget.
+    """
+    tid = str(run.get("task_id") or "")
+    if not tid:
+        return retry_depth(run)
+    rows = {str(row.get("id") or ""): row for row in db.list_runs(tid, limit=500)}
+    rows.setdefault(str(run.get("id") or ""), run)
+    root = _chain_root(run, rows)
+    labels = [
+        label
+        for other in rows.values()
+        if _chain_root(other, rows) == root
+        for label in (_retry_label(other.get("note")),)
+        if label
+    ]
+    return max(len(labels), max(labels, default=0))
 
 
 def _ended(run: dict) -> float:
@@ -337,6 +398,22 @@ def should_retry(
     return block_reason(run, limit, now) == ""
 
 
+def next_retry_at(
+    run: dict, limit: int = RETRY_LIMIT, now: float | None = None
+) -> float | None:
+    """When the next attempt may start, or None when no retry is coming.
+
+    None is the honest answer for a deterministic failure, an exhausted chain,
+    an over-budget task, or one whose retry is already in flight. During the
+    backoff window this is the timestamp itself — what the board needs to say
+    "下次什么时候". An orphan has nothing to wait for, so it is its own end.
+    """
+    reason = block_reason(run, limit, now)
+    if reason not in ("", "backoff"):
+        return None
+    return _due_at(run)
+
+
 def _session_id(run: dict) -> str:
     try:
         ref = json.loads(run.get("session_ref_json") or "{}")
@@ -384,18 +461,24 @@ def _start_retry(run: dict, attempt: int, limit: int) -> dict:
     )
 
 
-def auto_retry(limit: int = RETRY_LIMIT, now: float | None = None) -> dict:
+def auto_retry(
+    limit: int = RETRY_LIMIT, dry_run: bool = False, now: float | None = None
+) -> dict:
     """Scan failures and start a child run for each retryable one.
 
     Returns what was done, not just a count: the caller (daemon log, a human
     checking the board, a test) needs to see which run was retried and which
-    one was deliberately left alone, with the reason.
+    one was deliberately left alone, with the reason. A retry that could not be
+    started is an `errors` entry rather than a silent success.
+
+    `dry_run=True` makes the same decisions and writes nothing — no run row, no
+    event, no session copy. Its `child_run_id` values are empty.
     """
     now = time.time() if now is None else now
     runs = db.list_runs(limit=500)
     failed = [r for r in runs if str(r.get("status") or "") == "failed"]
     facts = _facts([r.get("task_id") or "" for r in failed])
-    out: dict = {"retried": [], "skipped": [], "considered": len(failed)}
+    out: dict = {"retried": [], "skipped": [], "errors": [], "considered": len(failed)}
     for run in failed:
         tid = str(run.get("task_id") or "")
         title = (facts.get(tid) or {}).get("title") or _first_line(run.get("note")) or ""
@@ -412,16 +495,27 @@ def auto_retry(limit: int = RETRY_LIMIT, now: float | None = None) -> dict:
             )
             continue
         attempt = retry_depth(run) + 1
+        if dry_run:
+            out["retried"].append(
+                {
+                    "run_id": str(run.get("id") or ""),
+                    "child_run_id": "",
+                    "task_id": tid,
+                    "task_title": title,
+                    "attempt": attempt,
+                    "limit": limit,
+                }
+            )
+            continue
         try:
             child = _start_retry(run, attempt, limit)
         except Exception as exc:  # noqa: BLE001 - one bad run must not stop the sweep
-            out["skipped"].append(
+            out["errors"].append(
                 {
                     "run_id": str(run.get("id") or ""),
                     "task_id": tid,
                     "task_title": title,
-                    "class": "transient",
-                    "reason": f"start-failed: {type(exc).__name__}: {exc}",
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
             )
             continue
@@ -506,7 +600,8 @@ def summary(result: dict) -> str:
     """One line for `daemon.log`, no JSON."""
     retried = result.get("retried") or []
     skipped = result.get("skipped") or []
-    if not retried and not skipped:
+    errors = result.get("errors") or []
+    if not retried and not skipped and not errors:
         return "nothing to recover"
     parts = [f"retried {len(retried)}"]
     if retried:
@@ -524,6 +619,8 @@ def summary(result: dict) -> str:
             "left alone: "
             + ", ".join(f"{reason} {n}" for reason, n in sorted(by_reason.items()))
         )
+    if errors:
+        parts.append(f"{len(errors)} could not start")
     return "; ".join(parts)
 
 
@@ -548,7 +645,7 @@ def start(interval: float | None = None, log=None) -> bool:
     interval = SWEEP_SECONDS if interval is None else interval
     try:
         first = auto_retry()
-        if log and (first["retried"] or first["skipped"]):
+        if log and (first.get("retried") or first.get("skipped") or first.get("errors")):
             log(f"auto-recover: {summary(first)}")
     except Exception:  # noqa: BLE001 - a bad sweep must not stop the daemon
         if log:
@@ -561,7 +658,7 @@ def start(interval: float | None = None, log=None) -> bool:
             time.sleep(interval)
             try:
                 result = auto_retry()
-                if log and result["retried"]:
+                if log and (result.get("retried") or result.get("errors")):
                     log(f"auto-recover: {summary(result)}")
             except Exception:  # noqa: BLE001
                 if log:
