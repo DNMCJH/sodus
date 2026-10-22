@@ -87,7 +87,6 @@ PAGE = """<!doctype html>
   .ask details.meta summary { font-size:11.5px; }
   .ask details.meta div { font-family:ui-monospace, Consolas, monospace; font-size:11.5px;
                           color:var(--dim); margin-top:2px; word-break:break-all; }
-  .more-note { color:var(--dim); font-size:12px; padding:8px 12px 0; }
   .more-inline { color:var(--dim); font-size:12.5px; padding:8px 12px;
                  border-bottom:1px solid var(--line); }
   .more-inline button { margin-left:4px; }
@@ -424,6 +423,43 @@ function decisionRow(d) {
   return ask + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
 }
 
+function moreBlock(kind, n) {
+  const failed = kind === "failed";
+  const open = failed ? moreFailedOpen : moreProposalOpen;
+  return `<div class="more-inline">还有 ${n} ${failed ? "个失败" : "个提案"}
+    <button onclick="${failed ? "toggleMoreFailed()" : "toggleMoreProposal()"}">${open ? "收起" : "展开"}</button></div>`;
+}
+
+// The first screen shows the newest 3 failures and 5 proposals; the rest were
+// only counted and pointed at a collapsed section at the bottom. These build
+// the same row shape for the ones behind the count, so they can open in place.
+function extraDecisions(kind, items, counts) {
+  const shown = items.filter(d => d.kind === kind);
+  const want = Math.max(0, (counts[kind] || 0) - shown.length);
+  if (!want) return [];
+  if (kind === "failed") {
+    const seen = new Set(shown.map(d => d.run || d.id));
+    return state.runs
+      .filter(r => r.status === "failed" && !seen.has(r.id))
+      .slice(0, want)
+      .map(r => ({
+        kind: "failed", id: r.id, run: r.id, title: "执行失败，要不要重跑由你定",
+        detail: String(r.error || "").slice(0, 160), note: "",
+        at: r.ended_at || r.started_at,
+      }));
+  }
+  const seen = new Set(shown.map(d => d.id));
+  return state.proposals
+    .filter(p => p.status === "open" && !seen.has(p.id))
+    .slice(0, want)
+    .map(p => ({
+      kind: "proposal", id: p.id, run: p.run_id || "",
+      title: "提案在分支上，等你合入或丢弃", detail: p.stat || "",
+      note: (p.files || []).map(f => f.path).filter(Boolean).join(", "),
+      at: p.created_at,
+    }));
+}
+
 function renderTodo() {
   const b = state.board || {};
   const items = b.decisions || [];
@@ -438,13 +474,24 @@ function renderTodo() {
     $("todo").innerHTML = `<div class="empty">现在没有需要你决定的事。</div>`;
     return;
   }
-  const shownFailed = items.filter(d => d.kind === "failed").length;
-  const shownProposal = items.filter(d => d.kind === "proposal").length;
-  const more = [];
-  if ((counts.failed || 0) > shownFailed) more.push((counts.failed - shownFailed) + " 个失败");
-  if ((counts.proposal || 0) > shownProposal) more.push((counts.proposal - shownProposal) + " 个提案");
-  $("todo").innerHTML = items.map(decisionRow).join("") +
-    (more.length ? `<div class="more-note">另外 ${more.join("、")}没列出来，在下面「更多」里。</div>` : "");
+
+  const extraFailed = extraDecisions("failed", items, counts);
+  const extraProposals = extraDecisions("proposal", items, counts);
+  const last = kind => items.map(d => d.kind).lastIndexOf(kind);
+  const lastFailed = last("failed"), lastProposal = last("proposal");
+  const blocks = [];
+  items.forEach((d, i) => {
+    blocks.push(decisionRow(d));
+    if (i === lastFailed && extraFailed.length) {
+      blocks.push(moreBlock("failed", extraFailed.length));
+      if (moreFailedOpen) blocks.push(...extraFailed.map(decisionRow));
+    }
+    if (i === lastProposal && extraProposals.length) {
+      blocks.push(moreBlock("proposal", extraProposals.length));
+      if (moreProposalOpen) blocks.push(...extraProposals.map(decisionRow));
+    }
+  });
+  $("todo").innerHTML = blocks.join("");
 }
 
 function renderMoney(t) {
@@ -616,6 +663,14 @@ function rerunOne(rid) {
 }
 function toggleUnv() {
   unvOpen = !unvOpen;
+  renderTodo();
+}
+function toggleMoreFailed() {
+  moreFailedOpen = !moreFailedOpen;
+  renderTodo();
+}
+function toggleMoreProposal() {
+  moreProposalOpen = !moreProposalOpen;
   renderTodo();
 }
 

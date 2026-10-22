@@ -52,3 +52,12 @@ def test_a_run_is_named_by_its_task_before_its_directory():
     assert 'title="${esc(r.cwd)}"' in ui.PAGE
     assert "NOISE_DIRS" in ui.PAGE
     assert ".slice(-2).join" not in ui.PAGE
+
+
+def test_remaining_failures_expand_where_they_are_counted():
+    # No "look in the collapsed section at the bottom": the count sits at the
+    # end of the failed rows and opens them in place.
+    assert "在下面「更多」里" not in ui.PAGE
+    assert "还有 ${n} ${failed ? \"个失败\" : \"个提案\"}" in ui.PAGE
+    assert "toggleMoreFailed" in ui.PAGE
+    assert "extraDecisions" in ui.PAGE
