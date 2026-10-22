@@ -1329,6 +1329,7 @@ def _score_candidates(
             for row in eligible
             if row["solve_rate"] is not None
             and float(row["solve_rate"]) >= _CHEAP_SOLVE
+            and row["capability_fit"] >= 0.5
             and _is_cheap(row, cheapest)
         ]
         if qualified:
@@ -1511,6 +1512,8 @@ def _choose(
     if measures is None:
         measures, _ = _live_measures()
     rows, guardrails = _score_candidates(difficulty, kind, measures)
+    if not rows:
+        raise ValueError("no routes to score")
     pool = [row for row in rows if row["pool"]]
     if not pool:
         pool = [row for row in rows if not row["excluded"]] or rows

@@ -592,6 +592,19 @@ def test_scoring_takes_the_cheap_route_when_it_solves_the_same():
     assert any(rule["rule"] == "low-difficulty-cheap" for rule in scoring["guardrails"])
 
 
+def test_the_cheap_guardrail_does_not_send_code_to_a_writing_route():
+    measures = {
+        "dsh": _synth("dsh", seconds=30.0, cost=0.01, tier=1),
+        "codex": _synth("codex", solved=2, seconds=60.0, cost=0.05, tier=2),
+    }
+    route, _, scoring = policy._choose(1, "code", measures)
+
+    # dsh is the cheap proven route, but its declared code fit is 0.40, below
+    # the guardrail's 0.50 floor; capability must still win here.
+    assert route == "codex"
+    assert not any(rule["rule"] == "low-difficulty-cheap" for rule in scoring["guardrails"])
+
+
 def test_scoring_pays_for_the_stronger_route_on_a_hard_task():
     measures = {
         "claude": _synth("claude", solved=3, seconds=66.0, cost=0.30, tested=4, tier=3),
