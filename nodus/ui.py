@@ -88,6 +88,17 @@ PAGE = """<!doctype html>
   .ask details.meta div { font-family:ui-monospace, Consolas, monospace; font-size:11.5px;
                           color:var(--dim); margin-top:2px; word-break:break-all; }
   .more-note { color:var(--dim); font-size:12px; padding:8px 12px 0; }
+  .more-inline { color:var(--dim); font-size:12.5px; padding:8px 12px;
+                 border-bottom:1px solid var(--line); }
+  .more-inline button { margin-left:4px; }
+  .unv-list { border-bottom:1px solid var(--line); background:#171a1f;
+              padding:2px 12px 8px 26px; max-height:340px; overflow:auto; }
+  .unv-row { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:12.5px;
+             border-top:1px solid rgba(42,47,56,.6); }
+  .unv-row:first-child { border-top:0; }
+  .unv-row .unv-title { color:var(--text); overflow:hidden; text-overflow:ellipsis;
+                        white-space:nowrap; }
+  .unv-row button { margin-left:auto; flex:none; }
   #evidence { background:var(--panel); border:1px solid var(--line); border-radius:7px;
               padding:12px 14px; margin-top:10px; display:none; }
   #evidence h3 { margin:0 0 8px; font-size:13px; font-weight:600; }
@@ -177,6 +188,7 @@ const TOKEN = "__TOKEN__";
 const H = { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" };
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const clip = (s, n) => { s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; };
 const safe = s => { try { return JSON.parse(s || "{}"); } catch { return {}; } };
 
 async function api(path, method = "GET", body) {
@@ -261,8 +273,9 @@ function liveWhat(r) {
   return `<b>${esc(who)}</b> ${esc(doing)}`;
 }
 
-let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [] };
+let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [], tasks: [] };
 let sseLive = false, timer = 0, inflight = false;
+let unvOpen = false, moreFailedOpen = false, moreProposalOpen = false;
 const count = k => ((state.board || {}).decision_counts || {})[k] || 0;
 
 function table(headers, rows, empty) {
@@ -348,18 +361,19 @@ function decisionRow(d) {
     if (run.cwd) meta.push("目录 " + run.cwd);
     meta.push("验证结果：测试红");
   } else if (d.kind === "unverified") {
-    const n = count("unverified") || (/(\\d+)/.exec(d.title || "") || [])[1] || "";
+    const list = (state.board.unverified_runs || []).slice(0, 50);
+    const n = count("unverified") || list.length || (/(\\d+)/.exec(d.title || "") || [])[1] || "";
     what = n + " 次跑完了，但没有测试证据，所以不算通过";
-    const last = state.runs.find(r => r.status === "completed" && r.verify === "none");
-    const lastNote = last ? String(last.note || "").split("\\n")[0].trim() : "";
-    about = last
-      ? "最近一次：" + (ago(d.at) || "刚才") + " · " + whoName(last.agent || last.route) +
-        (lastNote ? " · " + (lastNote.length > 30 ? lastNote.slice(0, 30) + "…" : lastNote) : "")
+    const last = list[0] || {};
+    about = last.id
+      ? "最近一次：" + (ago(last.ended_at) || "刚才") + " · " + whoName(last.agent) +
+        (last.title ? " · " + clip(last.title, 32) : "")
       : "这些改动都没跑过测试";
-    act = `<button class="primary" onclick="rerunRecent()"
-             title="重跑最近一次没验证的任务，这次跑完会自动跑测试">重跑并验收</button>`;
-    if (last) meta.push("最近一次 run " + last.id + (last.note ? " · 任务：" + last.note : ""));
+    act = `<button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + n + " 次"}</button>` +
+      (last.id ? `<button class="primary" onclick="rerunOne('${last.id}')">重跑最近一次</button>` : "");
+    if (last.id) meta.push("最近一次 run " + last.id + (last.title ? " · 任务：" + last.title : ""));
     meta.push("没有测试证据时，进程退出码 0 只说明它退出了，不说明改对了。");
+    meta.push("「重跑最近一次」只重跑上面那一条，不是这 " + n + " 次。");
   } else {
     what = d.title || "有一件事等你处理";
     about = d.detail || "";
@@ -369,7 +383,7 @@ function decisionRow(d) {
 
   // the unverified row already says when the last one ran; do not repeat it
   const stamp = d.kind === "unverified" ? "" : when;
-  return `<div class="ask">
+  const ask = `<div class="ask">
     <div>
       <div class="ask-what">${esc(what)}</div>
       <div class="ask-about">${esc(about)}${stamp ? ` <span class="when">${esc(stamp)}</span>` : ""}</div>
@@ -377,6 +391,17 @@ function decisionRow(d) {
     </div>
     <div class="act">${act}</div>
   </div>`;
+  if (d.kind !== "unverified" || !unvOpen) return ask;
+
+  // one line per run: when, who, what, and a button that reruns exactly that
+  // run. No single button stands in for all of them.
+  const rows = list.map(u => `<div class="unv-row">
+      <span class="dim nowrap">${esc(ago(u.ended_at) || "时间没记")}</span>
+      <span class="nowrap">${esc(whoName(u.agent))}</span>
+      <span class="unv-title" title="${esc(u.title || "")}">${esc(u.title || "（任务没写标题）")}</span>
+      <button onclick="rerunOne('${u.id}')">重跑</button>
+    </div>`).join("");
+  return ask + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
 }
 
 function renderTodo() {
@@ -562,9 +587,16 @@ async function rerun(rid, lead) {
   } catch (e) { flash("重跑失败：" + e.message, true); }
 }
 function rerunRecent() {
-  const r = state.runs.find(x => x.status === "completed" && x.verify === "none");
+  const r = (state.board.unverified_runs || [])[0];
   if (!r) return flash("找不到没验证的任务了，刷新看看", true);
-  rerun(r.id, "重跑最近一次没验证的任务？");
+  rerun(r.id, "重跑最近一次？");
+}
+function rerunOne(rid) {
+  rerun(rid, "重跑这一次？");
+}
+function toggleUnv() {
+  unvOpen = !unvOpen;
+  renderTodo();
 }
 
 async function dispatch(ev) {

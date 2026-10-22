@@ -109,6 +109,70 @@ def _live_rows(conn, now: float) -> list[dict]:
     return out
 
 
+def _task_titles(task_ids: list[str]) -> dict[str, str]:
+    """Task label per id, in one query.
+
+    A run row records the instruction it was given, not what the task was
+    called. The unverified list is scanned by eye and needs a label that tells
+    43 rows apart; the goal is the fallback when the title is empty.
+    """
+    ids = [tid for tid in dict.fromkeys(task_ids) if tid]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            f"SELECT id, title, goal FROM task WHERE id IN ({marks})", tuple(ids)
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[str, str] = {}
+    for row in rows:
+        title = str(row["title"] or "").strip()
+        if not title:
+            title = str(row["goal"] or "").strip().split("\n")[0].strip()
+        out[row["id"]] = title
+    return out
+
+
+def _ended_at(run: dict) -> float:
+    """When a run stopped; a run with no end time sorts by when it started."""
+    ended = run.get("ended_at")
+    return float(ended) if ended is not None else float(run.get("started_at") or 0)
+
+
+def _unverified_rows(
+    runs: list[dict], states: dict[str, str], titles: dict[str, str] | None = None
+) -> list[dict]:
+    """One row per completed run with no test evidence, newest first, capped.
+
+    The page used to collapse these runs into a single number and offer one
+    rerun button, which acted on whichever run happened to be newest. These
+    rows are what lets the operator see the actual list and rerun exactly one.
+    """
+    titles = titles or {}
+    rows = []
+    for run in runs:
+        if run.get("status") != "completed":
+            continue
+        if states.get(run["id"], "none") != "none":
+            continue
+        note = (run.get("note") or "").strip().split("\n")[0].strip()
+        rows.append(
+            {
+                "id": run["id"],
+                "task_id": run.get("task_id") or "",
+                "title": (titles.get(run.get("task_id") or "") or note)[:120],
+                "agent": run.get("agent") or "",
+                "ended_at": _ended_at(run),
+                "verify": "none",
+            }
+        )
+    rows.sort(key=_ended_at, reverse=True)
+    return rows[:50]
+
+
 def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], dict]:
     """Everything on this board that cannot move without a human."""
     items: list[dict] = []
@@ -163,6 +227,7 @@ def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], di
     unverified = [
         r for r in runs if r.get("status") == "completed" and states.get(r["id"], "none") == "none"
     ]
+    unverified.sort(key=_ended_at, reverse=True)
     counts["unverified"] = len(unverified)
     if unverified:
         items.append(
@@ -232,6 +297,9 @@ def board_state(now: float | None = None) -> dict:
     runs = db.list_runs(limit=50)
     states = db.verify_states([r["id"] for r in runs])
     decisions, counts = _decisions(runs, states)
+    unverified_runs = _unverified_rows(
+        runs, states, _task_titles([r.get("task_id") or "" for r in runs])
+    )
     conn = db.connect()
     try:
         live = _live_rows(conn, now)
@@ -245,6 +313,7 @@ def board_state(now: float | None = None) -> dict:
         "running": live,
         "decisions": decisions,
         "decision_counts": counts,
+        "unverified_runs": unverified_runs,
         "today": {"window_start": start, **today},
     }
 

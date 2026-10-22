@@ -33,3 +33,13 @@ def test_nothing_is_loaded_from_a_cdn():
     # depend on the network the tool is supposed to outlive
     lowered = ui.PAGE.lower()
     assert "cdn." not in lowered and "https://" not in lowered
+
+
+def test_unverified_runs_are_listed_before_they_are_rerun():
+    # One number must not stand in for a button that acts on one of 43 runs:
+    # the page offers the list, and each row reruns exactly that run.
+    assert "看看是哪" in ui.PAGE
+    assert "重跑最近一次" in ui.PAGE
+    assert "重跑并验收" not in ui.PAGE
+    assert "rerunOne" in ui.PAGE
+    assert "重跑这一次" in ui.PAGE
