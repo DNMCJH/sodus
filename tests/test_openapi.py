@@ -111,6 +111,17 @@ def test_contract_covers_every_route_server_serves(spec):
     assert actual == expected
 
 
+def test_board_contract_declares_the_recovery_fields(spec):
+    # The page reads these; `additionalProperties: false` would make the real
+    # response invalid the moment the daemon added them without the contract.
+    board = spec["components"]["schemas"]["Board"]
+    added = {"unverified_runs", "needs_you", "auto_recovering", "deterministic"}
+    assert added <= set(board["properties"])
+    assert added <= set(board["required"])
+    counts = spec["components"]["schemas"]["DecisionCounts"]
+    assert {"needs_you", "auto_recovering", "deterministic"} <= set(counts["required"])
+
+
 def test_openapi_yaml_is_served_without_a_token():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     httpd.daemon_threads = True
