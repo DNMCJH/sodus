@@ -776,3 +776,29 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 4. `nodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
 5. VS Code 扩展只做三件事：列表、派活、看事件流和 diff。
 6. 多写者锁 + propose/merge：现在一个 cwd 只能有一个 run 在写，"协作"还只是串行交接。
+
+## 一个问题，一个入口
+
+命令有 46 个，但日常只该记住下面这张表。其余是给排障和扩展用的，`nodus --help` 里都在。
+
+| 你想知道 / 想做的事 | 用这个 |
+|---|---|
+| 后台服务起来了吗，怎么看 | `nodus up` → 打开 `http://127.0.0.1:4199/` |
+| 停掉它 | `nodus down` |
+| 现在有几个任务在跑、花了多少钱、有什么等我决定 | 看板首屏 |
+| 派一个活给某个 agent | `nodus run --route <claude\|codex\|dsh\|opencode-glm\|opencode-gemini>` |
+| 看某次执行到底做了什么 | `nodus show <run-id>` |
+| 有提案在等合入吗 | `nodus proposals list` |
+| 合入 / 丢弃一个提案 | `nodus merge <id>` / `nodus reject <id>` |
+| 这台机器上哪些 agent 真能用 | `nodus agents` |
+| 自检（目录、token、库、凭据、锁、磁盘） | `nodus doctor` |
+| 今天花了多少、按 agent 分 | `nodus cost` |
+| 把一个任务从头接管/续跑 | `nodus resume <session>` / `nodus branch <session>` |
+| 让别的工具接进来（IDE、agent） | HTTP：`/openapi.yaml`；MCP：`nodus mcp` |
+
+三条原则：
+
+1. **判决只看可执行证据**（测试 exit code + 测试文件 hash），agent 的自述不是判决。
+2. **能自愈的不找人**：进程退出、超时、网络抖动由 `recover` 自动重试（上限 2 次），只有耗尽或无法归类才进「需要你决定」。
+3. **一个配置键只有一个写者**：同一目录同一时间只有一个 run 能写（写锁），别的会被拒绝并告诉你谁占着。
+
