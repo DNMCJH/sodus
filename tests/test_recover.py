@@ -95,14 +95,21 @@ def fake_start(monkeypatch) -> list[dict]:
     [
         ORPHAN,
         ORPHAN + "; 3 file(s) written by the worker were kept",
+        "ORPHANED: THE PROCESS THAT OWNED THIS RUN IS GONE",
+        "orphaned: no activity for 900s",
         "no output for 900s, killed",
         "request timed out",
+        "TIMEOUT（超时）",
+        "等待超时：上游没有响应",
         "ECONNRESET",
-        "fetch failed",
+        "ECONNRESET while reading（连接被重置）",
+        "fetch failed: ETIMEDOUT",
         "socket hang up",
+        "network is unreachable",
         "502 Bad Gateway",
+        "HTTP 503: 服务不可用",
         "429 too many requests",
-        "rate limit exceeded",
+        "rate limit exceeded（限流）",
     ],
 )
 def test_transient_errors(error):
@@ -114,10 +121,16 @@ def test_transient_errors(error):
     [
         "401 Unauthorized",
         "403 Forbidden",
+        "HTTP 403: 密钥无效",
+        "鉴权失败：token 已过期",
         "400 Bad Request: invalid model parameter",
+        "invalid request: messages must not be empty",
         "content policy violation",
+        "内容被安全策略拦截",
         "model not found: gpt-x",
+        "模型已下线",
         "invalid api key",
+        "参数错误：temperature 超出范围",
     ],
 )
 def test_deterministic_errors(error):
@@ -128,7 +141,12 @@ def test_deterministic_errors(error):
     "error",
     [
         "exit code 1",
+        "agent stopped after 3 tool calls",
         "python: can't open file 'x.py'",
+        # A filesystem permission failure is not a rejected API key. Saying
+        # "换密钥" here would send the operator to the wrong place.
+        "PermissionError: [Errno 13] Permission denied: 'out.csv'",
+        "写入失败：没有权限",
         "something nobody classified",
         "",
         "    ",
@@ -143,6 +161,10 @@ def test_problem_text_is_a_sentence_not_an_error_dump():
     assert "进程退出了" in recover.problem_text({"error": ORPHAN})
     assert "重试不会好" in recover.problem_text({"error": "401 Unauthorized"})
     assert "看不出" in recover.problem_text({"error": "exit code 1"})
+    for error in (ORPHAN, "429", "content policy", "exit code 1"):
+        text = recover.problem_text({"error": error})
+        assert any("\u4e00" <= char <= "\u9fff" for char in text)
+        assert "Error" not in text and "Traceback" not in text
 
 
 # ---- should_retry ------------------------------------------------------

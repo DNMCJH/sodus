@@ -59,30 +59,42 @@ MAX_CHAIN = 50
 _ORPHANED = re.compile(r"orphaned", re.I)
 _AUTH = re.compile(
     r"\b(?:401|403)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
-    r"authenticat|authoriz|api[\s_-]*key",
+    r"authenticat|authoriz|api[\s_-]*key|密钥|鉴权|未授权|认证失败|授权失败",
     re.I,
 )
 _PARAM = re.compile(
     r"\b400\b|bad request|invalid[\s_-]?(?:request|argument|parameter|param|input)|"
-    r"unrecognized|unknown (?:argument|parameter)|validation error|missing required",
+    r"unrecognized|unknown (?:argument|parameter)|validation error|missing required|"
+    r"参数错误|参数不合法|参数无效|参数缺失",
     re.I,
 )
-_POLICY = re.compile(r"content[\s_-]?policy|safety|content[\s_-]?filter|blocked by", re.I)
+_POLICY = re.compile(
+    r"content[\s_-]?policy|safety|content[\s_-]?filter|blocked by|违规|"
+    r"内容[^\n]{0,10}(?:安全|审核|被拦|拦截)",
+    re.I,
+)
 _MODEL = re.compile(
     r"model[\s_-]?not[\s_-]?found|model_not_found|no such model|unknown model|"
-    r"invalid model|model[^.\n]{0,40}(?:does not exist|not available|not found)",
+    r"invalid model|model[^.\n]{0,40}(?:does not exist|not available|not found)|"
+    r"模型[^\n。]{0,12}(?:不存在|下线|不可用|名不对|弃用)",
     re.I,
 )
-_RATE = re.compile(r"rate[\s_-]?limit|\b429\b|too many requests|overloaded|slow down", re.I)
+_RATE = re.compile(
+    r"rate[\s_-]?limit|\b429\b|too many requests|overloaded|slow down|"
+    r"限流|频率限制|请求过多|太频繁",
+    re.I,
+)
 _TIMEOUT = re.compile(r"timed?[\s_-]?out|\btimeout\b|no output for|etimedout|超时", re.I)
 _NETWORK = re.compile(
     r"econnreset|econnrefused|econnaborted|etimedout|enotfound|eai_again|epipe|"
     r"ehostunreach|enetunreach|connection (?:reset|refused|closed|aborted|error)|"
-    r"reset by peer|broken pipe|fetch failed|network|socket|dns|tls|ssl",
+    r"reset by peer|broken pipe|fetch failed|network|socket|dns|tls|ssl|"
+    r"网络|连接(?:断|被重置|失败|超时)|断线|掉线",
     re.I,
 )
 _UPSTREAM = re.compile(
-    r"\b5\d\d\b|internal server error|bad gateway|service unavailable|gateway timeout|upstream",
+    r"\b5\d\d\b|internal server error|bad gateway|service unavailable|gateway timeout|"
+    r"upstream|上游|服务(?:器)?(?:错误|不可用|异常)",
     re.I,
 )
 
