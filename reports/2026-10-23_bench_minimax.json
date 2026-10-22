@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "route": "minimax",
+  "repeat": 1,
+  "started_at": "2026-10-23T03:40:21",
+  "ended_at": "2026-10-23T03:42:02",
+  "base_dir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261023-034021",
+  "totals": {
+    "attempts": 3,
+    "solved": 3,
+    "rate": 1.0,
+    "seconds": 89.0,
+    "mean_s": 29.7,
+    "cost_cny": 0.0866
+  },
+  "attempts": [
+    {
+      "task": "fix-range-parser",
+      "title": "修复 ranges.parse_ranges 的差一错误",
+      "verdict": "solve",
+      "run_id": "run-6adec7f3af54",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 39.3,
+      "cost": 0.027001,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "...........                                                              [100%]\n11 passed in 0.03s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261023-034021\\work\\fix-range-parser-1",
+      "attempt": 1
+    },
+    {
+      "task": "unify-slugs",
+      "title": "把三份重复的 slug 逻辑抽成一个函数",
+      "verdict": "solve",
+      "run_id": "run-352b6cbe6766",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 20.1,
+      "cost": 0.021307,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "..............................                                           [100%]\n30 passed in 0.05s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261023-034021\\work\\unify-slugs-1",
+      "attempt": 1
+    },
+    {
+      "task": "unit-cli",
+      "title": "写一个带错误处理的单位换算 CLI",
+      "verdict": "solve",
+      "run_id": "run-4f8a3b0a4729",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 29.6,
+      "cost": 0.038288,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "............                                                             [100%]\n12 passed in 0.99s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261023-034021\\work\\unit-cli-1",
+      "attempt": 1
+    }
+  ],
+  "report": "task              verdict  time   cost    detail\n----------------  -------  -----  ------  ------\nfix-range-parser  solve    39.3s  ¥0.027\nunify-slugs       solve    20.1s  ¥0.021\nunit-cli          solve    29.6s  ¥0.038\n\nsolve 3/3 (100%) · 平均 30s · ¥0.09"
+}
