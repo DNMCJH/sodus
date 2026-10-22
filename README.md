@@ -107,6 +107,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
 nodus/mcp.py             MCP over stdio（JSON-RPC 2.0，换行分帧）
+openapi.yaml             HTTP API 契约（OpenAPI 3.1；daemon 也经 GET /openapi.yaml 直接给）
 tests/                   自己的一套 pytest（195 条）
 ```
 
