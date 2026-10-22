@@ -364,3 +364,30 @@ def test_cli_lineage_on_a_run_and_a_task(home, capsys):
 def test_unknown_id_is_a_clear_error(home):
     with pytest.raises(ValueError, match="unknown id"):
         lineage.resolve("sess-does-not-exist")
+
+
+def test_unverified_completion_is_not_a_success(tmp_path, monkeypatch):
+    """completed + no test evidence must not be counted as ok.
+
+    The whole product says "结束 ≠ 通过". A route table that counts an
+    unchecked run as a win would teach the router to pick whichever route
+    skips verification.
+    """
+    import json
+    from nodus import db, lineage
+
+    task = db.create_task("unverified-case")
+    created = db.create_run(task_id=task["id"], agent="claude", cwd=".")
+    db.update_run(created["id"], status="completed")
+    # no verify.green event on purpose
+    data = lineage.for_task(task["id"])
+    row = next(r for r in data["runs"] if r["id"] == created["id"])
+    assert row["verify"] == "none"
+    assert row["ok"] is False
+    assert row["unverified"] is True
+    assert data["unverified"] == 1 and data["failed"] == 0
+    conn = db.connect()
+    conn.execute("DELETE FROM run WHERE id=?", (created["id"],))
+    conn.execute("DELETE FROM task WHERE id=?", (task["id"],))
+    conn.commit()
+    conn.close()

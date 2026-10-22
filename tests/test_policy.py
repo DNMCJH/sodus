@@ -495,3 +495,48 @@ def test_route_for_apply_prints_the_next_command_not_a_dispatch(capsys, home, ru
     assert payload["apply"]["dispatched"] is False
     assert payload["apply"]["route"] == "dsh"
     assert "--route dsh" in payload["apply"]["command"]
+
+
+def test_history_separates_finished_from_verified(monkeypatch, tmp_path):
+    """A repo with no test command must not make every route look useless.
+
+    `success_rate` is green/samples, which is 0 for any project that never has
+    a test command. The routing decision needs two numbers instead: how often
+    the run finishes, and -- among runs that were actually checked -- how often
+    it goes green.
+    """
+    from nodus import db, policy
+
+    ids = []
+    task = db.create_task("history-shape")
+    # A route name nobody else uses, so the assertion is about these three runs
+    # and not about whatever history the real workspace already has.
+    route = "pytest-history-shape"
+    import time as _time
+
+    for index, status in enumerate(("completed", "completed", "failed")):
+        run = db.create_run(task_id=task["id"], agent="claude", cwd=".", route=route)
+        started = _time.time() - 1000
+        # durations 10s / 20s / 30s -> median 20s, mean 20s (no outliers here)
+        db.update_run(
+            run["id"],
+            status=status,
+            started_at=started,
+            ended_at=started + 10 * (index + 1),
+        )
+        ids.append(run["id"])
+    try:
+        history = policy._run_history(route)
+        stats = history["stats"]
+        assert stats["finished_rate"] == round(2 / 3, 3)
+        # none of these runs was verified, so the verified rate is unknown
+        assert stats["verified_samples"] == 0
+        assert stats["verified_ok_rate"] is None
+        assert stats["median_s"] is not None
+    finally:
+        conn = db.connect()
+        for rid in ids:
+            conn.execute("DELETE FROM run WHERE id=?", (rid,))
+        conn.execute("DELETE FROM task WHERE id=?", (task["id"],))
+        conn.commit()
+        conn.close()

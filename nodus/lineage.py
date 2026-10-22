@@ -260,9 +260,12 @@ def _run_summary(run: dict, verify: str) -> dict:
         "model": run.get("model") or "",
         "status": status,
         "verify": verify,
-        # "completed" alone is an exit code. A run whose tests went red did not
-        # succeed, and this is the field the route table counts.
-        "ok": status == "completed" and verify != "red",
+        # "completed" alone is an exit code. Same rule the board uses: ok needs
+        # a green test run. An unchecked run is neither success nor failure --
+        # counting it as ok is how a route table learns the wrong lesson, so it
+        # gets its own bucket.
+        "ok": status == "completed" and verify == "ok",
+        "unverified": status == "completed" and verify == "none",
         "seconds": round(ended - started, 1) if ended and started else None,
         "cost": usage.get("cost"),
         "currency": usage.get("currency") or "",
@@ -278,11 +281,16 @@ def _route_summary(runs: list[dict]) -> list[dict]:
         name = run["route"] or "?"
         bucket = buckets.setdefault(
             name,
-            {"route": name, "runs": 0, "ok": 0, "failed": 0,
+            {"route": name, "runs": 0, "ok": 0, "unverified": 0, "failed": 0,
              "seconds": [], "cost": 0.0, "currency": "", "sessions": []},
         )
         bucket["runs"] += 1
-        bucket["ok" if run["ok"] else "failed"] += 1
+        if run["ok"]:
+            bucket["ok"] += 1
+        elif run.get("unverified"):
+            bucket["unverified"] += 1
+        else:
+            bucket["failed"] += 1
         if run["seconds"] is not None:
             bucket["seconds"].append(run["seconds"])
         if isinstance(run["cost"], (int, float)):
@@ -324,7 +332,8 @@ def for_task(task_id: str) -> dict:
         "routes": _route_summary(rows),
         "attempts": len(rows),
         "ok": sum(1 for r in rows if r["ok"]),
-        "failed": sum(1 for r in rows if not r["ok"]),
+        "failed": sum(1 for r in rows if not r["ok"] and not r.get("unverified")),
+        "unverified": sum(1 for r in rows if r.get("unverified")),
         "first_success": first_success,
     }
 

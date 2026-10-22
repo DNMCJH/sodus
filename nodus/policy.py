@@ -748,6 +748,22 @@ def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
 
     samples = len(rows)
     enough = samples >= HISTORY_MIN
+    # Two different questions, and conflating them made every route look
+    # useless: "did the process finish" is about the route, "did the tests go
+    # green" is about the project having tests at all. A repo with no test
+    # command produces verify=none forever, so green/samples reads 0% even
+    # when every run did its job.
+    checked = [row for row in rows if marks.get(row["id"]) in ("ok", "red")]
+    checked_ok = sum(1 for row in checked if marks.get(row["id"]) == "ok")
+    durations.sort()
+    median_s = None
+    if durations:
+        mid = len(durations) // 2
+        median_s = (
+            durations[mid]
+            if len(durations) % 2
+            else (durations[mid - 1] + durations[mid]) / 2
+        )
     out.update(
         {
             "status": "measured" if enough else "insufficient",
@@ -758,13 +774,23 @@ def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
                 "completed": completed,
                 "verified_green": green,
                 "success_rate": round(green / samples, 3),
+                "finished_rate": round(completed / samples, 3),
+                "verified_samples": len(checked),
+                "verified_ok_rate": (
+                    round(checked_ok / len(checked), 3) if checked else None
+                ),
                 "duration_runs": len(durations),
                 "mean_s": round(sum(durations) / len(durations), 1) if durations else None,
+                # One stuck run drags a mean to hours; the median is how long
+                # this route usually takes.
+                "median_s": round(median_s, 1) if median_s is not None else None,
                 "cost": costs,
             },
             "note": (
-                f"本地历史：最近 {samples} 次已结束 run；成功=completed 且 verify.green"
-                f"（{green}/{samples}）；耗时按 started_at→ended_at，含排队或卡住的时长；"
+                f"本地历史：最近 {samples} 次已结束 run；完成 {completed}/{samples}；"
+                f"有测试证据的 {len(checked)} 次里绿 {checked_ok} 次"
+                f"（全量绿 {green}/{samples}，含没有测试命令的项目）；"
+                "耗时给中位数（均值会被卡住的 run 拉爆）；"
                 "成本按 currency 分组，不换算汇率。"
                 + ("" if enough else f" 样本 < {HISTORY_MIN}，只标记不下结论。")
             ),
