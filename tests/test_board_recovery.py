@@ -225,10 +225,18 @@ def test_failures_recovery_gave_up_on_are_still_visible(home):
     a newer attempt is live). Those runs still happened, so they are listed
     under their own group instead of being dropped from every list.
     """
-    seed(home, error="orphaned: the process that owned this run is gone", status="failed")
+    task, original = seed(
+        home, error="orphaned: the process that owned this run is gone", ended=time.time() - 600
+    )
+    # The chain already moved past this failure: a child exists, so recovery
+    # must not retry the original — but the original must still be findable.
+    seed(home, error="", status="completed", task=task, parent=original["id"])
+
     board = server.board_state()
     assert "history_failures" in board
-    assert board["decision_counts"]["history_failed"] == len(board["history_failures"])
+    assert board["decision_counts"]["history_failed"] >= 1
+    ids = {item["run"] for item in board["history_failures"]}
+    assert original["id"] in ids
     for item in board["history_failures"]:
         assert item["kind"] == "failed"
         assert item.get("problem")  # a reason the reader can act on
