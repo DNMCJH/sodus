@@ -15,6 +15,7 @@ adding a backend touches neither.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -244,7 +245,16 @@ def argv(
     if not exe:
         return cmd
     if exe.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", exe, *cmd[1:]]
+        # cmd.exe stops reading its command at the first newline. A positional
+        # message therefore arrived truncated to line one: opencode answered
+        # "no task given" and exited 0, so the run looked completed while doing
+        # nothing. Cmd shims cannot receive a line break at all, so flatten the
+        # prose rather than silently drop every section after the first.
+        flat = [
+            re.sub(r"\s*\n\s*", "  ", arg) if "\n" in arg or "\r" in arg else arg
+            for arg in cmd[1:]
+        ]
+        return ["cmd.exe", "/c", exe, *flat]
     return [exe, *cmd[1:]]
 
 

@@ -236,3 +236,18 @@ def test_opencode_borrows_the_relay_for_metering_not_for_routing():
     env = agents.build_env(spec, _relay_openai(), {"RELAY_API_KEY": "sk"})
     assert env["OPENAI_API_KEY"] == "sk"
     assert env["NODUS_RUN"] == "1"
+
+
+def test_cmd_shim_flattens_a_multi_line_prompt(monkeypatch):
+    """cmd.exe stops at the first newline; the brief must survive the shim.
+
+    Without this, opencode received only the first line of the brief, answered
+    "no task given", and exited 0 — a run that reported completed while doing
+    nothing (reproduced on Windows with the npm `opencode.cmd` shim).
+    """
+    monkeypatch.setattr(agents.shutil, "which", lambda name: r"C:\npm\opencode.cmd")
+    prompt = "第一行\n## 任务\n写 hello.py\n"
+    argv = agents.argv(agents.SPECS["opencode-glm"], _relay_openai(), prompt=prompt)
+    assert argv[:3] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
+    assert all("\n" not in part and "\r" not in part for part in argv)
+    assert "写 hello.py" in argv[-1]
