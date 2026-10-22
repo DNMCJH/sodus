@@ -145,7 +145,9 @@ paths:
         自动恢复上线后，首屏改读三组新字段：`needs_you` 只含人能做主的
         决定（每条带项目、任务、问题、改动、建议），`auto_recovering` 是
         系统正在重试的失败（attempt + next_retry_at，不需要按钮），
-        `deterministic` 是重试不会好的失败。`decisions` 保留给旧客户端。
+        `deterministic` 是重试不会好的失败；`history_failures` 收留已经
+        重试过、任务另有在跑或太旧的失败，折叠在首屏里不丢。`decisions`
+        保留给旧客户端。
       responses:
         '200':
           description: 首屏状态
@@ -1533,7 +1535,7 @@ components:
     DecisionCounts:
       type: object
       additionalProperties: false
-      required: [proposal, red, failed, unverified, needs_you, auto_recovering, deterministic]
+      required: [proposal, red, failed, unverified, needs_you, auto_recovering, deterministic, history_failed]
       properties:
         proposal:
           type: integer
@@ -1548,6 +1550,8 @@ components:
         auto_recovering:
           type: integer
         deterministic:
+          type: integer
+        history_failed:
           type: integer
 
     AgentCost:
@@ -1600,7 +1604,7 @@ components:
       type: object
       additionalProperties: false
       required: [now, day, profile, running, decisions, decision_counts, unverified_runs,
-                 needs_you, auto_recovering, deterministic, today]
+                 needs_you, auto_recovering, deterministic, history_failures, today]
       properties:
         now:
           type: number
@@ -1637,6 +1641,11 @@ components:
         deterministic:
           type: array
           description: 重试不会好的失败（401/403/400、内容策略、模型不存在）
+          items:
+            $ref: '#/components/schemas/DecisionContext'
+        history_failures:
+          type: array
+          description: 已经重试过 / 任务另有在跑 / 太旧，不再自动重试的失败；折叠展示
           items:
             $ref: '#/components/schemas/DecisionContext'
         today:

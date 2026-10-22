@@ -95,6 +95,14 @@ def test_remaining_decisions_expand_where_they_are_counted():
     assert "还有 ${rest.length} 件" in ui.PAGE
 
 
+def test_failures_recovery_gave_up_on_stay_reachable():
+    # already-retried / task-running / too-old failures are not decisions, but
+    # they must not vanish while decision_counts.failed still counts them.
+    assert "history_failures" in ui.PAGE
+    assert "toggleHistory" in ui.PAGE
+    assert "不会再自动重试" in ui.PAGE
+
+
 def test_a_retry_in_flight_says_so_in_the_live_row():
     # The live row reads the note first; "auto-retry 1/2" must become a
     # sentence, not appear as the agent's task description.

@@ -143,6 +143,20 @@ def test_over_budget_is_a_decision_not_a_retry(home):
     assert all(item["run_id"] != run["id"] for item in board["auto_recovering"])
 
 
+def test_a_failure_the_chain_moved_past_is_kept_in_history(home):
+    # The old failure is not a decision and not auto-recovering any more, but
+    # dropping it would leave decision_counts.failed explaining a row nobody
+    # can find.
+    task, original = seed(home, error=ORPHAN, ended=time.time() - 600)
+    seed(home, error="", status="completed", task=task, parent=original["id"])
+
+    board = server.board_state()
+    assert all(item.get("run") != original["id"] for item in board["needs_you"])
+    entry = find(board, "history_failures", original["id"])
+    assert "已经自动重试过" in entry["problem"]
+    assert board["decision_counts"]["history_failed"] == 1
+
+
 def test_switching_recovery_off_makes_transient_failures_a_decision(home, monkeypatch):
     monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
     _, run = seed(home, error=ORPHAN)
@@ -198,6 +212,7 @@ def test_board_keeps_the_old_keys_and_adds_the_new_ones(home):
     assert {
         "now", "day", "profile", "running", "decisions", "decision_counts", "today",
         "unverified_runs", "needs_you", "auto_recovering", "deterministic",
+        "history_failures",
     } <= set(board)
     assert board["decision_counts"]["needs_you"] == len(board["needs_you"])
     assert board["decision_counts"]["deterministic"] == len(board["deterministic"])

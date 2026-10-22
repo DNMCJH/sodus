@@ -380,7 +380,7 @@ def _needs_you(
     facts: dict[str, dict],
     unverified_runs: list[dict],
     now: float,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     """Only what a person must decide. Recovery decides the rest by itself.
 
     A transient failure that still has retries left is *not* here: the board
@@ -389,6 +389,10 @@ def _needs_you(
     """
     items: list[dict] = []
     failed: list[dict] = []
+    # Failures that recovery has already given up on (or never owned) still
+    # happened. Dropping them from every list is how a board starts lying: the
+    # count says five failures and a human can only find one of them.
+    history: list[dict] = []
     for run in runs:
         if str(run.get("status") or "") != "failed":
             continue
@@ -400,11 +404,21 @@ def _needs_you(
             # transient failure is a human decision again instead of silently
             # disappearing from both lists.
             reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
+            history_reasons = {
+                "already-retried": "已经自动重试过，不会再试了",
+                "task-running": "这个任务已经有新的一条在跑",
+                "too-old": "太旧了，不在自动恢复窗口内",
+            }
+            if reason in history_reasons:
+                history.append(
+                    _run_entry(run, facts, history_reasons[reason], "看日志确认它到底改到哪一步。")
+                )
+                continue
             if reason not in (
                 "retry-limit", "over-budget", "missing-context", "task-gone", "disabled",
             ):
-                # "" / "backoff" are being recovered; "already-retried" and
-                # "task-running" have a live owner; "too-old" is history.
+                # "" / "backoff" are being recovered right now: visible under
+                # "auto recovering", so listing them twice would be noise.
                 continue
             depth = recover.retry_depth(run)
             if reason == "retry-limit":
@@ -451,7 +465,7 @@ def _needs_you(
         items.append(
             _unverified_entry(unverified_runs[0], facts, len(unverified_runs), latest_run)
         )
-    return items
+    return items, history
 
 
 def _deterministic(runs: list[dict], facts: dict[str, dict]) -> list[dict]:
@@ -599,12 +613,13 @@ def board_state(now: float | None = None) -> dict:
     titles = _task_titles([r.get("task_id") or "" for r in runs])
     unverified_runs = _unverified_rows(runs, states, titles)
     facts = _task_facts([r.get("task_id") or "" for r in runs])
-    needs_you = _needs_you(runs, states, facts, unverified_runs, now)
+    needs_you, history_failures = _needs_you(runs, states, facts, unverified_runs, now)
     deterministic = _deterministic(runs, facts)
     auto_recovering = recover.recovering(now)
     counts["needs_you"] = len(needs_you)
     counts["auto_recovering"] = len(auto_recovering)
     counts["deterministic"] = len(deterministic)
+    counts["history_failed"] = len(history_failures)
     conn = db.connect()
     try:
         live = _live_rows(conn, now)
@@ -622,6 +637,7 @@ def board_state(now: float | None = None) -> dict:
         "needs_you": needs_you,
         "auto_recovering": auto_recovering,
         "deterministic": deterministic,
+        "history_failures": history_failures,
         "today": {"window_start": start, **today},
     }
 

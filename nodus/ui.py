@@ -453,6 +453,7 @@ function renderTodo() {
   const needs = b.needs_you || [];
   const recovering = b.auto_recovering || [];
   const blocked = b.deterministic || [];
+  const history = b.history_failures || [];
   $("todo-n").textContent = needs.length ? needs.length + " 件" : "";
   if (!needs.length) {
     $("todo").innerHTML = `<div class="empty">没有需要你决定的事${
@@ -467,9 +468,18 @@ function renderTodo() {
     }
     $("todo").innerHTML = blocks.join("");
   }
+  if (history.length) {
+    $("todo").insertAdjacentHTML("beforeend",
+      `<div class="more-inline">还有 ${history.length} 个失败不会再自动重试
+        <button onclick="toggleHistory()">${historyOpen ? "收起" : "展开"}</button></div>` +
+      (historyOpen ? history.map(decisionRow).join("") : ""));
+  }
   renderRecover(recovering);
   renderBlocked(blocked);
 }
+
+let historyOpen = false;
+function toggleHistory() { historyOpen = !historyOpen; renderTodo(); }
 
 function renderMoney(t) {
   t = t || {};
