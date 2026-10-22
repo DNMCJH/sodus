@@ -15,6 +15,7 @@ from ... import (
     decision,
     daemon,
     desk as desk_view,
+    policy,
     providers,
     routes,
     runner,
@@ -65,6 +66,19 @@ def add(sub) -> None:
 
     p = sub.add_parser("jev", help="is the Jev key configured")
     p.set_defaults(func=jev)
+
+    p = sub.add_parser(
+        "route-for",
+        help="assess a task and recommend one of the six routes (does not dispatch)",
+    )
+    p.add_argument("task", help="the task text, in quotes")
+    p.add_argument("--json", action="store_true", help="print the assessment and recommendation as JSON")
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="print the dispatch command for the recommended route (no task is created)",
+    )
+    p.set_defaults(func=route_for, needs_daemon=False)
 
     p = sub.add_parser("reconcile", help="fail runs whose owner died mid-run")
     p.add_argument("--stale", type=int, default=900)
@@ -422,6 +436,83 @@ def jev(args) -> int:
     ok, why = decision.available()
     print(("ready: " if ok else "not ready: ") + why)
     return 0 if ok else 1
+
+
+def route_for(args) -> int:
+    """Judgement + suggestion, never a dispatch by itself.
+
+    A route recommendation without a task id cannot be handed to `nodus run`,
+    so `--apply` stops at printing the command a caller would use. Making the
+    default mode read-only is more important than making the flag feel busy.
+    """
+    assessment = policy.assess(args.task)
+    recommendation = policy.recommend(assessment)
+    apply = {
+        "dispatched": False,
+        "route": recommendation["route"],
+        "command": f"nodus run <task-id> --route {recommendation['route']}",
+    }
+
+    if args.json:
+        payload = {"assess": assessment, "recommend": recommendation}
+        if args.apply:
+            payload["apply"] = apply
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    _print_assessment(assessment)
+    _print_recommendation(recommendation)
+
+    if args.apply:
+        print()
+        print(f"建议用 `--route {recommendation['route']}`：{apply['command']}")
+        print("route-for 不创建任务、不派活；--apply 目前只输出这一步。")
+    return 0
+
+
+def _print_assessment(assessment: dict) -> None:
+    needs = ", ".join(assessment.get("needs") or []) or "none"
+    print("判断")
+    print(
+        f"  difficulty  {assessment['difficulty']}/5   "
+        f"kind={assessment['kind']}   needs={needs}   "
+        f"confidence={assessment['confidence']:.2f}"
+    )
+    if assessment.get("basis") == "rules+jev":
+        jev = assessment.get("jev") or {}
+        agreement = jev.get("agreement") or {}
+        marks = " ".join(
+            f"{name}={'agree' if agreement.get(name) else 'differ'}"
+            for name in ("difficulty", "kind")
+        )
+        print(
+            f"  basis       rules+jev   "
+            f"({jev.get('model')}, {jev.get('latency_ms')}ms, {marks})"
+        )
+    else:
+        jev = assessment.get("jev") or {}
+        print(f"  basis       rules-only   ({jev.get('unavailable') or 'Jev unavailable'})")
+    print(f"  signals     {', '.join(assessment.get('signals') or []) or '-'}")
+
+
+def _print_recommendation(recommendation: dict) -> None:
+    spec = recommendation.get("route_spec") or {}
+    providers = " -> ".join(spec.get("providers") or []) or "-"
+    evidence = recommendation.get("evidence") or {}
+    print("\n建议")
+    print(
+        f"  route       {recommendation['route']}   "
+        f"({spec.get('agent') or '?'} @ {providers})"
+    )
+    print(f"  为什么       {recommendation['rationale']}")
+    print(f"  证据        {evidence.get('status')} · {evidence.get('scope')}")
+    if evidence.get("note"):
+        print(f"              {evidence['note']}")
+    print(f"  置信度       {recommendation['confidence']:.2f}")
+    print(f"  无实测       {', '.join(recommendation.get('unmeasured') or []) or '-'}")
+    print("  备选")
+    for alt in recommendation.get("alternatives") or []:
+        print(f"    {alt['route']:<15} {alt['why']}")
 
 
 def reconcile(args) -> int:
