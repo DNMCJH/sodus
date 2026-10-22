@@ -983,6 +983,7 @@ class Handler(BaseHTTPRequestHandler):
                     provider=body.get("provider", ""),
                     verify_run=body.get("verify"),
                     propose_run=bool(body.get("propose", False)),
+                    include_memory=not bool(body.get("no_memory", False)),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

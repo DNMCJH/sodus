@@ -39,6 +39,11 @@ def add(sub) -> None:
         help="do not run the project's tests when the worker changed files",
     )
     p.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="do not inject remembered facts into the brief",
+    )
+    p.add_argument(
         "--wait",
         type=float,
         default=0.0,
@@ -118,6 +123,7 @@ def run(args) -> int:
             "wait": args.wait,
             "verify": not args.no_verify,
             "propose": args.propose,
+            "no_memory": args.no_memory,
         },
     )
     print(f"run {r['id']} ({r.get('route') or route})")

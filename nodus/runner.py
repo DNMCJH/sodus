@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, meter, pet, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, memory, meter, pet, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -102,6 +102,7 @@ def build_prompt(
     cwd: str,
     note: str = "",
     include_handoff: bool = True,
+    memory: str = "",
 ) -> str:
     extra = f"\n## 本次指令\n{note}\n" if note else ""
     previous = (
@@ -109,6 +110,9 @@ def build_prompt(
         if include_handoff
         else ""
     )
+    # Only when there is something to say. An empty section would teach the
+    # worker that this part of the brief is noise.
+    known = f"\n{memory.strip()}\n" if memory.strip() else ""
     return f"""你是 Nodus 里负责执行任务的 agent（{agent}）。
 
 ## 任务
@@ -116,7 +120,7 @@ def build_prompt(
 
 ## 验收标准
 {task.get('acceptance') or '未提供，按任务目标自行判断'}
-{extra}{previous}
+{extra}{known}{previous}
 ## 工作目录
 {cwd}
 
@@ -199,6 +203,7 @@ class Runner:
         effort: str = "",
         model: str = "",
         include_handoff: bool = True,
+        include_memory: bool = True,
         session_id: str = "",
         session_mode: str = "resume",
         profile: str = "",
@@ -275,7 +280,7 @@ class Runner:
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,
-                  include_handoff, session_id, session_mode, verify_run, proposal_ctx),
+                  include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx),
             daemon=True,
         )
         thread.start()
@@ -338,6 +343,7 @@ class Runner:
         secrets: dict[str, str],
         profile_name: str,
         include_handoff: bool,
+        include_memory: bool,
         session_id: str,
         session_mode: str,
         verify_run: bool,
@@ -346,7 +352,7 @@ class Runner:
         try:
             self._execute_inner(
                 rid, route, spec, task, workdir, secrets, profile_name,
-                include_handoff, session_id, session_mode, verify_run, proposal_ctx,
+                include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx,
             )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
@@ -364,6 +370,7 @@ class Runner:
         secrets: dict[str, str],
         profile_name: str,
         include_handoff: bool,
+        include_memory: bool,
         session_id: str,
         session_mode: str,
         verify_run: bool,
@@ -378,6 +385,13 @@ class Runner:
             # instruction verbatim instead of wrapping it in a fresh task brief.
             prompt = note
         else:
+            known = (
+                memory.context_for(
+                    task.get("goal") or task.get("title") or "", agent=spec.name
+                )
+                if include_memory
+                else ""
+            )
             prompt = build_prompt(
                 task,
                 recent_handoff(task["id"]),
@@ -385,6 +399,7 @@ class Runner:
                 str(workdir),
                 note,
                 include_handoff=include_handoff,
+                memory=known,
             )
         (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
 

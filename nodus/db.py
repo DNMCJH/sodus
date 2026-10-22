@@ -130,6 +130,24 @@ CREATE TABLE IF NOT EXISTS pipeline (
   started_at REAL,
   ended_at REAL
 );
+-- Memory is a confirmed fact, not a transcript. `scope` is the audience:
+-- private = exactly one agent, project = this workspace, public = everyone.
+-- `workspace_id` is only meaningful for project rows; private follows the agent.
+CREATE TABLE IF NOT EXISTS memory (
+  id TEXT PRIMARY KEY,
+  scope TEXT DEFAULT 'project',
+  key TEXT,
+  text TEXT,
+  tags TEXT,
+  agent TEXT,
+  created_at REAL,
+  updated_at REAL,
+  source_run TEXT,
+  source_session TEXT,
+  workspace_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory(scope, workspace_id, agent);
+CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(scope, workspace_id, agent, key);
 """
 
 
@@ -187,6 +205,12 @@ def connect() -> sqlite3.Connection:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
+    # Same incremental rule for memory: an early build of this table shipped
+    # without the ownership columns, and adding them is cheap next to a rebuild.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(memory)")}
+    for column in ("agent", "tags", "source_session"):
+        if column not in cols:
+            conn.execute(f"ALTER TABLE memory ADD COLUMN {column} TEXT")
     conn.execute(
         "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')"
     )

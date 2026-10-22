@@ -16,6 +16,8 @@ EXPECTED_TOOLS = {
     "nodus_run_status",
     "nodus_proposals",
     "nodus_cost_today",
+    "nodus_memory_remember",
+    "nodus_memory_recall",
 }
 
 
@@ -89,11 +91,11 @@ def test_unknown_method_is_a_jsonrpc_error(home):
 # ---- tools/list --------------------------------------------------------
 
 
-def test_tools_list_returns_the_five_tools(home):
+def test_tools_list_returns_every_tool(home):
     reply = call("tools/list")
     tools = reply["result"]["tools"]
     assert {item["name"] for item in tools} == EXPECTED_TOOLS
-    assert len(tools) == 5
+    assert len(tools) == 7
 
 
 def test_every_tool_has_an_object_input_schema(home):

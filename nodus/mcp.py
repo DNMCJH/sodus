@@ -22,7 +22,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, db, runner
+from . import config, db, memory, runner
 
 PROTOCOL_VERSION = "2024-11-05"
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
@@ -120,6 +120,63 @@ TOOLS: list[dict] = [
         ),
         "inputSchema": _schema({}),
     },
+    {
+        "name": "nodus_memory_remember",
+        "description": (
+            "记下一条本可以下次派活时直接说的话。scope：private 只属于一个 agent，"
+            "project 只属于当前 workspace，public 全局共享。同一个 key 再写会覆盖旧值"
+            "（updated_at 更新），所以 key 是「这条事实的名字」，不是正文。"
+        ),
+        "inputSchema": _schema(
+            {
+                "text": {
+                    "type": "string",
+                    "description": "一条自包含的事实，例如「构建脚本统一用 pnpm」",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": list(memory.SCOPES),
+                    "default": "project",
+                    "description": "可见范围，默认 project",
+                },
+                "key": {
+                    "type": "string",
+                    "description": "稳定名字；同 scope 同 owner 下覆盖旧值",
+                },
+                "tags": {"type": "string", "description": "逗号分隔，提高 recall 命中"},
+                "agent": {
+                    "type": "string",
+                    "description": "私有记忆的归属 agent；scope=private 时必填",
+                },
+                "run_id": {"type": "string", "description": "这条事实来自哪次执行"},
+            },
+            ("text",),
+        ),
+    },
+    {
+        "name": "nodus_memory_recall",
+        "description": (
+            "按关键词查记忆，命中词多的排前面。private 记忆只有同一个 agent 读得到，"
+            "换一个 agent 调用就看不到。query 为空时按更新时间倒序。"
+        ),
+        "inputSchema": _schema(
+            {
+                "query": {"type": "string", "description": "关键词，空格分隔多个词"},
+                "scope": {
+                    "type": "string",
+                    "enum": list(memory.SCOPES),
+                    "description": "只看某一档；不传则含 project + public + 自己的 private",
+                },
+                "agent": {"type": "string", "description": "调用方 agent，决定私有记忆可见性"},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 5,
+                },
+            }
+        ),
+    },
 ]
 
 
@@ -155,6 +212,18 @@ def _boolean(args: dict, name: str, default: bool = False) -> bool:
     if value in (0, 1):
         return bool(value)
     raise ToolError(f"参数 `{name}` 必须是布尔值")
+
+
+def _integer(args: dict, name: str, default: int = 0) -> int:
+    value = args.pop(name, default)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ToolError(f"参数 `{name}` 必须是整数")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ToolError(f"参数 `{name}` 必须是整数") from None
 
 
 def _no_extra(args: dict) -> None:
@@ -307,12 +376,49 @@ def _cost_today(args: dict) -> dict:
     }
 
 
+def _memory_remember(args: dict) -> dict:
+    text = _string(args, "text")
+    scope = _string(args, "scope", required=False, default="project") or "project"
+    key = _string(args, "key", required=False)
+    tags = _string(args, "tags", required=False)
+    agent = _string(args, "agent", required=False)
+    run_id = _string(args, "run_id", required=False)
+    _no_extra(args)
+    try:
+        row = memory.remember(
+            text,
+            scope=scope,
+            key=key,
+            tags=tags,
+            agent=agent,
+            run_id=run_id,
+        )
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+    return row
+
+
+def _memory_recall(args: dict) -> dict:
+    query = _string(args, "query", required=False)
+    scope = _string(args, "scope", required=False)
+    agent = _string(args, "agent", required=False)
+    limit = _integer(args, "limit", default=5)
+    _no_extra(args)
+    try:
+        rows = memory.recall(query, scope=scope or None, agent=agent, limit=limit)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+    return {"count": len(rows), "memories": rows}
+
+
 _HANDLERS: dict[str, Callable[[dict], dict]] = {
     "nodus_task_create": _task_create,
     "nodus_run": _run,
     "nodus_run_status": _run_status,
     "nodus_proposals": _proposals,
     "nodus_cost_today": _cost_today,
+    "nodus_memory_remember": _memory_remember,
+    "nodus_memory_recall": _memory_recall,
 }
 
 
