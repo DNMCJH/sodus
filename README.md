@@ -40,6 +40,7 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus routes list\|show\|set\|rm` | 路由组：一个 CLI + 有序回退链 |
 | `nodus profiles list\|show\|use\|new\|rm` | 配置快照：切一套环境 |
 | `nodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
+| `nodus mcp` | MCP server over stdio（接 Claude Code / DSH，见 [docs/mcp.md](docs/mcp.md)） |
 | `nodus --version` | 版本 |
 | `nodus task "goal" --accept "..."` | 建任务，返回 task-id |
 | `nodus sessions [--vendor] [--query] [--source]` | 三家会话 + Nodus run，一张表 |
@@ -105,6 +106,7 @@ nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
 nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
+nodus/mcp.py             MCP over stdio（JSON-RPC 2.0，换行分帧）
 tests/                   自己的一套 pytest（195 条）
 ```
 
