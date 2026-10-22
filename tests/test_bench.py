@@ -21,8 +21,11 @@ TASKS = Path(__file__).resolve().parent.parent / "eval" / "tasks"
 
 def test_eval_set_loads_completely():
     tasks = bench.discover(TASKS)
-    assert len(tasks) == 9
-    assert len({task.id for task in tasks}) == 9
+    # 9 easy/medium tasks + 3 hard ones (added so the router has data above
+    # difficulty 2, where every "hard task needs a stronger route" claim was
+    # previously unsupported).
+    assert len(tasks) == 12
+    assert len({task.id for task in tasks}) == 12
     for task in tasks:
         assert task.title.strip()
         assert task.prompt.strip()
@@ -30,6 +33,20 @@ def test_eval_set_loads_completely():
         assert task.start.is_dir()
         assert task.test_files, f"{task.id}: hidden_tests is empty"
         assert (task.root / "task.json").is_file()
+        # 0 means "not declared"; anything else must be a real 1-5 rating.
+        assert 0 <= task.difficulty <= 5, f"{task.id}: difficulty out of range"
+
+
+def test_the_hard_tasks_declare_their_difficulty():
+    """The router reads `difficulty`, so the hard set has to declare it.
+
+    Without this the hardest task scored 2 (derived from its title) and the
+    policy could not tell that any benchmark had ever tested a hard task.
+    """
+    tasks = {task.id: task for task in bench.discover(TASKS)}
+    assert tasks["interface-first-rules"].difficulty == 5
+    assert tasks["debug-day-boundary"].difficulty == 4
+    assert tasks["budget-currency-admit"].difficulty == 4
 
 
 def test_a_task_without_required_fields_is_rejected(tmp_path):

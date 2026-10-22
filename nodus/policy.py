@@ -736,8 +736,14 @@ def _bench_evidence() -> dict[str, dict]:
                 if not isinstance(item, dict):
                     unpriced += 1
                     continue
+                # Prefer the difficulty the task declares. Re-deriving it from
+                # the title used to score a 521-line debugging task as a 2 and
+                # made every "hard task" claim look unsupported.
+                declared = _number(item.get("difficulty"))
                 title = str(item.get("title") or "").strip()
-                if title:
+                if declared is not None and declared > 0:
+                    tested = max(tested, int(declared))
+                elif title:
                     tested = max(tested, int(_rules(title, "")["difficulty"]))
                 duration = _number(item.get("duration_s"))
                 if duration is not None and duration >= 0:

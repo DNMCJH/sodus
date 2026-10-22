@@ -62,6 +62,9 @@ class Task:
     prompt: str
     timeout: float
     root: Path
+    #: Declared difficulty 1-5. The router must read this, not re-derive it
+    #: from the title: a title says what a task is about, not how hard it is.
+    difficulty: int = 0
 
     @property
     def start(self) -> Path:
@@ -98,12 +101,20 @@ def load_task(root: Path) -> Task:
         raise ValueError(f"{root.name}: timeout must be a number") from None
     if timeout <= 0:
         raise ValueError(f"{root.name}: timeout must be positive")
+    raw_difficulty = meta.get("difficulty", 0)
+    try:
+        difficulty = int(raw_difficulty or 0)
+    except (TypeError, ValueError):
+        difficulty = 0
+    if difficulty < 0 or difficulty > 5:
+        raise ValueError(f"{root.name}: difficulty must be 0-5")
     task = Task(
         id=str(meta["id"]),
         title=str(meta["title"]),
         prompt=str(meta["prompt"]),
         timeout=timeout,
         root=root,
+        difficulty=difficulty,
     )
     if not task.start.is_dir():
         raise ValueError(f"{root.name}: missing start/")
@@ -445,6 +456,7 @@ def run(
                 row = {
                     "task": task.id,
                     "title": task.title,
+            "difficulty": task.difficulty,
                     "verdict": AGENT_ERROR,
                     "run_id": "",
                     "run_status": "failed",
