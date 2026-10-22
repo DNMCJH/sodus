@@ -354,7 +354,7 @@ function renderLive() {
 
 function decisionRow(d) {
   const when = d.at ? ago(d.at) : "";
-  const head = `<span class="proj">${esc(d.project || "（项目未记录）")}</span>` +
+  const head = `<span class="proj">项目 ${esc(d.project || "未记录")}</span>` +
     `<span class="dim"> · </span>${esc(d.task_title || d.title || "（任务没写标题）")}`;
   const goal = clip(d.goal || "", 120);
   // Hoisted out of the "unverified" branch on purpose: the same list is needed
@@ -427,7 +427,7 @@ function renderRecover(rows) {
   $("recover-n").textContent = rows.length + " 件";
   $("recover").innerHTML = rows.map(r =>
     `<div class="recover-row">
-       <span class="who">${esc(r.project || "（项目未记录）")} · ${esc(r.task_title || "（任务没写标题）")}</span>
+       <span class="who">项目 ${esc(r.project || "未记录")} · ${esc(r.task_title || "（任务没写标题）")}</span>
        <span class="dim">第 ${r.attempt}/${r.limit || 2} 次</span>
        <span class="when">${esc(retryWait(r.next_retry_at))}</span>
      </div>`).join("");
@@ -440,7 +440,7 @@ function renderBlocked(rows) {
   $("blocked-n").textContent = rows.length + " 件";
   $("blocked").innerHTML = rows.map(r =>
     `<div class="blocked-row">
-       <div><span class="who">${esc(r.project || "（项目未记录）")} · ${esc(r.task_title || "（任务没写标题）")}</span></div>
+       <div><span class="who">项目 ${esc(r.project || "未记录")} · ${esc(r.task_title || "（任务没写标题）")}</span></div>
        <div class="why">${esc(r.problem || "")}</div>
        <div class="do"><span class="grow">${esc(r.suggestion || "")}</span>
          <button onclick="showLog('${r.run}')">看日志</button>
@@ -453,10 +453,7 @@ function renderTodo() {
   const needs = b.needs_you || [];
   const recovering = b.auto_recovering || [];
   const blocked = b.deterministic || [];
-  $("todo-n").textContent = [
-    needs.length ? needs.length + " 件要你决定" : "",
-    recovering.length ? recovering.length + " 件在自动重试" : "",
-  ].filter(Boolean).join(" · ");
+  $("todo-n").textContent = needs.length ? needs.length + " 件" : "";
   if (!needs.length) {
     $("todo").innerHTML = `<div class="empty">没有需要你决定的事${
       recovering.length ? "；" + recovering.length + " 件失败正在自动重试，不用你管。" : "。"}</div>`;
