@@ -19,6 +19,19 @@ LEGACY_AGENTS_DIR = HOME / "agents"
 VERSION = "0.4.0"
 
 
+def home_id() -> str:
+    """A short, stable fingerprint of this state directory.
+
+    Two `nodus` processes can listen on the same loopback port while reading
+    different databases — a verification run with its own NODUS_HOME is enough.
+    The board then shows somebody else's work and every decision made from it is
+    wrong. `nodus up` compares this fingerprint before claiming "already up".
+    """
+    import hashlib
+
+    return hashlib.sha256(str(HOME.resolve()).encode("utf-8")).hexdigest()[:12]
+
+
 def _absorb_legacy_home() -> None:
     """Move a pre-rename state directory instead of silently starting empty.
 

@@ -786,7 +786,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/health":
             return _json(
-                self, 200, {"ok": True, "version": config.VERSION, "profile": config.active_profile()}
+                self,
+                200,
+                {
+                    "ok": True,
+                    "version": config.VERSION,
+                    "profile": config.active_profile(),
+                    "home": config.home_id(),
+                },
             )
 
         if path == "/agents":

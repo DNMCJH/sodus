@@ -49,3 +49,39 @@ def test_stop_without_a_record_says_so(tmp_path, monkeypatch):
     # stopped it is the whole point.
     assert result["ok"] is False
     assert "no pid recorded" in result["note"]
+
+
+def test_same_home_accepts_its_own_fingerprint(monkeypatch):
+    monkeypatch.setattr(daemon.config, "home_id", lambda: "abc123")
+    assert daemon.same_home({"home": "abc123"}) is True
+
+
+def test_same_home_rejects_another_state_directory(monkeypatch):
+    monkeypatch.setattr(daemon.config, "home_id", lambda: "abc123")
+    assert daemon.same_home({"home": "def456"}) is False
+
+
+def test_same_home_tolerates_an_older_daemon(monkeypatch):
+    # A daemon started before this field existed must not lock the operator out
+    # of their own board.
+    monkeypatch.setattr(daemon.config, "home_id", lambda: "abc123")
+    assert daemon.same_home({"ok": True, "version": "0.4.0"}) is True
+
+
+def test_status_flags_a_foreign_daemon(monkeypatch):
+    monkeypatch.setattr(daemon, "read_state", lambda: {"pid": 1, "port": 4199})
+    monkeypatch.setattr(daemon, "health", lambda port, timeout=1.0: True)
+    monkeypatch.setattr(daemon, "health_info", lambda port, timeout=1.0: {"home": "other"})
+    monkeypatch.setattr(daemon.config, "home_id", lambda: "mine")
+    st = daemon.status()
+    assert st["up"] is True and st["home_mismatch"] is True
+    assert st["remote_home"] == "other"
+
+
+def test_up_refuses_a_foreign_daemon(monkeypatch):
+    monkeypatch.setattr(daemon, "status", lambda port=4199: {
+        "up": True, "home_mismatch": True, "remote_home": "other", "port": port,
+    })
+    result = daemon.start()
+    assert result["ok"] is False
+    assert "different state directory" in result["error"]

@@ -70,6 +70,33 @@ def health(port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def health_info(port: int, timeout: float = 1.0) -> dict:
+    """What the daemon on this port says about itself ({} when unreachable).
+
+    The important field is `home`: a daemon serving a *different* state
+    directory answers /health just fine, and every number on its board belongs
+    to somebody else's work.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://127.0.0.1:{int(port)}/health", timeout=timeout) as resp:
+            if resp.status != 200:
+                return {}
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        return {}
+
+
+def same_home(info: dict) -> bool:
+    """Is this daemon reading the same state directory as us?
+
+    Older builds did not report `home`; treat that as "cannot prove it is a
+    different one" so an upgrade does not lock the operator out.
+    """
+    remote = str((info or {}).get("home") or "")
+    return (not remote) or remote == config.home_id()
+
+
 def alive(pid: int) -> bool:
     """Is this pid a live process? (Cheap; does not prove it is *our* daemon.)"""
     if not pid:
@@ -95,8 +122,11 @@ def status(port: int = DEFAULT_PORT) -> dict:
     state = read_state()
     port = int(state.get("port") or port)
     up = health(port)
+    info = health_info(port) if up else {}
     return {
         "up": up,
+        "home_mismatch": bool(up) and not same_home(info),
+        "remote_home": info.get("home") or "",
         "port": port,
         "pid": state.get("pid") if up else None,
         "started": state.get("started") if up else None,
@@ -112,6 +142,16 @@ def start(port: int = DEFAULT_PORT, wait: float = 20.0) -> dict:
     """
     current = status(port)
     if current["up"]:
+        if current.get("home_mismatch"):
+            return {
+                **current,
+                "ok": False,
+                "error": (
+                    f"port {port} is serving a different state directory "
+                    f"(home {current.get('remote_home') or '?'} vs ours); refusing to "
+                    "report it as ours - stop that daemon or pick another --port"
+                ),
+            }
         return {**current, "ok": True, "already": True}
 
     config.ensure_dirs()
