@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -13,7 +14,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import agents, config, db, jobs, pet, profiles, propose, providers, routes, runner, ui
+from . import (
+    agents,
+    config,
+    db,
+    jobs,
+    pet,
+    profiles,
+    propose,
+    providers,
+    recover,
+    routes,
+    runner,
+    ui,
+)
 
 MAX_BODY = 1_000_000
 #: The HTTP contract lives in the repo root so editors and code generators can
@@ -173,6 +187,285 @@ def _unverified_rows(
     return rows[:50]
 
 
+def _first_line(text) -> str:
+    return str(text or "").strip().split("\n")[0].strip()
+
+
+def _clip(text: str, n: int = 120) -> str:
+    value = " ".join(str(text or "").split())
+    return value if len(value) <= n else value[: n - 1].rstrip() + "…"
+
+
+def _project(cwd) -> str:
+    """Last path segment, whichever slash the platform wrote."""
+    value = str(cwd or "").rstrip("/\\")
+    return re.split(r"[\\/]", value)[-1] if value else ""
+
+
+def _task_facts(task_ids: list[str]) -> dict[str, dict]:
+    """Title and goal per task, one query. The board names a task, not a run."""
+    ids = [tid for tid in dict.fromkeys(task_ids) if tid]
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            f"SELECT id, title, goal FROM task WHERE id IN ({marks})", tuple(ids)
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[str, dict] = {}
+    for row in rows:
+        title = str(row["title"] or "").strip() or _first_line(row["goal"])
+        out[row["id"]] = {"title": title, "goal": str(row["goal"] or "")}
+    return out
+
+
+def _handoff_change(run: dict) -> str | None:
+    """The file list a failed run wrote into its handoff before giving up."""
+    try:
+        conn = db.connect()
+        try:
+            row = conn.execute(
+                "SELECT path FROM handoff WHERE from_run_id=? ORDER BY created_at DESC LIMIT 1",
+                (run["id"],),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        text = Path(row["path"]).read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        return None
+    if "## 改动文件" not in text:
+        return None
+    section = text.split("## 改动文件", 1)[1].split("\n## ", 1)[0]
+    files = [
+        line[2:].strip()
+        for line in section.splitlines()
+        if line.startswith("- ") and "（无改动）" not in line
+    ]
+    if not files:
+        return None
+    return f"改了 {len(files)} 个文件：{'、'.join(_project(p) for p in files[:3])}"
+
+
+def _change_summary(run: dict) -> str | None:
+    """What this run touched, in one phrase, or None when nothing is recorded.
+
+    Proposal mode runs in a worktree, so the artifact paths are the only trace
+    of the work once that branch is gone. A run that died before writing
+    anything says so by having no change line, not by inventing one.
+    """
+    try:
+        artifacts = db.artifacts_for(run["id"])
+    except (KeyError, TypeError):
+        return None
+    files: list[str] = []
+    for artifact in artifacts:
+        if artifact.get("kind") != "file":
+            continue
+        path = str(artifact.get("rel_path") or artifact.get("path") or "")
+        if path and path not in files:
+            files.append(path)
+    if not files:
+        return _handoff_change(run)
+    shown = "、".join(files[:3])
+    return f"改了 {len(files)} 个文件：{shown}" + (" …" if len(files) > 3 else "")
+
+
+def _task_label(task: dict, run: dict) -> str:
+    return (
+        str(task.get("title") or "").strip()
+        or _first_line(task.get("goal"))
+        or _first_line(run.get("note"))
+        or "（任务没写标题）"
+    )
+
+
+def _run_entry(
+    run: dict,
+    facts: dict[str, dict],
+    problem: str = "",
+    suggestion: str = "",
+) -> dict:
+    """One decision row: which project, which task, what broke, what it cost.
+
+    `title`/`detail`/`note` are the pre-recovery shape kept for API consumers;
+    the fields after them are what the first screen actually renders.
+    """
+    tid = str(run.get("task_id") or "")
+    task = facts.get(tid) or {}
+    cwd = str(run.get("cwd") or "")
+    issue = problem or recover.problem_text(run)
+    advice = suggestion or recover.suggestion_text(run)
+    return {
+        "kind": "failed",
+        "id": str(run.get("id") or ""),
+        "run": str(run.get("id") or ""),
+        "at": run.get("ended_at") or run.get("started_at"),
+        "project": _project(cwd),
+        "cwd": cwd,
+        "task_id": tid,
+        "task_title": _task_label(task, run),
+        "goal": _clip(task.get("goal") or ""),
+        "problem": issue,
+        "change": _change_summary(run),
+        "suggestion": advice,
+        "title": issue,
+        "detail": str(run.get("error") or "")[:160],
+        "note": "",
+    }
+
+
+def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
+    run = db.get_run(proposal.get("run_id") or "") if proposal.get("run_id") else {}
+    tid = str(proposal.get("task_id") or run.get("task_id") or "")
+    task = facts.get(tid) or {}
+    repo = str(proposal.get("repo") or run.get("cwd") or "")
+    files = [str(item.get("path") or "") for item in (proposal.get("files") or [])]
+    stat = str(proposal.get("stat") or "")
+    return {
+        "kind": "proposal",
+        "id": str(proposal.get("id") or ""),
+        "run": str(proposal.get("run_id") or ""),
+        "at": proposal.get("created_at"),
+        "project": _project(repo),
+        "cwd": repo,
+        "task_id": tid,
+        "task_title": _task_label(task, run),
+        "goal": _clip(task.get("goal") or ""),
+        "problem": "改动做完了，但在独立分支上，主工作区没动，等你决定合不合。",
+        "change": stat or (f"改了 {len(files)} 个文件" if files else None),
+        "suggestion": "先看改动摘要；测试红着或没验证就先重跑，没问题再点「合并」。",
+        "title": "提案在分支上，等你合入或丢弃",
+        "detail": stat,
+        "note": ", ".join(files)[:160],
+    }
+
+
+def _unverified_entry(
+    latest: dict, facts: dict[str, dict], count: int, run: dict | None = None
+) -> dict:
+    tid = str(latest.get("task_id") or "")
+    task = facts.get(tid) or {}
+    full = run or {}
+    cwd = str(full.get("cwd") or "")
+    return {
+        "kind": "unverified",
+        "id": "",
+        "run": "",
+        "at": latest.get("ended_at"),
+        "project": _project(cwd),
+        "cwd": cwd,
+        "task_id": tid,
+        "task_title": _task_label(task, full or latest),
+        "goal": _clip(task.get("goal") or ""),
+        "problem": (
+            f"最近 {count} 个 run 跑完了但没有测试证据；"
+            "进程退出码 0 只说明它退出了，不说明改对了。"
+        ),
+        "change": _change_summary(full) if full else None,
+        "suggestion": "展开看是哪几次，对最近一次点「重跑」让它跑测试。",
+        "title": f"{count} 个 run 跑完但没有测试证据（状态只代表进程退出码）",
+        "detail": "",
+        "note": "",
+    }
+
+
+def _needs_you(
+    runs: list[dict],
+    states: dict[str, str],
+    facts: dict[str, dict],
+    unverified_runs: list[dict],
+    now: float,
+) -> list[dict]:
+    """Only what a person must decide. Recovery decides the rest by itself.
+
+    A transient failure that still has retries left is *not* here: the board
+    shows it under "auto recovering" instead. The moment its budget is gone,
+    the same failure moves here — an exhausted retry is a decision again.
+    """
+    items: list[dict] = []
+    failed: list[dict] = []
+    for run in runs:
+        if str(run.get("status") or "") != "failed":
+            continue
+        cls = recover.classify(run)
+        if cls == "deterministic":
+            continue
+        if cls == "transient":
+            # With recovery switched off there is no machine to wait for, so a
+            # transient failure is a human decision again instead of silently
+            # disappearing from both lists.
+            reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
+            if reason not in (
+                "retry-limit", "over-budget", "missing-context", "task-gone", "disabled",
+            ):
+                # "" / "backoff" are being recovered; "already-retried" and
+                # "task-running" have a live owner; "too-old" is history.
+                continue
+            depth = recover.retry_depth(run)
+            if reason == "retry-limit":
+                problem = f"自动重试 {depth} 次都没成功。最后一次：{recover.problem_text(run)}"
+                suggestion = "看一眼日志：要么手动重跑，要么自己接手改。"
+            elif reason == "over-budget":
+                problem = "这个任务已经到预算上限，系统没有继续重试。"
+                suggestion = "确认值得继续就手动重跑，或调高 task 的 budget_json。"
+            elif reason == "disabled":
+                problem = "自动恢复已关闭，这个中途失败不会有人重试。"
+                suggestion = "手动点「重跑」，或去掉 NODUS_AUTO_RECOVER=0 再启动 daemon。"
+            else:
+                problem = "这条记录缺任务或目录信息，系统没法自动重试。"
+                suggestion = "重新派一次这个任务；旧记录只作为历史。"
+            failed.append(_run_entry(run, facts, problem, suggestion))
+        else:
+            failed.append(_run_entry(run, facts))
+    failed.sort(key=lambda item: item.get("at") or 0, reverse=True)
+    # Interruptions first: a failed run is the thing the operator did not ask
+    # for, a proposal is the expected output of work they did ask for.
+    items.extend(failed)
+
+    red = [r for r in runs if states.get(r["id"]) == "red"]
+    red.sort(key=_ended_at, reverse=True)
+    for run in red:
+        items.append(
+            _run_entry(
+                run,
+                facts,
+                problem="跑完了，但项目的测试没通过。",
+                suggestion="点「看日志」定位失败的那条测试，再决定重跑还是自己改。",
+            )
+        )
+
+    for proposal in db.list_proposals("open"):
+        items.append(_proposal_entry(proposal, facts))
+
+    if unverified_runs:
+        # The aggregate row is built from the same run snapshot, not a second
+        # lookup: the page must not print a project for a run it cannot see.
+        latest_run = next(
+            (r for r in runs if r.get("id") == unverified_runs[0].get("id")), {}
+        )
+        items.append(
+            _unverified_entry(unverified_runs[0], facts, len(unverified_runs), latest_run)
+        )
+    return items
+
+
+def _deterministic(runs: list[dict], facts: dict[str, dict]) -> list[dict]:
+    """Failures retrying cannot fix. Shown, but never under "needs you"."""
+    rows = [
+        _run_entry(run, facts)
+        for run in runs
+        if str(run.get("status") or "") == "failed"
+        and recover.classify(run) == "deterministic"
+    ]
+    rows.sort(key=lambda item: item.get("at") or 0, reverse=True)
+    return rows[:5]
+
+
 def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], dict]:
     """Everything on this board that cannot move without a human."""
     items: list[dict] = []
@@ -291,15 +584,27 @@ def _today(conn, start: float) -> dict:
 
 
 def board_state(now: float | None = None) -> dict:
-    """The first screen: what is running, what waits on a human, today's money."""
+    """The first screen: what is running, what waits on a human, today's money.
+
+    `decisions` and `decision_counts` keep their old shape because MCP and the
+    desktop pet read them. The recovery-era screen reads three newer fields:
+    `needs_you` (a human decision), `auto_recovering` (the machine is already
+    on it) and `deterministic` (retrying cannot help; fix the cause).
+    """
     now = time.time() if now is None else now
     start, day = _day_start(now)
     runs = db.list_runs(limit=50)
     states = db.verify_states([r["id"] for r in runs])
     decisions, counts = _decisions(runs, states)
-    unverified_runs = _unverified_rows(
-        runs, states, _task_titles([r.get("task_id") or "" for r in runs])
-    )
+    titles = _task_titles([r.get("task_id") or "" for r in runs])
+    unverified_runs = _unverified_rows(runs, states, titles)
+    facts = _task_facts([r.get("task_id") or "" for r in runs])
+    needs_you = _needs_you(runs, states, facts, unverified_runs, now)
+    deterministic = _deterministic(runs, facts)
+    auto_recovering = recover.recovering(now)
+    counts["needs_you"] = len(needs_you)
+    counts["auto_recovering"] = len(auto_recovering)
+    counts["deterministic"] = len(deterministic)
     conn = db.connect()
     try:
         live = _live_rows(conn, now)
@@ -314,6 +619,9 @@ def board_state(now: float | None = None) -> dict:
         "decisions": decisions,
         "decision_counts": counts,
         "unverified_runs": unverified_runs,
+        "needs_you": needs_you,
+        "auto_recovering": auto_recovering,
+        "deterministic": deterministic,
         "today": {"window_start": start, **today},
     }
 
@@ -563,7 +871,12 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.split("/")
             rid = parts[2]
             if len(parts) == 3:
-                return _json(self, 200, db.get_run(rid))
+                run = db.get_run(rid)
+                if run.get("status") == "failed":
+                    # The log view and the board must agree on why something
+                    # failed; the wording lives in recover.py, not in the page.
+                    run["problem"] = recover.problem_text(run)
+                return _json(self, 200, run)
             if parts[3] == "events":
                 after = int((qs.get("after") or [0])[0])
                 if (qs.get("stream") or ["0"])[0] in ("1", "true"):
@@ -719,6 +1032,14 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         _log(f"reaped {len(reaped)} orphaned run(s): " + ", ".join(r["id"] for r in reaped))
     if stalled:
         _log(f"closed {len(stalled)} pipeline(s) the previous daemon left running")
+    # Reaping has just turned the previous daemon's live runs into failures.
+    # Those are precisely the interruptions the operator should not have to
+    # decide on, so recovery gets one pass before the port starts answering,
+    # then keeps sweeping for failures that happen while the daemon is up.
+    if recover.enabled():
+        recover.start(log=_log)
+    else:
+        _log("auto-recover disabled (NODUS_AUTO_RECOVER=0)")
     if sys.stderr.isatty():  # a detached daemon writes to the log, not the console
         print(f"nodusd listening on http://{host}:{port}", file=sys.stderr, flush=True)
     try:
