@@ -781,3 +781,24 @@ def test_the_decision_event_carries_every_candidate_breakdown(home, rules_only, 
             "excluded",
         ):
             assert key in row, (row["route"], key)
+
+
+def test_route_for_text_shows_the_scoring_line(capsys, home, rules_only, reports):
+    (reports / "bench-dsh.json").write_text(
+        json.dumps(
+            {
+                "route": "dsh",
+                "totals": {"attempts": 3, "solved": 3, "mean_s": 40.0, "cost_cny": 0.3},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["route-for", "给 README 改个错别字"]) == 0
+    out = capsys.readouterr().out
+
+    scoring_line = next(
+        line for line in out.splitlines() if line.strip().startswith("打分")
+    )
+    assert "dsh" in scoring_line
+    assert "minimax" in scoring_line
+    assert "护栏" in out

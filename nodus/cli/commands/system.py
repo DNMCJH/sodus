@@ -501,12 +501,18 @@ def _print_recommendation(recommendation: dict) -> None:
     evidence = recommendation.get("evidence") or {}
     history = evidence.get("history") or {}
     stats = history.get("stats") or {}
+    scoring = recommendation.get("scoring") or {}
     print("\n建议")
     print(
         f"  route       {recommendation['route']}   "
         f"({spec.get('agent') or '?'} @ {providers})"
     )
     print(f"  为什么       {recommendation['rationale']}")
+    if scoring.get("explain"):
+        print(f"  打分        {scoring['explain']}")
+    for rule in scoring.get("guardrails") or []:
+        if rule.get("reason"):
+            print(f"  护栏        {rule['reason']}")
     print(f"  证据        {evidence.get('status')} · {evidence.get('scope')}")
     if evidence.get("note"):
         print(f"              {evidence['note']}")
@@ -515,16 +521,33 @@ def _print_recommendation(recommendation: dict) -> None:
             f"{currency} {bucket['mean']:.6f}/run"
             for currency, bucket in sorted((stats.get("cost") or {}).items())
         )
+        verified = stats.get("verified_samples") or 0
+        proof = (
+            f"有测试证据 {verified} 次（绿 {stats.get('verified_green')}）"
+            if verified
+            else "没有测试证据"
+        )
         print(
-            f"  本地历史     {stats.get('runs')} 次，成功 {stats.get('verified_green')}/"
-            f"{stats.get('runs')}，均值 {stats.get('mean_s')}s"
+            f"  本地历史     {stats.get('runs')} 次，完成 {stats.get('completed')}/"
+            f"{stats.get('runs')}，{proof}，中位 {stats.get('median_s')}s"
             + (f"，成本 {money}" if money else "，没有成本记录")
         )
     print(f"  置信度       {recommendation['confidence']:.2f}")
     print(f"  无实测       {', '.join(recommendation.get('unmeasured') or []) or '-'}")
+    scored = {row["route"]: row for row in scoring.get("candidates") or []}
+    shown = 0
     print("  备选")
     for alt in recommendation.get("alternatives") or []:
-        print(f"    {alt['route']:<15} {alt['why']}")
+        row = scored.get(alt["route"]) or {}
+        if row.get("excluded"):
+            # JSON keeps these (the evidence says why); text does not pretend
+            # an unusable route is a real alternative.
+            continue
+        shown += 1
+        value = f"{row['score']:>5.2f}" if row else "    -"
+        print(f"    {alt['route']:<15} {value}  {alt['why']}")
+    if not shown:
+        print("    （没有可用备选：其余路由不满足这个任务的能力声明或不在本机）")
 
 
 def reconcile(args) -> int:
