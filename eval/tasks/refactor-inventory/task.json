@@ -1,0 +1,6 @@
+{
+  "id": "refactor-inventory",
+  "title": "把三个模块里重复的 SKU 归一化抽成公共函数",
+  "prompt": "inventory/ 里有 stock.py、orders.py、reports.py 三个模块，各自抄了一份 SKU 归一化逻辑（私有函数 _normalize）。三段代码行为相同，但已经很难保证以后改一处不漏。\n\n把它重构成公共函数：\n\n1. 新建 inventory/common.py，提供：\n       def normalize_sku(sku: str) -> str\n   规则（必须与现有行为完全一致）：\n   - 去掉首尾空白（strip），转成大写\n   - 把下划线 _ 和空格都当作分隔符 -\n   - 连续的分隔符折叠成一个 -\n   - 去掉首尾多余的 -\n   - 空字符串或全分隔符返回 \"\"\n   例子：\"ab_12\" -> \"AB-12\"，\"  Cafe  Latte \" -> \"CAFE-LATTE\"，\"a--b\" -> \"A-B\"，\"\" -> \"\"\n\n2. stock.py、orders.py、reports.py 都删掉自己的 _normalize，改为 `from . import common` 并调用 common.normalize_sku(...)。不要用 `from .common import normalize_sku` 在模块顶层绑定函数。\n\n3. 三个模块的公开函数名字、签名、返回值形状都不变；tests/ 下的既有测试必须全部通过，不要修改测试文件。\n\n不要新增依赖，不要改 inventory/ 以外的文件。",
+  "timeout": 300
+}

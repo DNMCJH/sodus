@@ -21,8 +21,8 @@ TASKS = Path(__file__).resolve().parent.parent / "eval" / "tasks"
 
 def test_eval_set_loads_completely():
     tasks = bench.discover(TASKS)
-    assert len(tasks) == 6
-    assert len({task.id for task in tasks}) == 6
+    assert len(tasks) == 9
+    assert len({task.id for task in tasks}) == 9
     for task in tasks:
         assert task.title.strip()
         assert task.prompt.strip()

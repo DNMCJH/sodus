@@ -1,0 +1,5 @@
+region,sku,units,unit_price
+north,SKU-1,10,19.99
+south,SKU-2,3,5.00
+north,SKU-3,2,100.00
+south,SKU-1,1,19.99

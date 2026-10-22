@@ -1,0 +1,6 @@
+{
+  "id": "debug-sales-report",
+  "title": "定位销售报表里差了分的金额错误",
+  "prompt": "report_cli.py 能跑，但金额是错的：执行 python report_cli.py data.csv，输出与 README.md 里写明的期望结果对不上——每个 region 的 revenue 和 total_revenue 都少了钱。\n\n请定位根因并修好，让输出与 README.md 的期望 JSON 完全一致。\n\n约束：\n- 只改 sales/ 或 report_cli.py 里的代码；不要改 data.csv、README.md、tests/\n- 不要引入第三方依赖\n- 修完后 python report_cli.py data.csv 的 stdout 必须与 README 的 JSON 逐字一致（indent=2、sort_keys=True、末尾恰好一个换行），退出码 0\n- 现有 tests/test_report.py 必须继续通过",
+  "timeout": 300
+}

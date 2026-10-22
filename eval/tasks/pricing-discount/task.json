@@ -1,0 +1,6 @@
+{
+  "id": "pricing-discount",
+  "title": "从含糊的折扣需求里补全接口并接进报价",
+  "prompt": "运营给了一段口头需求，原话是：VIP 客户下单打九折；有个优惠码 SAVE10，满 100 减 10；两个优惠不叠加，取对客户更划算的那个。折扣只作用在税前小计上，结果四舍五入到两位小数。\n\npricing/discounts.py 里已经写好了接口和规则 docstring，但函数体还是 NotImplementedError。先确认接口，再把它实现。\n\n然后把它接进 pricing/engine.py 的 quote：\n- quote 增加 keyword-only 参数 coupon: str | None = None\n- customer_tier 等于 \"vip\" 时按 VIP 客户处理（这个参数已经存在）\n- 返回值增加 \"discount\" 键（float），其余三个键保持不变\n- tax 按折后小计算，total = subtotal - discount + tax，最后收口到两位小数\n\n现有 tests/test_engine.py 必须继续通过，不要修改它。代码风格按 pricing/CONVENTIONS.md。不要引入第三方依赖，不要改 discounts.py 里已有的常量名和函数签名。",
+  "timeout": 300
+}
