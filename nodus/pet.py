@@ -311,9 +311,23 @@ def narrate(text: str = "", mood: str = "", agent: str = "") -> None:
         return
 
     def work() -> None:
-        animation = anim_for(mood, agent)
-        if animation:
-            animate(animation, agent)
+        # Late import: mood imports this module for pet_for/anim_for, so a
+        # top-level import would be circular.
+        from . import mood as mood_mod
+
+        beats = mood_mod.plan(mood, agent) if mood else []
+        if len(beats) > 1:
+            # A character with a choreography: play the beat list instead of
+            # one clip so a success and a failure stop looking identical.
+            for name, hold in beats:
+                animate(name, agent)
+                time.sleep(max(0.0, hold))
+        elif beats:
+            animate(beats[0][0], agent)
+        else:
+            animation = anim_for(mood, agent)
+            if animation:
+                animate(animation, agent)
         if text:
             push(text, agent=agent)
 
