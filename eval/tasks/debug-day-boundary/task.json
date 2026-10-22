@@ -1,0 +1,7 @@
+{
+  "id": "debug-day-boundary",
+  "title": "追踪三层调用根因，修好日结且保证既有测试全绿",
+  "difficulty": 4,
+  "prompt": "ledgerd 是一个按日/月汇总支付流水的服务，data/march.csv 是本月导出。现在日结和月结的总额都比报表里列出的行多算了一笔：\n\n    python -m ledgerd.cli 2024-03-01\n\n屏幕上是 3 行，TOTAL 却是 CNY 370.50；README 写明的正确值是 CNY 120.50。`--month 2024-03` 的 CNY 同样多了 77.70——那笔流水的时间戳是 4 月 1 日 00:00:00。\n\n请定位根因并修好，让日结和月结都遵守 README 里的归属规则：一笔流水属于它自己的时间戳所在的那一天；00:00:00 属于新的一天，23:59:59.999999 属于当天。\n\n约束：\n- 只改 ledgerd/ 里的代码；不要改 data/、README.md、tests/\n- 不要改 parsing/store/ledger/report 里已有公开函数的签名和返回类型，隐藏测试会直接调用它们\n- 不要引入第三方依赖\n- 修完后 `python -m ledgerd.cli 2024-03-01` 的 TOTAL 必须是 CNY 120.50；`python -m ledgerd.cli --month 2024-03` 必须是 CNY 438.25、EUR 7.77、USD 30.00\n- 现有 tests/ 必须全部通过。注意：公共边界函数（parsing.in_range、parsing.end_of_day、ledger.sum_between）各自有明确的契约测试，直接把某个公共函数改成相反的开闭语义会让既有测试变红；先弄清每个函数承诺的是开区间还是闭区间，再决定修哪一层。",
+  "timeout": 420
+}

@@ -1,0 +1,12 @@
+id,ts,currency,amount,memo
+tx-001,2024-03-01 00:00:00,CNY,10.00,opening float
+tx-002,2024-03-01 09:15:23,CNY,100.50,card batch
+tx-003,2024-03-01 23:59:59.999999,CNY,10.00,late tip
+tx-004,2024-03-02 00:00:00,CNY,250.00,midnight settle
+tx-005,2024-03-02 12:00:00,USD,30.00,partner payout
+tx-006,2024-03-02 18:30:00,CNY,42.25,refund reversal
+tx-007,2024-03-05 08:00:00,CNY,12.00,coffee
+tx-008,2024-03-05 09:00:00,CNY,8.50,coffee
+tx-009,2024-03-15 10:10:10,EUR,7.77,partner fee
+tx-010,2024-03-31 23:59:59.500000,CNY,5.00,month end
+tx-011,2024-04-01 00:00:00,CNY,77.70,april settle
