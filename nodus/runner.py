@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, policy, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -53,6 +53,20 @@ UPSTREAM_SIGNALS = re.compile(
     r"no output for|api error|upstream",
     re.IGNORECASE,
 )
+
+#: What `--route auto` falls back to when the strategy layer cannot answer.
+#: A named constant so the event, the note and the run row cannot disagree.
+DEFAULT_ROUTE = "claude"
+
+
+def task_brief(task: dict) -> str:
+    """The text `policy.assess` judges: what to do and how it will be accepted."""
+    parts: list[str] = []
+    for key in ("title", "goal", "acceptance"):
+        value = str(task.get(key) or "").strip()
+        if value and value not in parts:
+            parts.append(value)
+    return "\n".join(parts)
 
 
 class EventBus:
@@ -230,7 +244,14 @@ class Runner:
             # The worktree is named after the run, so a branch, a worktree
             # and a run are the same fact under three names.
             proposal_ctx = propose.prepare(target, run_id)
-        route = routes.resolve_for_run(route_name)
+        task = db.get_task(task_id)
+        if not task:
+            raise ValueError(f"unknown task: {task_id}")
+        # `--route auto` becomes a concrete route here, before any run row
+        # exists. Every failure path below returns *some* route: the strategy
+        # layer is allowed to be wrong, never to be a single point of failure.
+        route_decision = self._decide_route(task, route_name)
+        route = routes.resolve_for_run(route_decision["route"])
         if provider:
             # Continuing a session means going back to the endpoint that holds
             # its history: `--resume` looks the id up inside that endpoint's own
@@ -247,9 +268,6 @@ class Runner:
             raise RuntimeError(f"route {route.name} is not usable: {', '.join(gap)}")
         spec = agents.get(route.agent)
         assert spec is not None  # routes.problems already checked
-        task = db.get_task(task_id)
-        if not task:
-            raise ValueError(f"unknown task: {task_id}")
 
         secrets = config.load_secrets()
         table = providers.load()
@@ -277,6 +295,10 @@ class Runner:
             model or route.model or prof.model or "",
             route, profile_name, wait, run_id,
         )
+        # The why is written before the worker spawns, so the event stream
+        # answers "why this route" even while the run is still going. Doing it
+        # after `thread.start()` would race the worker for the same `seq`.
+        self._record_policy(run["id"], route_decision)
         # The sitting row exists already (it was created with the task). Record
         # how this run got here before the worker spawns, so `nodus lineage`
         # answers while the run is still going instead of only after it ends.
@@ -289,6 +311,143 @@ class Runner:
         )
         thread.start()
         return db.get_run(run["id"])
+
+    def _decide_route(self, task: dict, requested: str) -> dict:
+        """Pick the route to run, and remember who picked it.
+
+        For ``auto`` the task text goes through `policy.assess` and
+        `policy.recommend`; the recommended route is used only if it can
+        actually run, otherwise the first ready alternative does. For an
+        explicit route the assessment is still recorded — with
+        ``review=False``, because spending a model call to re-decide something
+        the operator already decided is latency with no decision attached.
+
+        Returns a dict with the chosen route and enough evidence for
+        `_record_policy`. It never raises for policy reasons.
+        """
+        requested = (requested or DEFAULT_ROUTE).strip() or DEFAULT_ROUTE
+        auto = requested.lower() == "auto"
+        decision: dict = {
+            "requested": requested,
+            "chosen_by": "policy" if auto else "operator",
+            "route": requested,
+            "assessment": {},
+            "recommendation": {},
+            "fallback": None,
+            "error": "",
+        }
+        if not auto and routes.resolve(requested) is None:
+            # Let resolve_for_run raise its usual "unknown route" error; there
+            # is no point assessing a task for a route that cannot exist.
+            return decision
+
+        try:
+            assessment = policy.assess(task_brief(task), review=auto)
+            recommendation = policy.recommend(assessment)
+            recommended = str(recommendation.get("route") or "").strip()
+            if not recommended:
+                raise ValueError("recommend() returned no route")
+        except Exception as exc:  # noqa: BLE001 - dispatch must survive policy
+            decision["error"] = f"{type(exc).__name__}: {exc}"
+            if not auto:
+                return decision
+            fallback = self._ready_route({"route": DEFAULT_ROUTE}) or DEFAULT_ROUTE
+            decision["route"] = fallback
+            decision["fallback"] = {
+                "reason": "policy_error",
+                "fallback_route": fallback,
+                "recommended": "",
+                "error": decision["error"],
+            }
+            return decision
+
+        decision["assessment"] = assessment
+        decision["recommendation"] = recommendation
+        if not auto:
+            decision["route"] = requested
+            return decision
+
+        usable = self._ready_route(recommendation)
+        decision["route"] = usable or recommended
+        if usable and usable != recommended:
+            decision["fallback"] = {
+                "reason": "recommended route is not ready",
+                "fallback_route": usable,
+                "recommended": recommended,
+                "error": "",
+            }
+        return decision
+
+    @staticmethod
+    def _ready_route(recommendation: dict) -> str:
+        """The recommended route if it can run right now, else the first usable peer.
+
+        "Ready" is the same test `start` applies later: agent present, no
+        provider gap, at least one provider with its secret. Picking a route
+        the machine cannot reach would turn a policy suggestion into a failed
+        dispatch.
+        """
+        table = routes.load()
+        candidates = [str(recommendation.get("route") or "")]
+        candidates += [
+            str(alt.get("route") or "")
+            for alt in (recommendation.get("alternatives") or [])
+        ]
+        candidates.append(DEFAULT_ROUTE)
+        candidates += list(table)
+        seen: set[str] = set()
+        for name in candidates:
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            if name not in table and routes.resolve(name) is None:
+                continue
+            try:
+                if routes.ready(name):
+                    return name
+            except Exception:  # noqa: BLE001 - a readiness probe must not block dispatch
+                continue
+        return ""
+
+    def _record_policy(self, run_id: str, decision: dict) -> None:
+        """Put the judgement into the run's event stream, or say why not."""
+        fallback = decision.get("fallback")
+        if fallback:
+            self._emit(
+                run_id,
+                "policy.fallback",
+                {
+                    "requested": decision["requested"],
+                    "chosen_by": decision["chosen_by"],
+                    **fallback,
+                },
+            )
+        assessment = decision.get("assessment") or {}
+        if not assessment:
+            return
+        try:
+            written = policy.record(
+                run_id,
+                assessment,
+                decision.get("recommendation") or {},
+                chosen_by=decision["chosen_by"],
+                chosen_route=decision["route"],
+                requested_route=decision["requested"],
+                fallback=fallback,
+            )
+        except Exception as exc:  # noqa: BLE001 - a trace must never block work
+            self._emit(
+                run_id,
+                "policy.error",
+                {"stage": "record", "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+        if not written.get("ok"):
+            self._emit(
+                run_id,
+                "policy.error",
+                {"stage": "record", "error": written.get("error") or "record failed"},
+            )
 
     def _claim(
         self,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 from ..client import call, watch
-from .decisions import choice
 
 
 def add(sub) -> None:
@@ -90,35 +89,21 @@ def tasks(args) -> int:
 
 
 def run(args) -> int:
-    route = args.route or args.agent
-    effort = args.effort
-    if route == "auto":
-        from ... import decision
-
-        task_obj = call("GET", f"/tasks/{args.task}")
-        ready = [r["name"] for r in call("GET", "/routes") if r["ready"]]
-        routed = decision.route_task(task_obj, ready)
-        if routed.get("ok"):
-            route = choice(routed, "agent")[0] or "claude"
-            effort = effort or (choice(routed, "effort")[0] or "")
-            print(
-                f"route → {route} effort={effort or '-'} "
-                f"({routed.get('model')}, {routed.get('latency_ms')}ms)"
-            )
-        else:
-            route = "claude"
-            print(f"route unavailable ({routed.get('unavailable')}), fallback claude")
+    # `auto` is not resolved here: the daemon owns the policy layer, and doing
+    # it client-side would mean two dispatchers disagreeing about the same
+    # task. The run row that comes back says which route actually ran.
+    route = args.route or args.agent or "claude"
     r = call(
         "POST",
         "/runs",
         {
             "task_id": args.task,
-            "route": route or "claude",
+            "route": route,
             "profile": args.profile,
             "cwd": args.cwd,
             "parent_run_id": args.parent,
             "note": args.note,
-            "effort": effort,
+            "effort": args.effort,
             "model": args.model,
             "wait": args.wait,
             "verify": not args.no_verify,
