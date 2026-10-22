@@ -216,3 +216,19 @@ def test_board_keeps_the_old_keys_and_adds_the_new_ones(home):
     } <= set(board)
     assert board["decision_counts"]["needs_you"] == len(board["needs_you"])
     assert board["decision_counts"]["deterministic"] == len(board["deterministic"])
+
+
+def test_failures_recovery_gave_up_on_are_still_visible(home):
+    """A count of five failures must not lead to one visible row.
+
+    recovery stops retrying for reasons of its own (already retried, too old,
+    a newer attempt is live). Those runs still happened, so they are listed
+    under their own group instead of being dropped from every list.
+    """
+    seed(home, error="orphaned: the process that owned this run is gone", status="failed")
+    board = server.board_state()
+    assert "history_failures" in board
+    assert board["decision_counts"]["history_failed"] == len(board["history_failures"])
+    for item in board["history_failures"]:
+        assert item["kind"] == "failed"
+        assert item.get("problem")  # a reason the reader can act on
