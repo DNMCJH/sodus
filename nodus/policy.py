@@ -54,6 +54,12 @@ NEEDS = ("tool_use", "long_context", "reasoning", "vision")
 #: measured evidence for that route. Files that do not match are ignored.
 REPORTS = Path(__file__).resolve().parent.parent / "reports"
 
+#: Local run history: how many finished runs a route is judged on, and how many
+#: it takes before the numbers may call themselves measured. One lucky run is
+#: not evidence, and neither is a benchmark that never shows a price.
+HISTORY_WINDOW = 30
+HISTORY_MIN = 3
+
 
 # ---- rule signals ------------------------------------------------------
 
@@ -371,12 +377,17 @@ def _number(value) -> float | None:
         return None
 
 
-def assess(task_text: str, context: str = "") -> dict:
+def assess(task_text: str, context: str = "", review: bool = True) -> dict:
     """Judge difficulty, kind and required capabilities.
 
     Rules run first and always produce an answer. Jev, when configured,
     reviews that answer in a single typed call; its verdict is recorded next
     to the rules verdict instead of replacing it silently.
+
+    `review=False` is for the dispatch path where the operator already named a
+    route: the assessment is recorded as context, and spending a network call
+    on a decision nobody is going to use is not worth the latency. The result
+    says so in `jev.unavailable` instead of pretending Jev said nothing.
 
     Raises `ValueError` for an empty task: a recommendation without a task is
     worse than no recommendation.
@@ -413,6 +424,13 @@ def assess(task_text: str, context: str = "") -> dict:
     available, why = decision.available()
     if not available:
         result["jev"] = {"available": False, "ok": False, "unavailable": why}
+        return result
+    if not review:
+        result["jev"] = {
+            "available": True,
+            "ok": False,
+            "unavailable": "skipped: the route was chosen by the operator",
+        }
         return result
 
     state = json.dumps(
@@ -642,52 +660,216 @@ def _bench_evidence() -> dict[str, dict]:
     return found
 
 
-def evidence_for(route: str, need: str | None = None) -> dict:
+def _usage_cost(usage_json: str | None) -> tuple[float, str, str] | None:
+    """(cost, currency, basis) when the run recorded a numeric price."""
+    try:
+        usage = json.loads(usage_json or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(usage, dict):
+        return None
+    cost = usage.get("cost")
+    if not isinstance(cost, (int, float)) or isinstance(cost, bool):
+        return None
+    currency = str(usage.get("currency") or "unknown").strip() or "unknown"
+    return float(cost), currency, str(usage.get("cost_basis") or "").strip()
+
+
+def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
+    """What this workspace actually saw on `route`, from the run table.
+
+    Only finished runs count. A run is a *success* only when it completed and
+    its tests went green: exit code 0 with nothing verified is the exact thing
+    this project exists to stop calling success. Costs stay in their own
+    currency — converting CNY and USD at today's rate would invent a number
+    nobody measured, so the caller gets one bucket per currency.
+
+    Never raises: a broken database must degrade the recommendation to
+    "unknown", not stop a dispatch.
+    """
+    window = max(1, int(limit))
+    out = {
+        "status": "none",
+        "samples": 0,
+        "window": window,
+        "stats": {},
+        "note": "本工作区没有这条路由的历史 run",
+    }
+    try:
+        with db.connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT id, status, started_at, ended_at, usage_json FROM run"
+                    " WHERE workspace_id=? AND status IN ('completed','failed')"
+                    " AND (route=? OR ((route IS NULL OR route='') AND agent=?))"
+                    " ORDER BY started_at DESC LIMIT ?",
+                    (config.workspace_id(), route, route, window),
+                ).fetchall()
+            ]
+        marks = db.verify_states([row["id"] for row in rows]) if rows else {}
+    except Exception as exc:  # noqa: BLE001 - evidence must never break dispatch
+        out["note"] = f"本地历史读取失败，按无数据处理：{type(exc).__name__}: {exc}"
+        return out
+    if not rows:
+        return out
+
+    completed = sum(1 for row in rows if row["status"] == "completed")
+    green = sum(
+        1
+        for row in rows
+        if row["status"] == "completed" and marks.get(row["id"]) == "ok"
+    )
+    durations: list[float] = []
+    for row in rows:
+        started = row.get("started_at")
+        ended = row.get("ended_at")
+        if isinstance(started, (int, float)) and isinstance(ended, (int, float)):
+            if ended >= started:
+                durations.append(float(ended) - float(started))
+
+    costs: dict[str, dict] = {}
+    for row in rows:
+        priced = _usage_cost(row.get("usage_json"))
+        if priced is None:
+            continue
+        cost, currency, basis = priced
+        bucket = costs.setdefault(
+            currency, {"runs": 0, "total": 0.0, "mean": 0.0, "basis": []}
+        )
+        bucket["runs"] += 1
+        bucket["total"] += cost
+        if basis and basis not in bucket["basis"]:
+            bucket["basis"].append(basis)
+    for bucket in costs.values():
+        bucket["total"] = round(bucket["total"], 6)
+        bucket["mean"] = round(bucket["total"] / bucket["runs"], 6)
+        bucket["basis"].sort()
+
+    samples = len(rows)
+    enough = samples >= HISTORY_MIN
+    out.update(
+        {
+            "status": "measured" if enough else "insufficient",
+            "samples": samples,
+            "stats": {
+                "runs": samples,
+                "window": window,
+                "completed": completed,
+                "verified_green": green,
+                "success_rate": round(green / samples, 3),
+                "duration_runs": len(durations),
+                "mean_s": round(sum(durations) / len(durations), 1) if durations else None,
+                "cost": costs,
+            },
+            "note": (
+                f"本地历史：最近 {samples} 次已结束 run；成功=completed 且 verify.green"
+                f"（{green}/{samples}）；耗时按 started_at→ended_at，含排队或卡住的时长；"
+                "成本按 currency 分组，不换算汇率。"
+                + ("" if enough else f" 样本 < {HISTORY_MIN}，只标记不下结论。")
+            ),
+        }
+    )
+    return out
+
+
+def evidence_for(
+    route: str, need: str | None = None, history: dict | None = None
+) -> dict:
     """What do we actually know about this route for this task?
 
-    `status` is one of ``measured``, ``unknown`` or ``unsupported``. Only a
-    benchmark row or the recorded A/B earns ``measured``; a docstring about a
-    model's strengths does not.
+    `status` is one of ``measured``, ``unknown``, ``unsupported`` or
+    ``insufficient``. Only a benchmark row, the recorded A/B, or at least
+    `HISTORY_MIN` local runs earn ``measured``; a docstring about a model's
+    strengths does not, and neither does one lucky dispatch.
+
+    `history` lets a caller that is already judging every route pass the
+    computed block in, so one recommendation does not query the same table ten
+    times. It is always echoed under `history` so the cost data survives even
+    when the primary evidence came from a bench report.
     """
     if route not in ROUTE_NAMES:
         raise ValueError(f"unknown route: {route}")
 
+    hist = _run_history(route) if history is None else history
     bench = _bench_evidence().get(route)
+    ab = _AB.get(route)
+
+    def with_sources(block: dict) -> dict:
+        block["history"] = hist
+        if bench:
+            block["bench"] = {
+                "attempts": bench["attempts"],
+                "solved": bench["solved"],
+                "sources": list(bench["sources"]),
+            }
+        if ab:
+            block["ab"] = dict(ab)
+        return block
+
+    # Local history is the only source that knows what this repo's tasks cost.
+    # It is still not a vision test: a route can have thirty green text runs
+    # and no proof it can read a screenshot.
+    if hist["status"] == "measured" and need != "vision":
+        stats = hist["stats"]
+        return with_sources(
+            {
+                "status": "measured",
+                "source": f"local run history (last {stats['runs']} finished runs)",
+                "scope": (
+                    f"本地历史：{stats['runs']} 次已结束 run，"
+                    f"成功 {stats['verified_green']}/{stats['runs']}，"
+                    f"均值 {stats['mean_s']}s"
+                ),
+                "stats": dict(stats),
+                "note": hist["note"],
+            }
+        )
+
     if bench:
         attempts = bench["attempts"]
         solved = bench["solved"]
         mean_s = round(bench["seconds"] / attempts, 1) if attempts else 0.0
-        return {
-            "status": "measured",
-            "source": ", ".join(bench["sources"]),
-            "scope": f"repo bench: {attempts} attempts, solve {solved}/{attempts}, mean {mean_s}s",
-            "stats": {
-                "attempts": attempts,
-                "solved": solved,
-                "solve_rate": round(solved / attempts, 3),
-                "mean_s": mean_s,
-                "cost_cny": round(bench["cost_cny"], 4),
-            },
-            "note": "measured on this repo's eval set",
-        }
-
-    if route in _AB:
-        stats = dict(_AB[route])
-        if need == "vision":
-            return {
-                "status": "unknown",
-                "source": _AB_SOURCE,
-                "scope": "no vision benchmark",
-                "stats": stats,
-                "note": "A/B 只测了文本/代码小任务；多模态只是总账里的操作约定，不是实测",
+        return with_sources(
+            {
+                "status": "measured",
+                "source": ", ".join(bench["sources"]),
+                "scope": (
+                    f"repo bench: {attempts} attempts, solve {solved}/{attempts},"
+                    f" mean {mean_s}s"
+                ),
+                "stats": {
+                    "attempts": attempts,
+                    "solved": solved,
+                    "solve_rate": round(solved / attempts, 3),
+                    "mean_s": mean_s,
+                    "cost_cny": round(bench["cost_cny"], 4),
+                },
+                "note": "measured on this repo's eval set",
             }
-        return {
-            "status": "measured",
-            "source": _AB_SOURCE,
-            "scope": _AB_SCOPE,
-            "stats": stats,
-            "note": "能力和速度有实测，但样本只有小任务；仓库级任务仍是未知",
-        }
+        )
+
+    if ab:
+        stats = dict(ab)
+        if need == "vision":
+            return with_sources(
+                {
+                    "status": "unknown",
+                    "source": _AB_SOURCE,
+                    "scope": "no vision benchmark",
+                    "stats": stats,
+                    "note": "A/B 只测了文本/代码小任务；多模态只是总账里的操作约定，不是实测",
+                }
+            )
+        return with_sources(
+            {
+                "status": "measured",
+                "source": _AB_SOURCE,
+                "scope": _AB_SCOPE,
+                "stats": stats,
+                "note": "能力和速度有实测，但样本只有小任务；仓库级任务仍是未知",
+            }
+        )
 
     caps = _ROUTE_CAPS[route]
     if need == "vision":
@@ -697,13 +879,20 @@ def evidence_for(route: str, need: str | None = None) -> dict:
             "本仓库 reports/ 没有这条路由的实测；"
             f"能力描述来自 {caps['source']}，不是测量结果"
         )
-    return {
-        "status": "unknown",
-        "source": caps["source"],
-        "scope": "no measured rows",
-        "stats": {},
-        "note": note,
-    }
+    status = "insufficient" if hist["status"] == "insufficient" else "unknown"
+    return with_sources(
+        {
+            "status": status,
+            "source": caps["source"],
+            "scope": (
+                f"only {hist['samples']} local run(s), below the {HISTORY_MIN} needed"
+                if hist["status"] == "insufficient"
+                else "no measured rows"
+            ),
+            "stats": {},
+            "note": note,
+        }
+    )
 
 
 def _present_routes() -> list[str]:
@@ -816,8 +1005,8 @@ def _capability(route: str) -> str:
     return f"{cap['label']}；{tier}；元数据：{cap['strengths']}"
 
 
-def _why_alternative(route: str, need: str | None) -> str:
-    evidence = evidence_for(route, need)
+def _why_alternative(route: str, need: str | None, history: dict | None = None) -> str:
+    evidence = evidence_for(route, need, history)
     if evidence["status"] == "measured":
         return f"{_capability(route)}。有实测：{evidence['scope']}，注意样本范围。"
     return f"{_capability(route)}。无实测（unknown）：{evidence['note']}。"
@@ -862,11 +1051,14 @@ def recommend(assessment: dict) -> dict:
     need = "vision" if "vision" in needs else None
 
     present = _present_routes()
+    # One query per route, not one per mention: `unmeasured` alone would ask
+    # for every route and then the alternatives would ask again.
+    histories = {name: _run_history(name) for name in present}
     primary, fit = _choose(difficulty, kind, needs)
     if primary not in present:
         primary = present[0]
 
-    evidence = evidence_for(primary, need)
+    evidence = evidence_for(primary, need, histories.get(primary))
     need_text = ", ".join(needs) if needs else "无特殊能力"
     rationale = f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}"
     if evidence["status"] == "measured":
@@ -881,15 +1073,17 @@ def recommend(assessment: dict) -> dict:
         alternatives.append(
             {
                 "route": route,
-                "why": _why_alternative(route, need),
-                "evidence": evidence_for(route, need),
+                "why": _why_alternative(route, need, histories.get(route)),
+                "evidence": evidence_for(route, need, histories.get(route)),
             }
         )
         if len(alternatives) >= 3:
             break
 
     unmeasured = [
-        name for name in present if evidence_for(name, need)["status"] != "measured"
+        name
+        for name in present
+        if evidence_for(name, need, histories.get(name))["status"] != "measured"
     ]
     return {
         "route": primary,
@@ -912,7 +1106,15 @@ def recommend(assessment: dict) -> dict:
 # ---- trace -------------------------------------------------------------
 
 
-def record(run_id: str, assess_result: dict, recommend_result: dict) -> dict:
+def record(
+    run_id: str,
+    assess_result: dict,
+    recommend_result: dict,
+    chosen_by: str = "policy",
+    chosen_route: str = "",
+    requested_route: str = "",
+    fallback: dict | None = None,
+) -> dict:
     """Persist why this task went to this route.
 
     Writes three things, cheapest first:
@@ -920,6 +1122,12 @@ def record(run_id: str, assess_result: dict, recommend_result: dict) -> dict:
       exists in this workspace);
     - a sidecar note at ``<home>/runs/<run_id>/policy.json``;
     - one line in ``<home>/policy.jsonl`` even when there is no run yet.
+
+    `chosen_by` is the answer to "who decided": ``policy`` when `--route auto`
+    picked it, ``operator`` when a person named the route and the assessment
+    only supplies context. `chosen_route` is what actually ran, which can
+    differ from both the request and the recommendation when the strategy
+    layer failed over.
 
     A broken database must not lose the ledger line, so the two writes are
     independent and the return value says what actually happened.
@@ -929,9 +1137,16 @@ def record(run_id: str, assess_result: dict, recommend_result: dict) -> dict:
         "version": SCHEMA_VERSION,
         "ts": time.time(),
         "run_id": run_id,
+        "chosen_by": chosen_by or "policy",
+        "chosen_route": chosen_route
+        or (recommend_result or {}).get("route")
+        or "",
+        "requested_route": requested_route or chosen_route or "",
         "assess": assess_result,
         "recommend": recommend_result,
     }
+    if fallback:
+        payload["fallback"] = fallback
     result = {
         "ok": True,
         "run_id": run_id,

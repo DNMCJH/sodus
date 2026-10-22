@@ -499,6 +499,8 @@ def _print_recommendation(recommendation: dict) -> None:
     spec = recommendation.get("route_spec") or {}
     providers = " -> ".join(spec.get("providers") or []) or "-"
     evidence = recommendation.get("evidence") or {}
+    history = evidence.get("history") or {}
+    stats = history.get("stats") or {}
     print("\n建议")
     print(
         f"  route       {recommendation['route']}   "
@@ -508,6 +510,16 @@ def _print_recommendation(recommendation: dict) -> None:
     print(f"  证据        {evidence.get('status')} · {evidence.get('scope')}")
     if evidence.get("note"):
         print(f"              {evidence['note']}")
+    if history.get("samples"):
+        money = " ".join(
+            f"{currency} {bucket['mean']:.6f}/run"
+            for currency, bucket in sorted((stats.get("cost") or {}).items())
+        )
+        print(
+            f"  本地历史     {stats.get('runs')} 次，成功 {stats.get('verified_green')}/"
+            f"{stats.get('runs')}，均值 {stats.get('mean_s')}s"
+            + (f"，成本 {money}" if money else "，没有成本记录")
+        )
     print(f"  置信度       {recommendation['confidence']:.2f}")
     print(f"  无实测       {', '.join(recommendation.get('unmeasured') or []) or '-'}")
     print("  备选")

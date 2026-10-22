@@ -327,6 +327,143 @@ def test_record_without_a_run_still_keeps_the_ledger(home, rules_only, reports):
     assert (home / "policy.jsonl").is_file()
 
 
+def test_record_says_who_chose_and_what_actually_ran(home, rules_only, reports):
+    task = db.create_task(goal="fix the typo in README")
+    run = db.create_run(task["id"], "codex", str(home), route="codex")
+    assessment = policy.assess("给 README 改个错别字")
+    recommendation = policy.recommend(assessment)
+
+    policy.record(
+        run["id"],
+        assessment,
+        recommendation,
+        chosen_by="operator",
+        chosen_route="codex",
+        requested_route="codex",
+    )
+
+    event = next(e for e in db.events_after(run["id"]) if e["type"] == "policy.decision")
+    assert event["payload"]["chosen_by"] == "operator"
+    assert event["payload"]["chosen_route"] == "codex"
+    assert event["payload"]["requested_route"] == "codex"
+
+
+# ---- local run history: success, speed and real cost -------------------
+
+
+def _finish(
+    task_id: str,
+    route: str,
+    status: str,
+    *,
+    seconds: float = 4.0,
+    cost: float | None = None,
+    currency: str = "CNY",
+    verify: str | None = None,
+    routed: bool = True,
+):
+    """Create a finished run row, how the dispatcher leaves one behind."""
+    run = db.create_run(
+        task_id,
+        route,
+        str(config.HOME),
+        route=route if routed else "",
+    )
+    fields = {"status": status, "ended_at": run["started_at"] + seconds}
+    if cost is not None:
+        fields["usage_json"] = json.dumps(
+            {"cost": cost, "currency": currency, "cost_basis": "metered"}
+        )
+    db.update_run(run["id"], **fields)
+    if verify:
+        db.append_event(
+            run["id"], db.next_seq(run["id"]), f"verify.{verify}", {"phase": verify}
+        )
+    return run
+
+
+def test_local_history_counts_success_cost_and_speed(home, rules_only, reports):
+    task = db.create_task(goal="fix the login bug")
+    _finish(task["id"], "codex", "completed", cost=0.01, verify="green")
+    _finish(task["id"], "codex", "completed", cost=0.01, verify="green")
+    # Exit 0 with nothing verified is not a success; this project's whole point.
+    _finish(task["id"], "codex", "completed", cost=0.01)
+    _finish(task["id"], "codex", "failed", cost=0.02, verify="red")
+    _finish(task["id"], "codex", "failed", cost=0.002, currency="USD")
+
+    evidence = policy.evidence_for("codex")
+
+    assert evidence["status"] == "measured"
+    stats = evidence["stats"]
+    assert stats["runs"] == 5
+    assert stats["completed"] == 3
+    assert stats["verified_green"] == 2
+    assert stats["success_rate"] == 0.4
+    assert stats["mean_s"] == 4.0
+    assert stats["cost"]["CNY"]["runs"] == 4
+    assert stats["cost"]["CNY"]["mean"] == pytest.approx(0.0125)
+    assert stats["cost"]["USD"]["runs"] == 1
+    assert stats["cost"]["USD"]["mean"] == pytest.approx(0.002)
+    assert "不换算汇率" in evidence["note"]
+    assert evidence["history"]["samples"] == 5
+
+
+def test_two_runs_are_not_enough_to_conclude(home, rules_only, reports):
+    task = db.create_task(goal="write the release note")
+    _finish(task["id"], "dsh", "completed", verify="green")
+    _finish(task["id"], "dsh", "failed")
+
+    evidence = policy.evidence_for("dsh")
+
+    assert evidence["status"] == "insufficient"
+    assert evidence["history"]["status"] == "insufficient"
+    assert evidence["history"]["samples"] == 2
+    assert evidence["history"]["stats"]["success_rate"] == 0.5
+    assert evidence["stats"] == {}
+
+
+def test_no_history_is_unknown_not_insufficient(home, rules_only, reports):
+    assert policy.evidence_for("dsh")["history"]["status"] == "none"
+    assert policy.evidence_for("dsh")["status"] == "unknown"
+
+
+def test_history_window_keeps_only_the_most_recent_runs(home, rules_only, reports):
+    task = db.create_task(goal="fix the login bug")
+    for _ in range(3):
+        _finish(task["id"], "codex", "completed", verify="green")
+
+    history = policy._run_history("codex", limit=2)
+
+    assert history["samples"] == 2
+    assert history["window"] == 2
+    assert history["stats"]["runs"] == 2
+
+
+def test_runs_from_before_the_route_column_still_count(home, rules_only, reports):
+    task = db.create_task(goal="fix the login bug")
+    _finish(task["id"], "codex", "completed", verify="green", routed=False)
+    _finish(task["id"], "codex", "completed", verify="green")
+    _finish(task["id"], "codex", "failed")
+
+    assert policy._run_history("codex")["samples"] == 3
+
+
+def test_operator_route_assessment_does_not_spend_a_jev_call(home, monkeypatch):
+    monkeypatch.setattr(decision, "available", lambda: (True, "ok"))
+
+    def explode(state, questions):
+        raise AssertionError("assess(review=False) must not call Jev")
+
+    monkeypatch.setattr(decision, "decide", explode)
+
+    result = policy.assess("给 README 改个错别字", review=False)
+
+    assert result["basis"] == "rules-only"
+    assert result["jev"]["ok"] is False
+    assert "operator" in result["jev"]["unavailable"]
+    assert not (home / "decisions.jsonl").exists()
+
+
 # ---- CLI ---------------------------------------------------------------
 
 
