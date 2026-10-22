@@ -16,6 +16,9 @@ from urllib.parse import parse_qs, urlparse
 from . import agents, config, db, jobs, pet, profiles, propose, providers, routes, runner, ui
 
 MAX_BODY = 1_000_000
+#: The HTTP contract lives in the repo root so editors and code generators can
+#: find it without importing the package; the daemon also serves it verbatim.
+SPEC_PATH = Path(__file__).resolve().parent.parent / "openapi.yaml"
 
 
 def _log(message: str) -> None:
@@ -330,7 +333,8 @@ class Handler(BaseHTTPRequestHandler):
         # it unequal to "/", so a correct token still got 401.
         path = urlparse(self.path).path or "/"
         if (path == "/" or path.startswith("/health")
-                or path == "/favicon.ico" or path.startswith("/pet")):
+                or path == "/favicon.ico" or path.startswith("/pet")
+                or path.rstrip("/") == "/openapi.yaml"):
             return True
         if authorized(self.headers.get("Authorization", "")):
             return True
@@ -355,6 +359,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return
+
+        if path == "/openapi.yaml":
+            # Public on purpose: a client needs the contract before it can be
+            # trusted with a token, and schema disclosure on loopback is cheap.
+            try:
+                body = SPEC_PATH.read_bytes()
+            except OSError:
+                return _json(self, 404, {"error": "openapi.yaml not found"})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/yaml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if path == "/":
