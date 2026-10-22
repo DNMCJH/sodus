@@ -615,6 +615,17 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     stalled = jobs.reap(db.list_pipelines("running"))
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
+    # The pet doubles as a status light: when something new starts waiting on a
+    # human, the desktop pet says so. Off with NODUS_STATUS_LIGHT=0 for anyone
+    # who does not run a pet — it costs one sqlite read per interval and never
+    # speaks unless a count went up.
+    if os.environ.get("NODUS_STATUS_LIGHT", "1") != "0":
+        try:
+            from . import statuslight
+
+            statuslight.start()
+        except Exception:  # a broken pet must never keep the board from serving
+            pass
     _log(f"nodusd {config.VERSION} listening on {host}:{port} (pid {os.getpid()})")
     if reaped:
         _log(f"reaped {len(reaped)} orphaned run(s): " + ", ".join(r["id"] for r in reaped))
