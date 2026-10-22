@@ -29,6 +29,9 @@ def add(sub) -> None:
     p.add_argument("--port", type=int, default=4199)
     p.set_defaults(func=serve, needs_daemon=False)
 
+    p = sub.add_parser("mcp", help="MCP server over stdio (for Claude Code / DSH)")
+    p.set_defaults(func=mcp_cmd, needs_daemon=False)
+
     p = sub.add_parser("up", help="start the daemon detached; survives this shell")
     p.add_argument("--port", type=int, default=daemon.DEFAULT_PORT)
     p.add_argument("--wait", type=float, default=20.0, help="seconds to wait for /health")
@@ -151,6 +154,14 @@ def unlock(args) -> int:
 def serve(args) -> int:
     server.serve(args.port)
     return 0
+
+
+def mcp_cmd(args) -> int:
+    # Imported here so `nodus --help` and every other command stay light; the
+    # MCP server never needs the daemon, which is why it sets needs_daemon=False.
+    from ... import mcp as mcp_server
+
+    return mcp_server.serve()
 
 
 def desk(args) -> int:

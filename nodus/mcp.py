@@ -1,0 +1,501 @@
+"""MCP over stdio: the third interface next to HTTP/OpenAPI and the CLI.
+
+Transport is the 2024-11-05 stdio one: **one JSON-RPC message per line**, no
+`Content-Length` headers. MCP borrowed JSON-RPC from LSP but not its framing;
+the spec says messages "are delimited by newlines, and MUST NOT contain
+embedded newlines". Anything written to stdout that is not a protocol message
+breaks the client, so stray prints are redirected to stderr while serving.
+
+The server owns its own SQLite connection and spawns runs in this process, so
+`nodus up` is not required. That also means a run started here lives only as
+long as this process: the daemon's startup reconciliation would treat it as an
+orphan. Nothing here goes through HTTP — it calls the same `db` / `runner`
+functions the daemon calls.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import traceback
+from pathlib import Path
+from typing import Any, Callable
+
+from . import config, db, runner
+
+PROTOCOL_VERSION = "2024-11-05"
+SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
+SERVER_NAME = "nodus"
+
+#: `wait=true` blocks until the run leaves queued/running. A client-side tool
+#: timeout is usually shorter, so this is configurable and bounded.
+WAIT_TIMEOUT = float(os.environ.get("NODUS_MCP_WAIT", "600"))
+
+
+class ToolError(ValueError):
+    """A caller mistake or a tool failure: reported as `isError`, never raised
+    out of the server loop."""
+
+
+def _schema(properties: dict, required: tuple[str, ...] = ()) -> dict:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+TOOLS: list[dict] = [
+    {
+        "name": "nodus_task_create",
+        "description": (
+            "在 Nodus 建一个任务：目标（description）+ 可选验收标准（acceptance）。"
+            "返回 task_id，随后用 nodus_run 派给某个 agent。"
+        ),
+        "inputSchema": _schema(
+            {
+                "title": {"type": "string", "description": "短标题，列表里显示这一行"},
+                "description": {"type": "string", "description": "任务目标，交给 agent 的原文"},
+                "acceptance": {
+                    "type": "string",
+                    "description": "验收标准；不传则由执行者自行判断",
+                },
+            },
+            ("title", "description"),
+        ),
+    },
+    {
+        "name": "nodus_run",
+        "description": (
+            "为一个任务起一次执行，返回 run_id 与当前状态。默认立即返回；"
+            "wait=true 会阻塞到这次执行结束（默认最多 600 秒，可由进程环境变量 "
+            "NODUS_MCP_WAIT 调整）。cwd 必须是已存在的目录，默认当前进程的工作目录。"
+        ),
+        "inputSchema": _schema(
+            {
+                "task_id": {"type": "string", "description": "nodus_task_create 返回的 id"},
+                "route": {
+                    "type": "string",
+                    "description": "路由名（claude / codex / dsh / minimax ...），默认 claude",
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "执行目录，必须是已存在目录；默认当前工作目录",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "true = 等执行结束再返回（默认 false）",
+                    "default": False,
+                },
+            },
+            ("task_id",),
+        ),
+    },
+    {
+        "name": "nodus_run_status",
+        "description": (
+            "查一次执行的状态、成本与验收结果。verify 只有三种：ok（测试绿）、"
+            "red（测试红）、none（没跑过测试，completed 只代表进程退出码 0）。"
+        ),
+        "inputSchema": _schema(
+            {"run_id": {"type": "string", "description": "nodus_run 返回的 run id"}},
+            ("run_id",),
+        ),
+    },
+    {
+        "name": "nodus_proposals",
+        "description": (
+            "列出待人工处理的提案：改动在独立 git 分支/worktree 上，主工作区没有被改。"
+            "合入或丢弃由人在 CLI 里做（nodus merge / nodus reject）。"
+        ),
+        "inputSchema": _schema({}),
+    },
+    {
+        "name": "nodus_cost_today",
+        "description": (
+            "今天的成本，按 agent 分组。窗口从本地时区 0 点开始；"
+            "金额按记账时的币种分开汇总（不跨币种折算）。"
+        ),
+        "inputSchema": _schema({}),
+    },
+]
+
+
+# ---- argument parsing --------------------------------------------------
+
+
+def _arguments(value: Any) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ToolError("arguments 必须是一个对象")
+    return dict(value)
+
+
+def _string(args: dict, name: str, *, required: bool = True, default: str = "") -> str:
+    value = args.pop(name, default)
+    if value is None:
+        value = default
+    if not isinstance(value, str):
+        raise ToolError(f"参数 `{name}` 必须是字符串")
+    value = value.strip()
+    if required and not value:
+        raise ToolError(f"缺少必填参数 `{name}`")
+    return value
+
+
+def _boolean(args: dict, name: str, default: bool = False) -> bool:
+    value = args.pop(name, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    if value in (0, 1):
+        return bool(value)
+    raise ToolError(f"参数 `{name}` 必须是布尔值")
+
+
+def _no_extra(args: dict) -> None:
+    if args:
+        raise ToolError("未知参数：" + ", ".join(sorted(args)))
+
+
+# ---- tools -------------------------------------------------------------
+
+
+def _task_create(args: dict) -> dict:
+    title = _string(args, "title")
+    description = _string(args, "description")
+    acceptance = _string(args, "acceptance", required=False, default="")
+    _no_extra(args)
+    task = db.create_task(
+        goal=description,
+        acceptance=acceptance,
+        title=title,
+    )
+    if not task:
+        raise ToolError("任务写入后读不回来")
+    return {
+        "task_id": task["id"],
+        "title": task.get("title") or "",
+        "description": task.get("goal") or description,
+        "acceptance": task.get("acceptance") or "",
+        "status": task.get("status") or "open",
+        "created_at": task.get("created_at"),
+    }
+
+
+def _run(args: dict) -> dict:
+    task_id = _string(args, "task_id")
+    route = _string(args, "route", required=False, default="claude") or "claude"
+    raw_cwd = _string(args, "cwd", required=False, default="")
+    wait = _boolean(args, "wait")
+    _no_extra(args)
+
+    cwd = Path(raw_cwd).expanduser() if raw_cwd else Path.cwd()
+    if not cwd.is_dir():
+        raise ToolError(f"cwd 不是已存在的目录：{cwd}")
+
+    run = runner.RUNNER.start(
+        task_id=task_id,
+        route_name=route,
+        cwd=str(cwd.resolve()),
+    )
+    if wait:
+        run = runner.RUNNER.wait(run["id"], timeout=max(1, int(WAIT_TIMEOUT)))
+    payload = _status_payload(run["id"])
+    payload["waited"] = wait
+    if wait:
+        # A timed-out wait is not a failure, but the caller must not read
+        # "returned after wait=true" as "the run is finished".
+        payload["wait_timed_out"] = payload["status"] in ("queued", "running")
+    return payload
+
+
+def _run_status(args: dict) -> dict:
+    run_id = _string(args, "run_id")
+    _no_extra(args)
+    return _status_payload(run_id)
+
+
+def _status_payload(run_id: str) -> dict:
+    run = db.get_run(run_id)
+    if not run:
+        raise ToolError(f"没有这个 run：{run_id}")
+
+    usage = _json_object(run.get("usage_json"))
+    verify = db.verify_states([run_id]).get(run_id, "none")
+    handoff = config.HOME / "runs" / run_id / "handoff.md"
+    started = run.get("started_at")
+    ended = run.get("ended_at")
+    cost = usage.get("cost")
+    return {
+        "run_id": run["id"],
+        "task_id": run.get("task_id") or "",
+        "status": run.get("status") or "",
+        "agent": run.get("agent") or "",
+        "route": run.get("route") or run.get("agent") or "",
+        "provider": run.get("provider") or "",
+        "cwd": run.get("cwd") or "",
+        "started_at": started,
+        "ended_at": ended,
+        "duration_s": round(ended - started, 3) if started and ended else None,
+        "error": run.get("error") or "",
+        "usage": {
+            "input_tokens": int(usage.get("input_tokens") or 0),
+            "output_tokens": int(usage.get("output_tokens") or 0),
+            "cache_read": int(usage.get("cache_read") or 0),
+            "cache_write": int(usage.get("cache_write") or 0),
+            "cost": cost if isinstance(cost, (int, float)) else None,
+            "currency": usage.get("currency") or "",
+            "cost_basis": usage.get("cost_basis") or "",
+        },
+        "verify": {
+            "state": verify,
+            "meaning": runner.VERIFY_TEXT.get(verify, verify),
+        },
+        "handoff": str(handoff) if handoff.exists() else "",
+    }
+
+
+def _proposals(args: dict) -> dict:
+    _no_extra(args)
+    rows = db.list_proposals("open")
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "proposal_id": row.get("id") or "",
+                "run_id": row.get("run_id") or "",
+                "task_id": row.get("task_id") or "",
+                "branch": row.get("branch") or "",
+                "stat": row.get("stat") or "",
+                "patch": row.get("patch_path") or "",
+                "files": [
+                    {
+                        "path": item.get("path") or "",
+                        "added": item.get("added", 0),
+                        "removed": item.get("removed", 0),
+                    }
+                    for item in (row.get("files") or [])
+                ],
+                "created_at": row.get("created_at"),
+            }
+        )
+    return {"count": len(out), "proposals": out}
+
+
+def _cost_today(args: dict) -> dict:
+    _no_extra(args)
+    # The board already answers "today, per agent" (server._today): reusing it
+    # keeps the MCP number identical to the one on the first screen instead of
+    # growing a second definition of "today" that drifts at midnight.
+    from . import server
+
+    board = server.board_state()
+    today = board["today"]
+    return {
+        "day": board["day"],
+        "runs": today["runs"],
+        "priced": today["priced"],
+        "unpriced": today["unpriced"],
+        "totals": today["totals"],
+        "by_agent": today["by_agent"],
+        "basis": today["basis"],
+    }
+
+
+_HANDLERS: dict[str, Callable[[dict], dict]] = {
+    "nodus_task_create": _task_create,
+    "nodus_run": _run,
+    "nodus_run_status": _run_status,
+    "nodus_proposals": _proposals,
+    "nodus_cost_today": _cost_today,
+}
+
+
+# ---- MCP result helpers ------------------------------------------------
+
+
+def _text_result(payload: Any) -> dict:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    return {"content": [{"type": "text", "text": text}], "isError": False}
+
+
+def _error_result(message: str) -> dict:
+    return {"content": [{"type": "text", "text": message}], "isError": True}
+
+
+def _json_object(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def call_tool(name: Any, arguments: Any = None) -> dict:
+    """Run one tool and always return a tool result, never raise.
+
+    MCP distinguishes protocol errors from tool failures; per Nodus' contract
+    every failure here is a tool result with `isError: true` plus a readable
+    message, so a bad argument cannot take the stdio session down.
+    """
+    if not isinstance(name, str) or not name:
+        return _error_result("tools/call 缺少工具名")
+    handler = _HANDLERS.get(name)
+    if handler is None:
+        known = ", ".join(sorted(_HANDLERS))
+        return _error_result(f"未知工具：{name}。可用：{known}")
+    try:
+        return _text_result(handler(_arguments(arguments)))
+    except ToolError as exc:
+        return _error_result(str(exc))
+    except Exception as exc:  # noqa: BLE001 - one bad tool must not end the server
+        _log(f"{name} 执行异常：{type(exc).__name__}: {exc}")
+        traceback.print_exc(file=sys.stderr)
+        return _error_result(f"{name} 执行失败：{type(exc).__name__}: {exc}")
+
+
+# ---- JSON-RPC ----------------------------------------------------------
+
+
+def _error(request_id: Any, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _initialize(params: dict) -> dict:
+    requested = params.get("protocolVersion")
+    # A server answers with a version it supports. Echoing an unknown one would
+    # claim a capability we never tested against this implementation.
+    version = requested if requested in SUPPORTED_VERSIONS else PROTOCOL_VERSION
+    client = params.get("clientInfo")
+    if isinstance(client, dict) and client.get("name"):
+        _log(f"client {client.get('name')} {client.get('version') or ''}".rstrip())
+    return {
+        "protocolVersion": version,
+        "capabilities": {"tools": {"listChanged": False}},
+        "serverInfo": {"name": SERVER_NAME, "version": config.VERSION},
+        "instructions": (
+            "Nodus 把任务交给多个 agent，并用可执行证据验收。"
+            "先 nodus_task_create，再 nodus_run，用 nodus_run_status 看成本与 verify；"
+            "nodus_proposals 列待人工处理的提案，nodus_cost_today 看今日花费。"
+        ),
+    }
+
+
+def _tools_call(params: dict) -> dict:
+    name = params.get("name")
+    arguments = params.get("arguments")
+    return call_tool(name, {} if arguments is None else arguments)
+
+
+def handle_message(message: Any) -> dict | None:
+    """One decoded JSON-RPC message in, one response out (None for notifications)."""
+    if not isinstance(message, dict):
+        return _error(None, -32600, "invalid request: 必须是 JSON 对象")
+    if message.get("jsonrpc") != "2.0":
+        return _error(message.get("id"), -32600, "invalid request: 缺少 jsonrpc=2.0")
+    method = message.get("method")
+    if not isinstance(method, str) or not method:
+        # A response from the client is not something this server initiates,
+        # so there is nothing to answer. Notifications are the same: no reply.
+        return None
+    request_id = message.get("id")
+    is_notification = "id" not in message
+    params = message.get("params")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        if is_notification:
+            return None
+        return _error(request_id, -32602, "invalid params: params 必须是对象")
+
+    if method == "initialize":
+        result = _initialize(params)
+    elif method == "ping":
+        result = {}
+    elif method == "tools/list":
+        result = {"tools": TOOLS}
+    elif method == "tools/call":
+        result = _tools_call(params)
+    else:
+        if is_notification:
+            return None
+        return _error(request_id, -32601, f"method not found: {method}")
+
+    if is_notification:
+        return None
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+# ---- stdio transport ---------------------------------------------------
+
+
+def _log(message: str) -> None:
+    try:
+        print(f"nodus mcp: {message}", file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _send(writer, message: Any) -> bool:
+    data = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    try:
+        writer.write(data + b"\n")
+        writer.flush()
+    except (BrokenPipeError, OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def serve(stdin=None, stdout=None) -> int:
+    """Read newline-delimited JSON-RPC on stdin, write replies on stdout.
+
+    `stdin` / `stdout` are injectable for tests; production uses the binary
+    buffers so the framing is bytes, not the locale's text encoding.
+    """
+    reader = stdin if stdin is not None else getattr(sys.stdin, "buffer", sys.stdin)
+    writer = stdout if stdout is not None else getattr(sys.stdout, "buffer", sys.stdout)
+    if stdout is None:
+        # Nothing except protocol messages may reach the real stdout. A print
+        # from a library would otherwise be parsed as a JSON-RPC message.
+        sys.stdout = sys.stderr
+    _log(f"ready ({config.VERSION}, protocol {PROTOCOL_VERSION})")
+
+    for raw in reader:
+        line = raw.strip()
+        if not line:
+            continue
+        if isinstance(line, str):
+            line = line.encode("utf-8")
+        if line.startswith(b"\xef\xbb\xbf"):
+            line = line[3:]
+        try:
+            message = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            if not _send(writer, _error(None, -32700, f"parse error: {exc}")):
+                break
+            continue
+
+        try:
+            if isinstance(message, list):
+                # JSON-RPC batching is not part of MCP 2024-11-05, but a list
+                # is cheap to answer correctly instead of failing outright.
+                if not message:
+                    reply = _error(None, -32600, "invalid request: 空 batch")
+                else:
+                    replies = [r for r in (handle_message(m) for m in message) if r is not None]
+                    reply = replies or None
+            else:
+                reply = handle_message(message)
+        except Exception as exc:  # noqa: BLE001 - the loop must survive a bug
+            _log(f"handler crashed: {type(exc).__name__}: {exc}")
+            traceback.print_exc(file=sys.stderr)
+            reply = _error(None, -32603, "internal error")
+
+        if reply is not None and not _send(writer, reply):
+            break
+    return 0
