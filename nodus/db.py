@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS session (
   workspace TEXT,
   title TEXT,
   status TEXT DEFAULT 'open',
+  parent_session_id TEXT,
+  origin_run_id TEXT,
+  relation TEXT DEFAULT 'fresh',
   created_at REAL
 );
 CREATE TABLE IF NOT EXISTS task (
@@ -202,6 +205,17 @@ def connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE run ADD COLUMN owner_pid INTEGER")
     if "owner_host" not in cols:
         conn.execute("ALTER TABLE run ADD COLUMN owner_host TEXT")
+    # Lineage: where this session was continued or forked from, and which run
+    # brought it into existence. Old rows have no parent by definition, and
+    # 'fresh' is what "no parent" is called, so the backfill states the truth
+    # rather than inventing a chain.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(session)")}
+    for column in ("parent_session_id", "origin_run_id"):
+        if column not in cols:
+            conn.execute(f"ALTER TABLE session ADD COLUMN {column} TEXT")
+    if "relation" not in cols:
+        conn.execute("ALTER TABLE session ADD COLUMN relation TEXT DEFAULT 'fresh'")
+        conn.execute("UPDATE session SET relation='fresh' WHERE relation IS NULL OR relation=''")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
@@ -232,12 +246,28 @@ def now() -> float:
     return time.time()
 
 
-def create_session(workspace: str, title: str = "") -> dict:
+def create_session(
+    workspace: str,
+    title: str = "",
+    parent_session_id: str = "",
+    origin_run_id: str = "",
+    relation: str = "fresh",
+) -> dict:
     sid = new_id("ses")
     with connect() as c:
         c.execute(
-            "INSERT INTO session(id, workspace_id, workspace, title, created_at) VALUES(?,?,?,?,?)",
-            (sid, config.workspace_id(), workspace, title, now()),
+            "INSERT INTO session(id, workspace_id, workspace, title, parent_session_id,"
+            " origin_run_id, relation, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                sid,
+                config.workspace_id(),
+                workspace,
+                title,
+                parent_session_id or None,
+                origin_run_id or None,
+                relation or "fresh",
+                now(),
+            ),
         )
     return get_session(sid)
 
@@ -246,6 +276,44 @@ def get_session(sid: str) -> dict:
     with connect() as c:
         row = c.execute("SELECT * FROM session WHERE id=?", (sid,)).fetchone()
     return dict(row) if row else {}
+
+
+def set_session_lineage(sid: str, **fields: Any) -> None:
+    """Write only the lineage fields, and only the ones the caller decided on.
+
+    Kept narrow on purpose: the rest of the session row belongs to whoever
+    created it, and a run finishing must never rewrite a title or a status.
+    """
+    allowed = {"parent_session_id", "origin_run_id", "relation"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields)
+    with connect() as c:
+        c.execute(f"UPDATE session SET {cols} WHERE id=?", (*fields.values(), sid))
+
+
+def child_sessions(sid: str) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM session WHERE parent_session_id=? AND workspace_id=?"
+            " ORDER BY created_at",
+            (sid, config.workspace_id()),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def runs_for_session(sid: str) -> list[dict]:
+    """Runs that executed inside one session row (newest first)."""
+    if not sid:
+        return []
+    with connect() as c:
+        rows = c.execute(
+            "SELECT r.* FROM run r JOIN task t ON t.id = r.task_id"
+            " WHERE t.session_id=? AND r.workspace_id=? ORDER BY r.started_at DESC",
+            (sid, config.workspace_id()),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def create_task(
@@ -751,6 +819,27 @@ def list_proposals(status: str = "open", limit: int = 50) -> list[dict]:
                 "SELECT * FROM proposal WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?",
                 (config.workspace_id(), limit),
             ).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["files"] = json.loads(item.get("files_json") or "[]")
+        except json.JSONDecodeError:
+            item["files"] = []
+        out.append(item)
+    return out
+
+
+def proposals_for_run(run_id: str) -> list[dict]:
+    """What a run put on a branch. Usually zero or one, but the query says what
+    the data says instead of assuming."""
+    if not run_id:
+        return []
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM proposal WHERE run_id=? AND workspace_id=? ORDER BY created_at",
+            (run_id, config.workspace_id()),
+        ).fetchall()
     out = []
     for row in rows:
         item = dict(row)

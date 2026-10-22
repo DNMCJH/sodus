@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, memory, meter, pet, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -277,6 +277,10 @@ class Runner:
             model or route.model or prof.model or "",
             route, profile_name, wait, run_id,
         )
+        # The sitting row exists already (it was created with the task). Record
+        # how this run got here before the worker spawns, so `nodus lineage`
+        # answers while the run is still going instead of only after it ends.
+        lineage.attach(run, task, session_id=session_id, session_mode=session_mode)
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,

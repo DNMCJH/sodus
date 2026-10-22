@@ -1,14 +1,15 @@
-"""Session commands: list, read, hand off, continue, branch.
+"""Session commands: list, read, hand off, continue, branch, trace lineage.
 
-Four verbs over three vendors. The point of this module is that nobody has to
+Five verbs over three vendors. The point of this module is that nobody has to
 remember which CLI wrote a conversation before acting on it.
 """
 
 from __future__ import annotations
 
+import json
 import time
 
-from ... import sessions
+from ... import lineage, sessions
 from ..client import call, watch
 
 
@@ -34,6 +35,11 @@ def add(sub) -> None:
     p.add_argument("--tail", type=int, default=12)
     p.add_argument("--out", default="")
     p.set_defaults(func=brief, needs_daemon=False)
+
+    p = sub.add_parser("lineage", help="where a session came from and what it produced")
+    p.add_argument("id", help="a ses- / run- / task- id, or a vendor session id")
+    p.add_argument("--json", action="store_true", help="the structured record")
+    p.set_defaults(func=lineage_cmd, needs_daemon=False)
 
     p = sub.add_parser("resume", help="continue a session (any vendor)")
     p.add_argument("session")
@@ -104,6 +110,15 @@ def session(args) -> int:
 def brief(args) -> int:
     path = sessions.write_brief(args.id, args.task, args.out, args.tail)
     print(path)
+    return 0
+
+
+def lineage_cmd(args) -> int:
+    data = lineage.report(args.id)
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        print(lineage.render(data))
     return 0
 
 
