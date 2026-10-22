@@ -1,0 +1,491 @@
+{
+  "assess": {
+    "difficulty": 3,
+    "kind": "code",
+    "needs": [
+      "tool_use",
+      "reasoning"
+    ],
+    "confidence": 0.76,
+    "basis": "rules+jev",
+    "task_digest": "90f7ae29bd64",
+    "chars": 27,
+    "signals": [
+      "code",
+      "code_path",
+      "tool_use"
+    ],
+    "reasons": [
+      "code baseline",
+      "reasoning"
+    ],
+    "rules": {
+      "difficulty": 3,
+      "kind": "code",
+      "needs": [
+        "tool_use",
+        "reasoning"
+      ],
+      "confidence": 0.65,
+      "scores": {
+        "code": 7,
+        "analysis": 0,
+        "writing": 0,
+        "retrieval": 0,
+        "ops": 0
+      }
+    },
+    "jev": {
+      "available": true,
+      "ok": true,
+      "model": "jev-1.14.0",
+      "latency_ms": 599,
+      "difficulty": 3,
+      "difficulty_confidence": 0.52,
+      "kind": "code",
+      "kind_confidence": 1.0,
+      "needs": [
+        "tool_use",
+        "reasoning"
+      ],
+      "agreement": {
+        "difficulty": true,
+        "kind": true,
+        "needs": [
+          "reasoning",
+          "tool_use"
+        ]
+      },
+      "unavailable": null
+    }
+  },
+  "recommend": {
+    "route": "opencode-glm",
+    "rationale": "难度 3/5，类型 code，需要 tool_use, reasoning。打分 opencode-glm 1.31（能力 0.90 + solve 0.46 - 成本 0.00 - 耗时 0.05）；次选 codex 1.04。 实测范围：repo bench: 6 attempts, solve 5/6, mean 56.6s。",
+    "alternatives": [
+      {
+        "route": "codex",
+        "why": "单点修复/命令验证；成本档 2/3；元数据：单点修复、命令验证、快速迭代。有实测：repo bench: 3 attempts, solve 3/3, mean 62.5s，注意样本范围。",
+        "evidence": {
+          "status": "measured",
+          "measured_by": "bench",
+          "source": "2026-10-23_bench_codex.json",
+          "scope": "repo bench: 3 attempts, solve 3/3, mean 62.5s",
+          "stats": {
+            "attempts": 3,
+            "solved": 3,
+            "solve_rate": 1.0,
+            "mean_s": 62.5,
+            "median_s": 54.3,
+            "cost_cny": 0.1078,
+            "cost_complete": true,
+            "priced_attempts": 3,
+            "tested_difficulty": 2
+          },
+          "note": "measured on this repo's eval set",
+          "route": "codex",
+          "history": {
+            "status": "measured",
+            "samples": 14,
+            "window": 30,
+            "stats": {
+              "runs": 14,
+              "window": 30,
+              "completed": 11,
+              "verified_green": 2,
+              "success_rate": 0.143,
+              "finished_rate": 0.786,
+              "verified_samples": 2,
+              "verified_ok_rate": 1.0,
+              "duration_runs": 14,
+              "mean_s": 517.5,
+              "median_s": 35.4,
+              "cost": {
+                "CNY": {
+                  "runs": 4,
+                  "total": 0.039138,
+                  "mean": 0.009784,
+                  "basis": [
+                    "metered"
+                  ]
+                }
+              }
+            },
+            "note": "本地历史：最近 14 次已结束 run；完成 11/14；有测试证据的 2 次里绿 2 次（全量绿 2/14，含没有测试命令的项目）；耗时给中位数（均值会被卡住的 run 拉爆）；成本按 currency 分组，不换算汇率。"
+          },
+          "bench": {
+            "attempts": 3,
+            "solved": 3,
+            "sources": [
+              "2026-10-23_bench_codex.json"
+            ],
+            "tested_difficulty": 2,
+            "priced_attempts": 3
+          }
+        }
+      },
+      {
+        "route": "minimax",
+        "why": "claude 同协议备用；成本档未知；元数据：与 claude 同 CLI/协议，routes.py 明确说是更弱的模型；bench 实测 3/3、¥0.0289/run。有实测：repo bench: 3 attempts, solve 3/3, mean 29.7s，注意样本范围。",
+        "evidence": {
+          "status": "measured",
+          "measured_by": "bench",
+          "source": "2026-10-23_bench_minimax.json",
+          "scope": "repo bench: 3 attempts, solve 3/3, mean 29.7s",
+          "stats": {
+            "attempts": 3,
+            "solved": 3,
+            "solve_rate": 1.0,
+            "mean_s": 29.7,
+            "median_s": 29.6,
+            "cost_cny": 0.0866,
+            "cost_complete": true,
+            "priced_attempts": 3,
+            "tested_difficulty": 2
+          },
+          "note": "measured on this repo's eval set",
+          "route": "minimax",
+          "history": {
+            "status": "measured",
+            "samples": 18,
+            "window": 30,
+            "stats": {
+              "runs": 18,
+              "window": 30,
+              "completed": 16,
+              "verified_green": 1,
+              "success_rate": 0.056,
+              "finished_rate": 0.889,
+              "verified_samples": 1,
+              "verified_ok_rate": 1.0,
+              "duration_runs": 18,
+              "mean_s": 381.3,
+              "median_s": 13.0,
+              "cost": {
+                "CNY": {
+                  "runs": 16,
+                  "total": 0.319003,
+                  "mean": 0.019938,
+                  "basis": [
+                    "list_price"
+                  ]
+                }
+              }
+            },
+            "note": "本地历史：最近 18 次已结束 run；完成 16/18；有测试证据的 1 次里绿 1 次（全量绿 1/18，含没有测试命令的项目）；耗时给中位数（均值会被卡住的 run 拉爆）；成本按 currency 分组，不换算汇率。"
+          },
+          "bench": {
+            "attempts": 3,
+            "solved": 3,
+            "sources": [
+              "2026-10-23_bench_minimax.json"
+            ],
+            "tested_difficulty": 2,
+            "priced_attempts": 3
+          }
+        }
+      },
+      {
+        "route": "opencode-gemini",
+        "why": "小任务 + 多模态；成本档未知；元数据：A/B 15.0s，关键点 10/12，严格格式 2/2，失败 0/6；总账指定给多模态/看屏幕。有实测：repo bench: 3 attempts, solve 2/3, mean 35.4s，注意样本范围。",
+        "evidence": {
+          "status": "measured",
+          "measured_by": "bench",
+          "source": "2026-10-23_bench_opencode-gemini-old3.json",
+          "scope": "repo bench: 3 attempts, solve 2/3, mean 35.4s",
+          "stats": {
+            "attempts": 3,
+            "solved": 2,
+            "solve_rate": 0.667,
+            "mean_s": 35.4,
+            "median_s": 38.5,
+            "cost_cny": 0.099,
+            "cost_complete": true,
+            "priced_attempts": 3,
+            "tested_difficulty": 2
+          },
+          "note": "measured on this repo's eval set",
+          "route": "opencode-gemini",
+          "history": {
+            "status": "none",
+            "samples": 0,
+            "window": 30,
+            "stats": {},
+            "note": "本工作区没有这条路由的历史 run"
+          },
+          "bench": {
+            "attempts": 3,
+            "solved": 2,
+            "sources": [
+              "2026-10-23_bench_opencode-gemini-old3.json"
+            ],
+            "tested_difficulty": 2,
+            "priced_attempts": 3
+          },
+          "ab": {
+            "model": "gemini-3.8-flash",
+            "mean_s": 15.0,
+            "key_points": "10/12",
+            "strict_format": "2/2",
+            "failures": "0/6"
+          }
+        }
+      }
+    ],
+    "confidence": 0.63,
+    "evidence": {
+      "status": "measured",
+      "measured_by": "bench",
+      "source": "2026-10-23_bench_opencode-glm-hard.json, 2026-10-23_bench_opencode-glm-hard2.json",
+      "scope": "repo bench: 6 attempts, solve 5/6, mean 56.6s",
+      "stats": {
+        "attempts": 6,
+        "solved": 5,
+        "solve_rate": 0.833,
+        "mean_s": 56.6,
+        "median_s": 48.7,
+        "cost_cny": 0.1037,
+        "cost_complete": true,
+        "priced_attempts": 6,
+        "tested_difficulty": 5
+      },
+      "note": "measured on this repo's eval set",
+      "route": "opencode-glm",
+      "history": {
+        "status": "measured",
+        "samples": 9,
+        "window": 30,
+        "stats": {
+          "runs": 9,
+          "window": 30,
+          "completed": 5,
+          "verified_green": 0,
+          "success_rate": 0.0,
+          "finished_rate": 0.556,
+          "verified_samples": 0,
+          "verified_ok_rate": null,
+          "duration_runs": 9,
+          "mean_s": 6061.5,
+          "median_s": 28.3,
+          "cost": {
+            "CNY": {
+              "runs": 6,
+              "total": 0.043524,
+              "mean": 0.007254,
+              "basis": [
+                "metered"
+              ]
+            }
+          }
+        },
+        "note": "本地历史：最近 9 次已结束 run；完成 5/9；有测试证据的 0 次里绿 0 次（全量绿 0/9，含没有测试命令的项目）；耗时给中位数（均值会被卡住的 run 拉爆）；成本按 currency 分组，不换算汇率。"
+      },
+      "bench": {
+        "attempts": 6,
+        "solved": 5,
+        "sources": [
+          "2026-10-23_bench_opencode-glm-hard.json",
+          "2026-10-23_bench_opencode-glm-hard2.json"
+        ],
+        "tested_difficulty": 5,
+        "priced_attempts": 6
+      },
+      "ab": {
+        "model": "glm-5.3-flash",
+        "mean_s": 12.4,
+        "key_points": "10/12",
+        "strict_format": "2/2",
+        "failures": "0/6",
+        "speedup_vs_gemini_pct": 17
+      }
+    },
+    "unmeasured": [],
+    "scoring": {
+      "version": 1,
+      "formula": "score = capability_fit + measured_solve_bonus - cost_penalty - time_penalty",
+      "weights": {
+        "solve_by_difficulty": {
+          "1": 0.3,
+          "2": 0.3,
+          "3": 0.55,
+          "4": 0.85,
+          "5": 0.85
+        },
+        "cost_per_log2": 0.12,
+        "cost_cap": 0.5,
+        "time_per_log2": 0.1,
+        "time_cap": 0.35,
+        "price_sensitivity_by_difficulty": {
+          "1": 1.0,
+          "2": 1.0,
+          "3": 0.7,
+          "4": 0.4,
+          "5": 0.25
+        },
+        "out_of_scope_solve": 0.35,
+        "cheap_ratio": 1.5,
+        "cheap_solve": 0.667
+      },
+      "candidates": [
+        {
+          "route": "opencode-glm",
+          "score": 1.308,
+          "capability_fit": 0.9,
+          "measured_solve_bonus": 0.458,
+          "cost_penalty": 0.0,
+          "time_penalty": 0.05,
+          "solve_rate": 0.833,
+          "solved": 5,
+          "attempts": 6,
+          "seconds": 48.7,
+          "cost_cny": 0.017283,
+          "cost_known": true,
+          "measured_by": "bench",
+          "tested_difficulty": 5,
+          "covers_difficulty": true,
+          "declared_cost_tier": null,
+          "cost_basis": "measured",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": ""
+        },
+        {
+          "route": "codex",
+          "score": 1.042,
+          "capability_fit": 1.0,
+          "measured_solve_bonus": 0.193,
+          "cost_penalty": 0.089,
+          "time_penalty": 0.061,
+          "solve_rate": 1.0,
+          "solved": 3,
+          "attempts": 3,
+          "seconds": 54.3,
+          "cost_cny": 0.035933,
+          "cost_known": true,
+          "measured_by": "bench",
+          "tested_difficulty": 2,
+          "covers_difficulty": false,
+          "declared_cost_tier": 2,
+          "cost_basis": "measured",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": ""
+        },
+        {
+          "route": "minimax",
+          "score": 0.931,
+          "capability_fit": 0.8,
+          "measured_solve_bonus": 0.193,
+          "cost_penalty": 0.062,
+          "time_penalty": 0.0,
+          "solve_rate": 1.0,
+          "solved": 3,
+          "attempts": 3,
+          "seconds": 29.6,
+          "cost_cny": 0.028867,
+          "cost_known": true,
+          "measured_by": "bench",
+          "tested_difficulty": 2,
+          "covers_difficulty": false,
+          "declared_cost_tier": null,
+          "cost_basis": "measured",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": ""
+        },
+        {
+          "route": "opencode-gemini",
+          "score": 0.873,
+          "capability_fit": 0.85,
+          "measured_solve_bonus": 0.128,
+          "cost_penalty": 0.078,
+          "time_penalty": 0.027,
+          "solve_rate": 0.667,
+          "solved": 2,
+          "attempts": 3,
+          "seconds": 38.5,
+          "cost_cny": 0.033,
+          "cost_known": true,
+          "measured_by": "bench",
+          "tested_difficulty": 2,
+          "covers_difficulty": false,
+          "declared_cost_tier": null,
+          "cost_basis": "measured",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": ""
+        },
+        {
+          "route": "claude",
+          "score": 0.708,
+          "capability_fit": 1.0,
+          "measured_solve_bonus": 0.128,
+          "cost_penalty": 0.347,
+          "time_penalty": 0.073,
+          "solve_rate": 0.667,
+          "solved": 2,
+          "attempts": 3,
+          "seconds": 61.1,
+          "cost_cny": 0.303733,
+          "cost_known": true,
+          "measured_by": "bench",
+          "tested_difficulty": 2,
+          "covers_difficulty": false,
+          "declared_cost_tier": 3,
+          "cost_basis": "measured",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": ""
+        },
+        {
+          "route": "dsh",
+          "score": 0.512,
+          "capability_fit": 0.4,
+          "measured_solve_bonus": 0.193,
+          "cost_penalty": 0.078,
+          "time_penalty": 0.003,
+          "solve_rate": 1.0,
+          "solved": 3,
+          "attempts": 3,
+          "seconds": 30.5,
+          "cost_cny": null,
+          "cost_known": false,
+          "measured_by": "bench",
+          "tested_difficulty": 2,
+          "covers_difficulty": false,
+          "declared_cost_tier": 1,
+          "cost_basis": "unknown (median of measured)",
+          "time_basis": "measured",
+          "excluded": "",
+          "pool": true,
+          "note": "价格数据不完整，成本按未知处理"
+        }
+      ],
+      "guardrails": [],
+      "winner": "opencode-glm",
+      "explain": "opencode-glm 1.31 / codex 1.04 / minimax 0.93 / opencode-gemini 0.87 / claude 0.71 / dsh 0.51（能力声明 0.90 vs 1.00；opencode-glm 快 1.1 倍、便宜 2.1 倍、solve 5/6 vs 3/3；bench 只测到难度 5，solve 已按 0.35 折减）"
+    },
+    "route_spec": {
+      "agent": "opencode-glm",
+      "providers": [
+        "relay-openai"
+      ],
+      "model": "codes9527/glm-5.3-flash"
+    },
+    "basis": "rules+jev",
+    "assessment": {
+      "difficulty": 3,
+      "kind": "code",
+      "needs": [
+        "tool_use",
+        "reasoning"
+      ],
+      "confidence": 0.76
+    }
+  }
+}
