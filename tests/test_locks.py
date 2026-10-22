@@ -104,7 +104,8 @@ def test_reaping_an_orphan_frees_its_directory(tmp_path, monkeypatch):
     work = tmp_path / "w"
     work.mkdir()
     run = db.create_run(task["id"], "dsh", str(work), lock=True)
-    db.update_run(run["id"], status="running", started_at=time.time() - 5)
+    # orphan = dead owner (see runner._owner_is_gone)
+    db.update_run(run["id"], status="running", started_at=time.time() - 5, owner_pid=999999)
     assert db.write_holder(work)["run_id"] == run["id"]
 
     runner.RUNNER.reap_orphans()

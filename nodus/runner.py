@@ -20,12 +20,13 @@ import json
 import os
 import queue
 import re
+import socket
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, config, db, meter, pet, profiles, propose, providers, routes, verify
+from . import adapters, agents, config, db, meter, pet, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -939,8 +940,33 @@ class Runner:
         return found
 
     def reap_orphans(self) -> list[dict]:
-        """Fail every run that claims to be running when this process owns none."""
-        return self._reap(db.live_runs(), "the process that owned this run is gone")
+        """Fail runs whose *recorded owner* is gone.
+
+        This used to reap every live run, on the theory that whoever starts the
+        daemon owns them all. That stops being true the moment a second process
+        can start runs: `nodus mcp` and a plain `nodus run` hold their own, and
+        a daemon booting afterwards would mark them failed and reap their files.
+        Only a dead owner (or a row that predates owner recording) is orphaned.
+        """
+        orphans = [run for run in db.live_runs() if self._owner_is_gone(run)]
+        return self._reap(orphans, "the process that owned this run is gone")
+
+    @staticmethod
+    def _owner_is_gone(run: dict) -> bool:
+        """Is the process that started this run dead (or unknowable)?
+
+        Runs from another host are left alone: this process cannot check a
+        foreign pid, and a wrong guess here kills somebody's work.
+        """
+        host = str(run.get("owner_host") or "")
+        if host and host != socket.gethostname():
+            return False
+        pid = run.get("owner_pid")
+        if not pid:
+            return True  # legacy row: keep the old "a fresh daemon owns none" rule
+        if int(pid) == os.getpid():
+            return False  # our own run; never kill what we own
+        return not daemon.alive(int(pid))
 
     def reconcile(self, stale_seconds: int = 900) -> list[dict]:
         """Fail runs whose owner process died while they were still running."""

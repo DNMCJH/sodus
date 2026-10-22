@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import sqlite3
 import time
 import uuid
@@ -176,6 +178,12 @@ def connect() -> sqlite3.Connection:
     for column in ("route", "provider", "profile"):
         if column not in cols:
             conn.execute(f"ALTER TABLE run ADD COLUMN {column} TEXT")
+    # Who started this run. A daemon that starts later must not adopt (or kill)
+    # a run a live MCP process owns — that is the whole point of recording it.
+    if "owner_pid" not in cols:
+        conn.execute("ALTER TABLE run ADD COLUMN owner_pid INTEGER")
+    if "owner_host" not in cols:
+        conn.execute("ALTER TABLE run ADD COLUMN owner_host TEXT")
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
@@ -270,6 +278,8 @@ def create_run(
     profile: str = "",
     lock: bool = False,
     rid: str = "",
+    owner_pid: int | None = None,
+    owner_host: str = "",
 ) -> dict:
     """Create a run, optionally taking the write lock on its directory.
 
@@ -286,7 +296,8 @@ def create_run(
         rid = rid or new_id("run")
         try:
             _insert_run(rid, task_id, agent, cwd, parent_run_id, note, effort, model,
-                        route, provider, profile, key if lock else "")
+                        route, provider, profile, key if lock else "",
+                        owner_pid=owner_pid, owner_host=owner_host)
             return get_run(rid)
         except Busy as busy:
             if attempt == 0 and release_if_finished(busy.holder):
@@ -308,12 +319,14 @@ def _insert_run(
     provider: str,
     profile: str,
     lock_key: str,
+    owner_pid: int | None = None,
+    owner_host: str = "",
 ) -> None:
     with connect() as c:
         c.execute(
             "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note,"
-            " effort, model, route, provider, profile, started_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " effort, model, route, provider, profile, owner_pid, owner_host, started_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 rid,
                 config.workspace_id(),
@@ -327,6 +340,8 @@ def _insert_run(
                 route,
                 provider,
                 profile,
+                os.getpid() if owner_pid is None else owner_pid,
+                owner_host or socket.gethostname(),
                 now(),
             ),
         )

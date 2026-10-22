@@ -13,7 +13,8 @@ def test_reap_orphans_fails_live_runs_and_keeps_files(tmp_path, monkeypatch):
     work.mkdir()
     task = db.create_task("t")
     run = db.create_run(task["id"], "dsh", str(work), None, "", "", "")
-    db.update_run(run["id"], status="running", started_at=time.time() - 5)
+    # an orphan is a run whose recorded owner is gone, not merely "not ours"
+    db.update_run(run["id"], status="running", started_at=time.time() - 5, owner_pid=999999)
     (work / "out.md").write_text("the worker got this far", encoding="utf-8")
 
     reaped = runner.RUNNER.reap_orphans()
@@ -39,7 +40,9 @@ def test_reap_orphans_leaves_finished_runs_alone(tmp_path, monkeypatch):
 def test_the_second_start_has_nothing_to_reap(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     task = db.create_task("t")
-    db.create_run(task["id"], "dsh", str(tmp_path))
+    run = db.create_run(task["id"], "dsh", str(tmp_path))
+    # the first start reaps runs whose owner died before it came up
+    db.update_run(run["id"], owner_pid=999999)
 
     assert len(runner.RUNNER.reap_orphans()) == 1
     assert runner.RUNNER.reap_orphans() == []

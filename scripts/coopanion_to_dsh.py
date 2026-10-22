@@ -145,6 +145,9 @@ RE_ROT_CALL = re.compile(r"(\w+)\s*:\s*rot\(\s*'([\w-]+)'(?:\s*,\s*'([\w-]+)')?\
 RE_WARP_CALL = re.compile(r"(\w+)\s*:\s*warp\(\s*'([\w-]+)'")
 RE_OBJ = re.compile(r"(\w+)\s*:\s*\{\s*kind\s*:\s*'(rot|warp)'((?:[^{}])*)\}")
 RE_PARENT = re.compile(r"parent\s*:\s*'([\w-]+)'")
+# seat:{kind:'rot',pivot:xy([425,570])} —— 枢轴是字面量，model.json 的 pivots 里没有
+RE_LIT_PIVOT = re.compile(
+    r"(\w+)\s*:\s*\{[^{}]*?pivot\s*:\s*xy\(\s*\[\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]\s*\)")
 
 
 def parse_bone_tree(figure_js: Path, pivots: dict) -> dict:
@@ -176,6 +179,15 @@ def parse_bone_tree(figure_js: Path, pivots: dict) -> dict:
             log(f"  警告：骨 {name} 的父骨 {info['parent']} 未定义，按根骨处理")
             info["parent"] = None
     return bones
+
+
+def parse_literal_pivots(figure_js: Path) -> dict:
+    """figure.js 里用 xy([x,y]) 字面量写死的枢轴（model.json 的 pivots 没收录）。"""
+    if not figure_js.exists():
+        return {}
+    src = figure_js.read_text(encoding="utf-8", errors="replace")
+    return {m.group(1): (float(m.group(2)), float(m.group(3)))
+            for m in RE_LIT_PIVOT.finditer(src)}
 
 
 def load_pack(pack_dir: Path) -> Pack:
@@ -250,6 +262,9 @@ def load_pack(pack_dir: Path) -> Pack:
         raise SystemExit("model.json 里没有可用的分片")
 
     pack.bones = parse_bone_tree(pack_dir / "figure.js", pack.pivots)
+    # figure.js 里字面量写死的枢轴补进去（漏了会退化成绕 (0,0) 转，画面上是往外飞）
+    for bone, xy in parse_literal_pivots(pack_dir / "figure.js").items():
+        pack.pivots.setdefault(bone, to_view(*xy))
     # 分片引用到的骨若不在树里，补一个根骨
     for part in pack.parts:
         pack.bones.setdefault(part.bone, {"parent": None})
@@ -352,13 +367,18 @@ def a_neutral(c: Ctx) -> dict:
 
 
 def a_wave(c: Ctx) -> dict:
-    """招手：figure.js 里 armNear 的公式就是 -wave*104°，把 k 交出去就行。"""
+    """招手：figure.js 里 armNear 的公式就是 -wave*(104 + sin(k*pi*12)*9)°，把 k 交出去即可。
+
+    24fps 下 ±9° 的摆动落在 6~7 帧一个周期，太小看不出来，这里把摆幅放大到 16°，
+    频率沿用作者的 12 个半周期（1.7s 里约 3.5Hz），抬臂角仍是 104°。
+    """
     t = c.t
     return {
         "swing": 4.0 * math.sin(t * 1.6),
         "look": (3.5, -1.0),
         "face": "happy",
         "gesture": _gesture("wave", c.k),
+        "wave_amp": 16.0,
         "root_dy": 0.0,
     }
 
@@ -402,13 +422,13 @@ def a_jump(c: Ctx) -> dict:
     e = math.sin(math.pi * c.k)
     squash = 1.0 - 0.10 * max(0.0, 1 - c.k * 6.0)
     return {"swing": -6.0 * e, "look": (0.0, -2.0), "face": "surprised",
-            "root_dy": -46.0 * e, "root_sy": 1.0 + 0.05 * e - (1 - squash)}
+            "root_dy": -30.0 * e, "root_sy": 1.0 + 0.035 * e - (1 - squash)}
 
 
 def a_hop(c: Ctx) -> dict:
     e = math.sin(math.pi * c.k)
     return {"swing": 0.0, "look": (0.0, -1.0), "face": "happy",
-            "root_dy": -18.0 * e}
+            "root_dy": -12.0 * e}
 
 
 def a_spin(c: Ctx) -> dict:
@@ -434,7 +454,7 @@ def a_shiver(c: Ctx) -> dict:
 def a_flap(c: Ctx) -> dict:
     e = math.sin(math.pi * c.k)
     return {"swing": 2.0 * math.sin(c.t * 6.0), "look": (0.0, -1.5), "face": "excited",
-            "gesture": _gesture("flap", c.k), "root_dy": -14.0 * e}
+            "gesture": _gesture("flap", c.k), "root_dy": -10.0 * e}
 
 
 def a_dizzy(c: Ctx) -> dict:
@@ -542,6 +562,8 @@ class Rig:
         self.pack = pack
         self.S = pack.view_scale
         self.flip = flip
+        # 角色在 view 空间的高度，测量前给个默认值；坐下下沉量按它等比缩放
+        self.char_h = 221.5
         self.springs = {"hair": [0.0, 0.0], "tail": [0.0, 0.0], "wing": [0.0, 0.0]}
         self.role_bone: dict[str, str] = {}
         for bone in pack.bones:
@@ -557,6 +579,21 @@ class Rig:
         v[0] += v[1] * dt
         return v[0]
 
+    def _springs_sub(self, targets: dict, dt: float, n: int = 4) -> dict:
+        """把 1/fps 的步长拆成 n 个子步推进弹簧。
+
+        figure.js 是跟着 vblank 走的（约 1/60s）。24fps 直接一步迈过去，弹簧的
+        等效阻尼和相位都会偏，拆成 1/96 更接近它在应用里的手感。
+        """
+        sub = dt / n
+        out = {}
+        for key, target in targets.items():
+            val = 0.0
+            for _ in range(n):
+                val = self._spring(key, target, sub)
+            out[key] = val
+        return out
+
     def reset(self) -> None:
         for v in self.springs.values():
             v[0] = v[1] = 0.0
@@ -567,7 +604,9 @@ class Rig:
         sit = clamp(float(o.get("sit", 0.0)), 0.0, 1.0)
         seat = smooth(0.46, 0.54, sit)
         unseat = 1.0 - smooth(0.54, 0.62, sit)
-        low = sit * 54.0 * S
+        # figure.js 写的是 low = sit * 54 * S（54 是源像素、S 是源→view 缩放）。
+        # 这里按角色高度等比：0.0595 * 221.5 ≈ 13.2 view 单位，和原式同值，但换了坐标系也不跑偏。
+        low = sit * 0.0595 * self.char_h
 
         mode = o.get("mode") or "idle"
         facial = o.get("face") or "neutral"
@@ -585,13 +624,19 @@ class Rig:
         drooping = facial in ("sad", "sleepy", "sleep", "cry", "scared", "worried")
         swing = float(o.get("swing", 0.0))
 
-        hair = self._spring("hair", clamp(swing * 0.055, -2, 2) + math.sin(t * 1.8) * 0.55, dt)
+        # 三个弹簧的目标先算齐，再一起推进子步（目标在本帧内视为常量）
         wag = 0.15 if drooping else (1.0 if cheerful else 0.55)
-        tail = (self._spring("tail", clamp(swing * 0.09, -3.5, 3.5) - (2.0 if drooping else 0.0), dt)
+        wing_mood = 1.0 if (cheerful or facial == "smug") else (-0.7 if drooping else 0.0)
+        sp = self._springs_sub({
+            "hair": clamp(swing * 0.055, -2, 2) + math.sin(t * 1.8) * 0.55,
+            "tail": clamp(swing * 0.09, -3.5, 3.5) - (2.0 if drooping else 0.0),
+            "wing": wing_mood * 8 + clamp(swing * 0.12, -4, 4),
+        }, dt, n=4)
+        hair = sp["hair"]
+        tail = (sp["tail"]
                 + wag * 6.5 * math.sin(t * (2.3 + 2.3 * wag)) + math.sin(t * 0.85) * 1.8
                 + flap * 14 * math.sin(t * 17))
-        wing_mood = 1.0 if (cheerful or facial == "smug") else (-0.7 if drooping else 0.0)
-        wing = (self._spring("wing", wing_mood * 8 + clamp(swing * 0.12, -4, 4), dt)
+        wing = (sp["wing"]
                 + math.sin(t * 2.3) * 4.2 + math.sin(t * 0.72 + 1.1) * 1.7)
 
         look = o.get("look") or (0.0, 0.0)
@@ -625,7 +670,7 @@ class Rig:
         put("legFar", a=0.0)
         put("legNear", a=0.0)
         put("armFar", a=math.sin(t * 1.7) * 1.2)
-        put("armNear", a=-wave * (104.0 + math.sin(k * math.pi * 12) * 9.0) - math.sin(t * 1.7) * 1.2)
+        put("armNear", a=-wave * (104.0 + math.sin(k * math.pi * 12) * float(o.get("wave_amp", 9.0))) - math.sin(t * 1.7) * 1.2)
         put("skirtFar", a=hair * 0.25, ty=low * 0.55)
         put("skirtNear", a=-hair * 0.25, ty=low * 0.55)
         put("apron", a=hair * 0.15, ty=low)
@@ -862,7 +907,11 @@ def render_action(pack: Pack, rig: Rig, motion: Motion, out_dir: Path, frames_di
     ss = SUPERSAMPLE
     bbox = measure_neutral(pack, rig)
     rig.reset()
+    rig.char_h = max(1e-6, bbox[3] - bbox[1])
     fit = fit_matrix(bbox, canvas_w, canvas_h, ss, flip=flip)
+    # 根位移最多能把角色顶到画布上沿为止（留 4px 余量），不然跳一下头就被裁掉
+    fit_k = canvas_h * CHAR_RATIO / rig.char_h
+    max_up = max(0.0, (canvas_h * (BASELINE_RATIO - CHAR_RATIO) - 4.0) / fit_k)
 
     tmp = Path(tempfile.mkdtemp(prefix="coopanion-frames-"))
     try:
@@ -873,6 +922,8 @@ def render_action(pack: Pack, rig: Rig, motion: Motion, out_dir: Path, frames_di
             ctx = Ctx(t=t, k=k, dur=motion.seconds, pack=pack)
             o = motion.gen(ctx)
             o.setdefault("face", motion.face or "neutral")
+            if o.get("root_dy"):
+                o["root_dy"] = max(float(o["root_dy"]), -max_up)
             pose, alpha, root = rig.evaluate(o, t, dt)
             # 内部按 dt 的 1/4 细分推进弹簧，避免 24fps 下弹簧发散
             frame = compose_frame(pack, pose, alpha, root, fit, (canvas_w * ss, canvas_h * ss))
@@ -1031,7 +1082,7 @@ def main(argv=None) -> int:
         if args.strips and not args.no_strips:
             strip = make_strip(args.ffmpeg, anim_dir / f"{m.name}.webm",
                                out_root / "strips" / f"{kind}-{m.name}-strip.png",
-                               int(round(m.seconds * args.fps)), args.fps, count=args.strips, cols=args.strip-cols)
+                               int(round(m.seconds * args.fps)), args.fps, count=args.strips, cols=args.strip_cols)
             if strip:
                 log(f"  抽帧图 {strip}")
 
