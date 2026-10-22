@@ -43,3 +43,12 @@ def test_unverified_runs_are_listed_before_they_are_rerun():
     assert "重跑并验收" not in ui.PAGE
     assert "rerunOne" in ui.PAGE
     assert "重跑这一次" in ui.PAGE
+
+
+def test_a_run_is_named_by_its_task_before_its_directory():
+    # "opencode-glm · 目录 Temp/nodus-oc-smoke" said where, not what. The task
+    # title wins, and a path that does appear keeps its full value in a tooltip.
+    assert "task.title || task.goal" in ui.PAGE
+    assert 'title="${esc(r.cwd)}"' in ui.PAGE
+    assert "NOISE_DIRS" in ui.PAGE
+    assert ".slice(-2).join" not in ui.PAGE

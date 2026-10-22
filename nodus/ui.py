@@ -208,7 +208,22 @@ function flash(msg, bad) {
 // ---- words, not ids ----
 const whoName = a => ({ claude: "Claude", codex: "Codex" }[a] || a || "agent");
 const clock = ts => ts ? new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false }) : "?";
-const tailPath = p => String(p || "").replace(/\\\\/g, "/").split("/").filter(Boolean).slice(-2).join("/");
+// A cwd is on screen to say where the work happened, not to reprint a temp
+// hierarchy. Keep the last two meaningful segments, drop noise like Temp /
+// AppData, and leave the full path to the `title` tooltip.
+const NOISE_DIRS = new Set(["temp", "tmp", "appdata", "local", "roaming", "users",
+                            "home", "worktrees", "var", "private"]);
+function tailPath(p) {
+  const parts = String(p || "").replace(/\\\\/g, "/").split("/").filter(Boolean);
+  if (!parts.length) return "";
+  const keep = [];
+  for (let i = parts.length - 1; i >= 0 && keep.length < 2; i -= 1) {
+    if (NOISE_DIRS.has(parts[i].toLowerCase())) break;
+    keep.unshift(parts[i]);
+  }
+  if (!keep.length) keep.push(parts[parts.length - 1]);
+  return (keep.length < parts.length ? "…/" : "") + keep.join("/");
+}
 function ago(ts) {
   if (!ts) return "";
   const d = Math.max(0, Date.now() / 1000 - ts);
@@ -248,9 +263,14 @@ function whyFailed(err) {
 }
 function aboutRun(run, who) {
   const note = String(run.note || "").split("\\n")[0].trim();
+  const task = (state.tasks || []).find(t => t.id && t.id === run.task_id) || {};
+  const label = String(task.title || task.goal || "").split("\\n")[0].trim();
   const bits = [];
   if (who) bits.push(who);
-  if (note) bits.push(note.length > 44 ? note.slice(0, 44) + "…" : note);
+  // The task label beats a directory: "opencode smoke" says what ran,
+  // "…/nodus-oc-smoke" only says where. The full path stays in 详情.
+  if (note) bits.push(clip(note, 44));
+  else if (label) bits.push(clip(label, 44));
   else if (run.cwd) bits.push("目录 " + tailPath(run.cwd));
   return bits.join(" · ") || "任务记录没写内容";
 }
@@ -305,13 +325,13 @@ function renderLive() {
   const now = Date.now() / 1000;
   const rows = live.map(r => {
     const sub = [];
-    if (r.cwd) sub.push("目录 " + tailPath(r.cwd));
+    if (r.cwd) sub.push(`<span title="${esc(r.cwd)}">目录 ${esc(tailPath(r.cwd))}</span>`);
     if (r.partial_cost == null) sub.push("跑完才知道花了多少");
     else sub.push("约 " + money(r.partial_currency || "USD", r.partial_cost) + "（还没结算）");
     return `<div class="live-row">
       <div>
         <div class="live-what">${liveWhat(r)} <span class="dim">· 已跑 <span data-start="${r.started_at || 0}">${span(now - (r.started_at || now))}</span></span></div>
-        <div class="live-sub">${esc(sub.join(" · "))}</div>
+        <div class="live-sub">${sub.join(" · ")}</div>
       </div>
       <div class="act"><button class="danger" onclick="stopRun('${r.id}')">停止</button></div>
     </div>`;
@@ -647,12 +667,16 @@ async function refresh() {
   try {
     // /board is the one source for the first screen: runs still going,
     // everything waiting on a human, and today's cost straight from sqlite.
-    const [health, board, runs, proposals, pipelines] = await Promise.all([
-      api("/health"), api("/board"), api("/runs"), api("/proposals"), api("/pipelines")]);
+    // /tasks is only the run → task title join the first screen needs so a
+    // failed run can be named by what it was asked to do, not by its cwd.
+    const [health, board, runs, proposals, pipelines, tasks] = await Promise.all([
+      api("/health"), api("/board"), api("/runs"), api("/proposals"), api("/pipelines"),
+      api("/tasks")]);
     state.board = { ...board, profile: board.profile || health.profile };
     state.runs = runs.map(r => ({ ...r, usage: safe(r.usage_json) }));
     state.proposals = proposals;
     state.pipelines = pipelines;
+    state.tasks = tasks;
     renderHeader(); renderLive(); renderTodo(); renderMoney(board.today);
     renderRuns(); renderProposals();
   } catch (e) {
