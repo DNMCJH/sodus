@@ -543,18 +543,23 @@ class Runner:
         run_dir.mkdir(parents=True, exist_ok=True)
         record = db.get_run(rid)
         note = record.get("note") or ""
+        known = (
+            memory.context_for(
+                task.get("goal") or task.get("title") or "", agent=spec.name
+            )
+            if include_memory
+            else ""
+        )
         if session_id:
             # Resuming: the session already carries its own history, so send the
             # instruction verbatim instead of wrapping it in a fresh task brief.
+            # Remembered facts still go in — they are project state, not
+            # conversation state, and the resumed worker is as blind as a fresh
+            # one to anything confirmed after its last turn.
             prompt = note
+            if known:
+                prompt = f"{note.rstrip()}\n\n{known}" if note.strip() else known
         else:
-            known = (
-                memory.context_for(
-                    task.get("goal") or task.get("title") or "", agent=spec.name
-                )
-                if include_memory
-                else ""
-            )
             prompt = build_prompt(
                 task,
                 recent_handoff(task["id"]),
