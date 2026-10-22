@@ -349,6 +349,7 @@ function renderLive() {
 }
 
 function decisionRow(d) {
+  const unverifiedList = (state.board || {}).unverified_runs || [];
   const run = state.runs.find(r => r.id && r.id === d.run) || {};
   const who = whoName(run.agent || run.route || "");
   const when = d.at ? "· " + ago(d.at) : "";
@@ -380,7 +381,7 @@ function decisionRow(d) {
     if (run.cwd) meta.push("目录 " + run.cwd);
     meta.push("验证结果：测试红");
   } else if (d.kind === "unverified") {
-    const list = (state.board.unverified_runs || []).slice(0, 50);
+    const list = unverifiedList.slice(0, 50);
     const n = count("unverified") || list.length || (/(\\d+)/.exec(d.title || "") || [])[1] || "";
     what = n + " 次跑完了，但没有测试证据，所以不算通过";
     const last = list[0] || {};
@@ -414,7 +415,7 @@ function decisionRow(d) {
 
   // one line per run: when, who, what, and a button that reruns exactly that
   // run. No single button stands in for all of them.
-  const rows = list.map(u => `<div class="unv-row">
+  const rows = unverifiedList.map(u => `<div class="unv-row">
       <span class="dim nowrap">${esc(ago(u.ended_at) || "时间没记")}</span>
       <span class="nowrap">${esc(whoName(u.agent))}</span>
       <span class="unv-title" title="${esc(u.title || "")}">${esc(u.title || "（任务没写标题）")}</span>
