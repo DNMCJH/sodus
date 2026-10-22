@@ -13,6 +13,7 @@ from ... import (
     config,
     db,
     decision,
+    daemon,
     desk as desk_view,
     providers,
     routes,
@@ -27,6 +28,14 @@ def add(sub) -> None:
     p = sub.add_parser("serve", help="run the HTTP daemon in the foreground")
     p.add_argument("--port", type=int, default=4199)
     p.set_defaults(func=serve, needs_daemon=False)
+
+    p = sub.add_parser("up", help="start the daemon detached; survives this shell")
+    p.add_argument("--port", type=int, default=daemon.DEFAULT_PORT)
+    p.add_argument("--wait", type=float, default=20.0, help="seconds to wait for /health")
+    p.set_defaults(func=up_cmd, needs_daemon=False)
+
+    p = sub.add_parser("down", help="stop the daemon this machine's state file points at")
+    p.set_defaults(func=down_cmd, needs_daemon=False)
 
     p = sub.add_parser("agents", help="adapter readiness")
     p.set_defaults(func=agents_cmd)
@@ -154,6 +163,28 @@ def desk(args) -> int:
     path.write_text(text, encoding="utf-8")
     print(path)
     return 0
+
+
+def up_cmd(args) -> int:
+    """Start the daemon detached and say where it is."""
+    result = daemon.start(port=args.port, wait=args.wait)
+    if not result.get("ok"):
+        print(f"FAIL  {result.get('error', 'unknown error')}")
+        if result.get("log"):
+            print(f"      log: {result['log']}")
+        return 1
+    verb = "already up" if result.get("already") else "up"
+    print(f"PASS  {verb}  pid={result.get('pid')}  {result.get('url')}")
+    return 0
+
+
+def down_cmd(args) -> int:
+    result = daemon.stop()
+    if result.get("ok"):
+        print(f"PASS  stopped  pid={result.get('pid')}")
+        return 0
+    print(f"FAIL  {result.get('note', 'daemon still answering')}")
+    return 1
 
 
 def agents_cmd(args) -> int:
