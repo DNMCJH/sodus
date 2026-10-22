@@ -19,6 +19,12 @@ The first screen is also written for someone who has never seen Nodus: each
 row says what happened in one sentence, what it touched, and which button to
 press. Run ids and the agents' raw English errors live behind "详情", because
 they answer a debugging question, not the operator's "do I have to get up".
+
+It also splits the failures by who can resolve them. A failure the machine can
+retry appears under "自动重试中" with the attempt number and no button at all;
+"需要你决定" only holds what a retry cannot fix. A decision row leads with the
+project and task, then the problem in one sentence, the change, and the
+suggested action — enough to answer "what is this?" without opening anything.
 """
 
 from __future__ import annotations
@@ -80,9 +86,26 @@ PAGE = """<!doctype html>
   .live-row:hover, .ask:hover { background:var(--panel); }
   .live-what, .ask-what { font-size:14.5px; color:var(--text); }
   .live-what b { font-weight:600; }
+  .ask-what .proj { font-weight:600; }
   .live-sub, .ask-about { color:var(--dim); font-size:12.5px; margin-top:1px; }
   .ask-about .when { white-space:nowrap; }
+  .ask-problem, .ask-change, .ask-suggest { font-size:13px; margin-top:3px; line-height:1.45; }
+  .ask-problem { color:var(--text); }
+  .ask-change { color:var(--dim); }
+  .ask-suggest { color:var(--accent); }
+  .ask .lbl { display:inline-block; min-width:30px; color:var(--dim);
+              font-size:11.5px; margin-right:4px; }
   .live-row > .act, .ask > .act { display:flex; gap:6px; align-items:center; padding-top:1px; }
+  .ask > .act { flex-wrap:wrap; justify-content:flex-end; }
+  .recover-row, .blocked-row { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; }
+  .recover-row { display:flex; gap:10px; align-items:baseline; }
+  .recover-row .who, .blocked-row .who { color:var(--text); font-weight:600; }
+  .recover-row .when { margin-left:auto; color:var(--warn); white-space:nowrap;
+                       font-variant-numeric:tabular-nums; }
+  .blocked-row .why { color:var(--text); margin-top:2px; }
+  .blocked-row .do { color:var(--dim); font-size:12.5px; margin-top:2px;
+                     display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .blocked-row .do .grow { flex:1; }
   .ask details.meta { border:0; margin:4px 0 0; padding:0; }
   .ask details.meta summary { font-size:11.5px; }
   .ask details.meta div { font-family:ui-monospace, Consolas, monospace; font-size:11.5px;
@@ -134,6 +157,14 @@ PAGE = """<!doctype html>
   <section>
     <h2>需要你决定 <span class="hint" id="todo-n"></span></h2>
     <div id="todo"><div class="empty">正在读…</div></div>
+  </section>
+  <section id="recover-sec" hidden>
+    <h2>自动重试中 <span class="hint" id="recover-n"></span></h2>
+    <div id="recover"></div>
+  </section>
+  <section id="blocked-sec" hidden>
+    <h2>不会自动重试 <span class="hint" id="blocked-n"></span></h2>
+    <div id="blocked"></div>
   </section>
   <section>
     <h2>今天的钱</h2>
@@ -253,35 +284,6 @@ const moneyParts = costs =>
 const runMoney = u => (u && typeof u.cost === "number" ? money(u.currency || "USD", u.cost) : "-");
 const VERIFY = { ok: ["通过", "ok"], red: ["测试红", "bad"], none: ["没验证", "warn"] };
 
-function whyFailed(err) {
-  const e = String(err || "");
-  if (/^orphaned/i.test(e)) return "跑到一半，启动它的进程退出了（不是模型出错）";
-  if (/timeout|timed out|超时/i.test(e)) return "跑太久，超时了";
-  if (/error|fail|denied|refused|invalid|quota|limit|429|5\\d\\d/i.test(e)) return "模型报错，任务中断";
-  return "任务中断了，没跑完";
-}
-function aboutRun(run, who) {
-  const note = String(run.note || "").split("\\n")[0].trim();
-  const task = (state.tasks || []).find(t => t.id && t.id === run.task_id) || {};
-  const label = String(task.title || task.goal || "").split("\\n")[0].trim();
-  const bits = [];
-  if (who) bits.push(who);
-  // The task label beats a directory: "opencode smoke" says what ran,
-  // "…/nodus-oc-smoke" only says where. The full path stays in 详情.
-  if (note) bits.push(clip(note, 44));
-  else if (label) bits.push(clip(label, 44));
-  else if (run.cwd) bits.push("目录 " + tailPath(run.cwd));
-  return bits.join(" · ") || "任务记录没写内容";
-}
-function fileChange(d) {
-  const files = String(d.note || "").split(",").map(s => s.trim()).filter(Boolean);
-  const m = /\\+(\\d+)\\s*[−-]\\s*(\\d+)/.exec(d.detail || "");
-  const plus = m ? Number(m[1]) : null, minus = m ? Number(m[2]) : null;
-  const size = plus == null ? "" : (minus ? `（+${plus} −${minus} 行）` : `（+${plus} 行）`);
-  if (files.length === 1) return "改了 " + files[0] + size;
-  if (files.length > 1) return "改了 " + files.length + " 个文件" + size;
-  return d.detail ? "改动：" + d.detail : "改动在分支上，主工作区没动";
-}
 function liveWhat(r) {
   const who = whoName(r.agent || r.route);
   const note = String(r.note || "").split("\\n")[0].trim();
@@ -294,7 +296,7 @@ function liveWhat(r) {
 
 let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [], tasks: [] };
 let sseLive = false, timer = 0, inflight = false;
-let unvOpen = false, moreFailedOpen = false, moreProposalOpen = false;
+let unvOpen = false, moreNeedsOpen = false;
 const count = k => ((state.board || {}).decision_counts || {})[k] || 0;
 
 function table(headers, rows, empty) {
@@ -349,64 +351,50 @@ function renderLive() {
 }
 
 function decisionRow(d) {
-  const unverifiedList = (state.board || {}).unverified_runs || [];
-  const run = state.runs.find(r => r.id && r.id === d.run) || {};
-  const who = whoName(run.agent || run.route || "");
-  const when = d.at ? "· " + ago(d.at) : "";
-  let what = "", about = "", act = "", meta = [];
+  const when = d.at ? ago(d.at) : "";
+  const head = `<span class="proj">${esc(d.project || "（项目未记录）")}</span>` +
+    `<span class="dim"> · </span>${esc(d.task_title || d.title || "（任务没写标题）")}`;
+  const goal = clip(d.goal || "", 120);
+  // Hoisted out of the "unverified" branch on purpose: the same list is needed
+  // again when the row renders the per-run lines below. Declaring it inside the
+  // branch made the tail throw `ReferenceError: list is not defined`, which
+  // killed the whole row — the expand button did nothing.
+  const unvList = ((state.board || {}).unverified_runs || []).slice(0, 50);
+  let act = "", meta = [];
 
   if (d.kind === "proposal") {
-    what = (who !== "agent" && who ? who + " 改完了，等你验收" : "有改动，等你验收");
-    about = fileChange(d);
     act = `<button class="primary" onclick="merge('${d.id}')">合并</button>
            <button class="danger" onclick="reject('${d.id}')">丢弃</button>`;
     const p = state.proposals.find(p => p.id === d.id) || {};
     meta.push("提案 " + d.id + (p.branch ? " · 分支 " + p.branch : ""));
     if (d.run) meta.push("来源 run " + d.run);
-    if (run.note) meta.push("任务：" + run.note);
   } else if (d.kind === "failed") {
-    what = whyFailed(d.detail || run.error);
-    about = aboutRun(run, who);
     act = `<button class="primary" onclick="rerun('${d.run}')">重跑</button>
            <button onclick="showLog('${d.run}')">看日志</button>`;
-    meta.push("run " + d.id + (run.task_id ? " · 任务 " + run.task_id : ""));
-    if (run.cwd) meta.push("目录 " + run.cwd);
-    meta.push("原始报错：" + (d.detail || run.error || "（没有记录）"));
+    meta.push("run " + d.run);
+    meta.push("原始报错：" + (d.detail || "（没有记录）"));
   } else if (d.kind === "red") {
-    what = (who !== "agent" && who ? who + " 改完了，但测试没通过" : "改完了，但测试没通过");
-    about = aboutRun(run, "");
     act = `<button class="primary" onclick="showEvidence('${d.run}')">看日志</button>
            <button onclick="rerun('${d.run}')">重跑</button>`;
-    meta.push("run " + d.id + (run.task_id ? " · 任务 " + run.task_id : ""));
-    if (run.cwd) meta.push("目录 " + run.cwd);
+    meta.push("run " + d.run);
     meta.push("验证结果：测试红");
   } else if (d.kind === "unverified") {
-    const list = unverifiedList.slice(0, 50);
-    const n = count("unverified") || list.length || (/(\\d+)/.exec(d.title || "") || [])[1] || "";
-    what = n + " 次跑完了，但没有测试证据，所以不算通过";
-    const last = list[0] || {};
-    about = last.id
-      ? "最近一次：" + (ago(last.ended_at) || "刚才") + " · " + whoName(last.agent) +
-        (last.title ? " · " + clip(last.title, 32) : "")
-      : "这些改动都没跑过测试";
+    const n = count("unverified") || unvList.length || "";
     act = `<button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + n + " 次"}</button>` +
-      (last.id ? `<button class="primary" onclick="rerunOne('${last.id}')">重跑最近一次</button>` : "");
-    if (last.id) meta.push("最近一次 run " + last.id + (last.title ? " · 任务：" + last.title : ""));
-    meta.push("没有测试证据时，进程退出码 0 只说明它退出了，不说明改对了。");
-    meta.push("「重跑最近一次」只重跑上面那一条，不是这 " + n + " 次。");
+      (unvList[0] ? `<button class="primary" onclick="rerunOne('${unvList[0].id}')">重跑最近一次</button>` : "");
+    meta.push("「重跑最近一次」只重跑最近那一条，不是全部。");
   } else {
-    what = d.title || "有一件事等你处理";
-    about = d.detail || "";
     act = d.run ? `<button onclick="showLog('${d.run}')">看日志</button>` : "";
-    meta.push("类型：" + (d.kind || "未知"));
   }
+  if (d.cwd) meta.push("目录 " + d.cwd);
+  if (goal) meta.push("任务目标：" + goal);
 
-  // the unverified row already says when the last one ran; do not repeat it
-  const stamp = d.kind === "unverified" ? "" : when;
   const ask = `<div class="ask">
     <div>
-      <div class="ask-what">${esc(what)}</div>
-      <div class="ask-about">${esc(about)}${stamp ? ` <span class="when">${esc(stamp)}</span>` : ""}</div>
+      <div class="ask-what">${head}${when ? ` <span class="dim when">· ${esc(when)}</span>` : ""}</div>
+      <div class="ask-problem"><span class="lbl">问题</span>${esc(d.problem || d.title || "")}</div>
+      ${d.change ? `<div class="ask-change"><span class="lbl">改动</span>${esc(d.change)}</div>` : ""}
+      ${d.suggestion ? `<div class="ask-suggest"><span class="lbl">建议</span>${esc(d.suggestion)}</div>` : ""}
       <details class="meta"><summary>详情</summary>${meta.map(m => `<div>${esc(m)}</div>`).join("")}</details>
     </div>
     <div class="act">${act}</div>
@@ -415,7 +403,7 @@ function decisionRow(d) {
 
   // one line per run: when, who, what, and a button that reruns exactly that
   // run. No single button stands in for all of them.
-  const rows = unverifiedList.map(u => `<div class="unv-row">
+  const rows = unvList.map(u => `<div class="unv-row">
       <span class="dim nowrap">${esc(ago(u.ended_at) || "时间没记")}</span>
       <span class="nowrap">${esc(whoName(u.agent))}</span>
       <span class="unv-title" title="${esc(u.title || "")}">${esc(u.title || "（任务没写标题）")}</span>
@@ -424,75 +412,64 @@ function decisionRow(d) {
   return ask + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
 }
 
-function moreBlock(kind, n) {
-  const failed = kind === "failed";
-  const open = failed ? moreFailedOpen : moreProposalOpen;
-  return `<div class="more-inline">还有 ${n} ${failed ? "个失败" : "个提案"}
-    <button onclick="${failed ? "toggleMoreFailed()" : "toggleMoreProposal()"}">${open ? "收起" : "展开"}</button></div>`;
+function retryWait(ts) {
+  if (!ts) return "正在跑";
+  const left = ts - Date.now() / 1000;
+  return left <= 0 ? "马上开始" : span(left) + "后";
 }
 
-// The first screen shows the newest 3 failures and 5 proposals; the rest were
-// only counted and pointed at a collapsed section at the bottom. These build
-// the same row shape for the ones behind the count, so they can open in place.
-function extraDecisions(kind, items, counts) {
-  const shown = items.filter(d => d.kind === kind);
-  const want = Math.max(0, (counts[kind] || 0) - shown.length);
-  if (!want) return [];
-  if (kind === "failed") {
-    const seen = new Set(shown.map(d => d.run || d.id));
-    return state.runs
-      .filter(r => r.status === "failed" && !seen.has(r.id))
-      .slice(0, want)
-      .map(r => ({
-        kind: "failed", id: r.id, run: r.id, title: "执行失败，要不要重跑由你定",
-        detail: String(r.error || "").slice(0, 160), note: "",
-        at: r.ended_at || r.started_at,
-      }));
-  }
-  const seen = new Set(shown.map(d => d.id));
-  return state.proposals
-    .filter(p => p.status === "open" && !seen.has(p.id))
-    .slice(0, want)
-    .map(p => ({
-      kind: "proposal", id: p.id, run: p.run_id || "",
-      title: "提案在分支上，等你合入或丢弃", detail: p.stat || "",
-      note: (p.files || []).map(f => f.path).filter(Boolean).join(", "),
-      at: p.created_at,
-    }));
+function renderRecover(rows) {
+  const sec = $("recover-sec");
+  if (!rows.length) { sec.hidden = true; return; }
+  sec.hidden = false;
+  $("recover-n").textContent = rows.length + " 件";
+  $("recover").innerHTML = rows.map(r =>
+    `<div class="recover-row">
+       <span class="who">${esc(r.project || "（项目未记录）")} · ${esc(r.task_title || "（任务没写标题）")}</span>
+       <span class="dim">第 ${r.attempt}/${r.limit || 2} 次</span>
+       <span class="when">${esc(retryWait(r.next_retry_at))}</span>
+     </div>`).join("");
+}
+
+function renderBlocked(rows) {
+  const sec = $("blocked-sec");
+  if (!rows.length) { sec.hidden = true; return; }
+  sec.hidden = false;
+  $("blocked-n").textContent = rows.length + " 件";
+  $("blocked").innerHTML = rows.map(r =>
+    `<div class="blocked-row">
+       <div><span class="who">${esc(r.project || "（项目未记录）")} · ${esc(r.task_title || "（任务没写标题）")}</span></div>
+       <div class="why">${esc(r.problem || "")}</div>
+       <div class="do"><span class="grow">${esc(r.suggestion || "")}</span>
+         <button onclick="showLog('${r.run}')">看日志</button>
+         <button onclick="rerun('${r.run}')">修好后重跑</button></div>
+     </div>`).join("");
 }
 
 function renderTodo() {
   const b = state.board || {};
-  const items = b.decisions || [];
-  const counts = b.decision_counts || {};
-  const parts = [];
-  if (counts.proposal) parts.push(counts.proposal + " 个等你验收");
-  if (counts.red) parts.push(counts.red + " 个测试没过");
-  if (counts.failed) parts.push(counts.failed + " 个失败");
-  if (counts.unverified) parts.push(counts.unverified + " 次没验证");
-  $("todo-n").textContent = parts.join(" · ");
-  if (!items.length) {
-    $("todo").innerHTML = `<div class="empty">现在没有需要你决定的事。</div>`;
-    return;
+  const needs = b.needs_you || [];
+  const recovering = b.auto_recovering || [];
+  const blocked = b.deterministic || [];
+  $("todo-n").textContent = [
+    needs.length ? needs.length + " 件要你决定" : "",
+    recovering.length ? recovering.length + " 件在自动重试" : "",
+  ].filter(Boolean).join(" · ");
+  if (!needs.length) {
+    $("todo").innerHTML = `<div class="empty">没有需要你决定的事${
+      recovering.length ? "；" + recovering.length + " 件失败正在自动重试，不用你管。" : "。"}</div>`;
+  } else {
+    const shown = needs.slice(0, 5), rest = needs.slice(5);
+    const blocks = shown.map(decisionRow);
+    if (rest.length) {
+      blocks.push(`<div class="more-inline">还有 ${rest.length} 件
+        <button onclick="toggleMoreNeeds()">${moreNeedsOpen ? "收起" : "展开"}</button></div>`);
+      if (moreNeedsOpen) blocks.push(...rest.map(decisionRow));
+    }
+    $("todo").innerHTML = blocks.join("");
   }
-
-  const extraFailed = extraDecisions("failed", items, counts);
-  const extraProposals = extraDecisions("proposal", items, counts);
-  const last = kind => items.map(d => d.kind).lastIndexOf(kind);
-  const lastFailed = last("failed"), lastProposal = last("proposal");
-  const blocks = [];
-  items.forEach((d, i) => {
-    blocks.push(decisionRow(d));
-    if (i === lastFailed && extraFailed.length) {
-      blocks.push(moreBlock("failed", extraFailed.length));
-      if (moreFailedOpen) blocks.push(...extraFailed.map(decisionRow));
-    }
-    if (i === lastProposal && extraProposals.length) {
-      blocks.push(moreBlock("proposal", extraProposals.length));
-      if (moreProposalOpen) blocks.push(...extraProposals.map(decisionRow));
-    }
-  });
-  $("todo").innerHTML = blocks.join("");
+  renderRecover(recovering);
+  renderBlocked(blocked);
 }
 
 function renderMoney(t) {
@@ -591,7 +568,7 @@ async function showLog(rid) {
     const lines = events.slice(-18).map(e =>
       clock(e.ts) + "  " + e.type + "  " + JSON.stringify(e.payload || {}));
     box.innerHTML = `<h3>日志 <span class="mono dim">${esc(rid)}</span></h3>
-      <div class="bad">${esc(whyFailed(run.error))}</div>
+      <div class="bad">${esc(run.problem || "这个 run 失败了。")}</div>
       <div class="task">原始报错：<span class="mono">${esc(run.error || "（没有记录）")}</span></div>
       <div class="task">谁干：${esc(run.agent || "-")} · 目录：<span class="mono">${esc(run.cwd || "-")}</span>
         · 开始：${esc(clock(run.started_at))}</div>
@@ -666,12 +643,8 @@ function toggleUnv() {
   unvOpen = !unvOpen;
   renderTodo();
 }
-function toggleMoreFailed() {
-  moreFailedOpen = !moreFailedOpen;
-  renderTodo();
-}
-function toggleMoreProposal() {
-  moreProposalOpen = !moreProposalOpen;
+function toggleMoreNeeds() {
+  moreNeedsOpen = !moreNeedsOpen;
   renderTodo();
 }
 

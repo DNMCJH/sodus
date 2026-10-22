@@ -1,8 +1,13 @@
-"""The board: no build step, no placeholder left in the served page."""
+"""The board: no build step, no placeholder left in the served page.
+
+The first screen is a decision surface, not a log viewer: a failure the daemon
+can retry must not look like a question, and a question must carry enough
+context to answer without opening anything else.
+"""
 
 from __future__ import annotations
 
-from nodus import ui
+from nodus import recover, ui
 
 
 def test_the_page_asks_for_the_token_exactly_once():
@@ -10,9 +15,12 @@ def test_the_page_asks_for_the_token_exactly_once():
 
 
 def test_the_sections_come_in_the_agreed_order():
-    # The first screen is the three questions that need no scrolling; the
-    # working sections sit behind <details> in this order.
-    order = ["正在跑", "需要你决定", "今天的钱", "最近执行", "提案", "派活"]
+    # The first screen is the questions that need no scrolling; the working
+    # sections sit behind <details> in this order.
+    order = [
+        "正在跑", "需要你决定", "自动重试中", "不会自动重试", "今天的钱",
+        "最近执行", "提案", "派活",
+    ]
     positions = [ui.PAGE.index(name) for name in order]
     assert positions == sorted(positions)
 
@@ -46,18 +54,51 @@ def test_unverified_runs_are_listed_before_they_are_rerun():
 
 
 def test_a_run_is_named_by_its_task_before_its_directory():
-    # "opencode-glm · 目录 Temp/nodus-oc-smoke" said where, not what. The task
-    # title wins, and a path that does appear keeps its full value in a tooltip.
-    assert "task.title || task.goal" in ui.PAGE
+    # "Temp/nodus-oc-smoke" said where, not what. The server sends the task
+    # title with every decision; paths that do appear keep a full-path tooltip.
+    assert "d.task_title" in ui.PAGE
     assert 'title="${esc(r.cwd)}"' in ui.PAGE
     assert "NOISE_DIRS" in ui.PAGE
     assert ".slice(-2).join" not in ui.PAGE
 
 
-def test_remaining_failures_expand_where_they_are_counted():
-    # No "look in the collapsed section at the bottom": the count sits at the
-    # end of the failed rows and opens them in place.
+def test_the_first_screen_renders_needs_you_not_the_old_blob():
+    # `decisions` stays in the API for MCP and the pet, but the page reads the
+    # recovered split so a retry in flight never looks like a question.
+    assert "b.needs_you" in ui.PAGE
+    assert "b.auto_recovering" in ui.PAGE
+    assert "b.deterministic" in ui.PAGE
+    assert "b.decisions" not in ui.PAGE
+
+
+def test_a_decision_row_is_ordered_project_task_problem_change_suggestion():
+    start = ui.PAGE.index("function decisionRow")
+    end = ui.PAGE.index("function retryWait")
+    body = ui.PAGE[start:end]
+    order = ["d.project", "d.task_title", "d.problem", "d.change", "d.suggestion"]
+    positions = [body.index(token) for token in order]
+    assert positions == sorted(positions)
+
+
+def test_the_auto_retry_block_shows_progress_and_offers_nothing_to_click():
+    # The operator has no decision here, so the block must not grow a button.
+    start = ui.PAGE.index("function renderRecover")
+    end = ui.PAGE.index("function renderBlocked")
+    body = ui.PAGE[start:end]
+    assert "attempt" in body and "next_retry_at" in body
+    assert "<button" not in body
+
+
+def test_remaining_decisions_expand_where_they_are_counted():
     assert "在下面「更多」里" not in ui.PAGE
-    assert "还有 ${n} ${failed ? \"个失败\" : \"个提案\"}" in ui.PAGE
-    assert "toggleMoreFailed" in ui.PAGE
-    assert "extraDecisions" in ui.PAGE
+    assert "toggleMoreNeeds" in ui.PAGE
+    assert "还有 ${rest.length} 件" in ui.PAGE
+
+
+def test_failure_wording_lives_in_recover_not_in_the_page():
+    # One classifier, one sentence per cause. Copying it into ui.py is how the
+    # board and the log view end up disagreeing about the same failure.
+    assert "启动它的进程退出了" not in ui.PAGE
+    assert "启动它的进程退出了" in recover.problem_text(
+        {"error": "orphaned: the process that owned this run is gone"}
+    )
