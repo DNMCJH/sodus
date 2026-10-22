@@ -95,6 +95,13 @@ def test_remaining_decisions_expand_where_they_are_counted():
     assert "还有 ${rest.length} 件" in ui.PAGE
 
 
+def test_a_retry_in_flight_says_so_in_the_live_row():
+    # The live row reads the note first; "auto-retry 1/2" must become a
+    # sentence, not appear as the agent's task description.
+    assert "正在自动重试（第" in ui.PAGE
+    assert "auto-retry (\\d+)" in ui.PAGE
+
+
 def test_failure_wording_lives_in_recover_not_in_the_page():
     # One classifier, one sentence per cause. Copying it into ui.py is how the
     # board and the log view end up disagreeing about the same failure.

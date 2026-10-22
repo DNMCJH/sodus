@@ -287,9 +287,11 @@ const VERIFY = { ok: ["通过", "ok"], red: ["测试红", "bad"], none: ["没验
 function liveWhat(r) {
   const who = whoName(r.agent || r.route);
   const note = String(r.note || "").split("\\n")[0].trim();
+  const retry = /^auto-retry (\\d+)\\/(\\d+)/.exec(note);
   const m = /[\\w.-]+\\.(?:py|js|ts|tsx|jsx|go|rs|java|rb|css|html|json|md|txt|yml|yaml|toml|sh)/i.exec(note);
   let doing = "正在干活";
-  if (m) doing = "正在改 " + m[0];
+  if (retry) doing = `正在自动重试（第 ${retry[1]}/${retry[2]} 次）`;
+  else if (m) doing = "正在改 " + m[0];
   else if (note) doing = "正在做：" + (note.length > 38 ? note.slice(0, 38) + "…" : note);
   return `<b>${esc(who)}</b> ${esc(doing)}`;
 }
