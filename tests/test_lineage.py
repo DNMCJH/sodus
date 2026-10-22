@@ -191,6 +191,36 @@ def test_for_run_reports_sitting_chain_siblings_and_proposals(home):
     assert [row["id"] for row in data["proposals"]] == [prop["id"]]
 
 
+def test_for_session_on_a_leaf_still_shows_the_whole_tree(home):
+    a = sitting("A", vendor="v-a")
+    b = sitting("B", vendor="v-a", resume="v-a", mode="resume")
+    c = sitting("C", vendor="v-c", resume="v-a", mode="fork")
+
+    data = lineage.for_session(b["session"]["id"])
+
+    assert [row["id"] for row in data["chain"]] == [
+        a["session"]["id"], b["session"]["id"]
+    ]
+    # B and C share a parent, so the view from B must still contain C.
+    assert {row["id"] for row in data["descendants"]} == {
+        b["session"]["id"], c["session"]["id"]
+    }
+
+
+def test_cli_lineage_on_a_leaf_marks_it_inside_the_tree(home, capsys):
+    a = sitting("A", vendor="v-a")
+    b = sitting("B", vendor="v-a", resume="v-a", mode="resume")
+    c = sitting("C", vendor="v-c", resume="v-a", mode="fork")
+    capsys.readouterr()
+
+    assert main(["lineage", b["session"]["id"]]) == 0
+
+    out = capsys.readouterr().out
+    assert a["session"]["id"] in out
+    assert b["session"]["id"] in out
+    assert c["session"]["id"] in out
+
+
 # ---- for_task: the evidence behind "who should get this" ---------------
 
 

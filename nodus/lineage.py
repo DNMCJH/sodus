@@ -194,10 +194,15 @@ def for_session(session_id: str) -> dict:
     row = db.get_session(str(session_id or "").strip())
     if not row:
         return {}
+    ancestry = chain(row["id"])
+    # The tree is rendered from the root, not from the node that was asked
+    # about: asking about a leaf still has to show its siblings and cousins,
+    # otherwise the tree would omit the very row the user named.
+    root = ancestry[0]["id"] if ancestry else row["id"]
     return {
         "session": _node(row),
-        "chain": chain(row["id"]),
-        "descendants": descendants(row["id"]),
+        "chain": ancestry,
+        "descendants": descendants(root),
     }
 
 
