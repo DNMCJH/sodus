@@ -1,9 +1,8 @@
-"""Recovery: retry is the default, deterministic errors are the exception.
+"""Recovery: classify, retry within a budget, and never guess.
 
-The rule under test: every failed run gets up to three automatic retries,
-including the ones nobody classified; only 401/403/400/model/content-policy
-failures are withheld because a rerun would return the same answer and bill
-for it. The board only asks a human after the chain is spent.
+The rule under test is narrow on purpose. A retry that might replay a
+half-finished edit costs more than a failure a human looks at, so only the
+provably-transient cases may start another run.
 """
 
 from __future__ import annotations
@@ -81,7 +80,7 @@ def fake_start(monkeypatch) -> list[dict]:
             route=kwargs["route_name"],
             provider=kwargs.get("provider") or "",
         )
-        db.update_run(child["id"], status="queued", started_at=time.time())
+        db.update_run(child["id"], status="queued")
         return db.get_run(child["id"])
 
     monkeypatch.setattr(runner.RUNNER, "start", start)
@@ -111,20 +110,10 @@ def fake_start(monkeypatch) -> list[dict]:
         "HTTP 503: 服务不可用",
         "429 too many requests",
         "rate limit exceeded（限流）",
-        # Nobody classified these. They are still retried: "exit code 1" is a
-        # run to try again, not a question for a human.
-        "exit code 1",
-        "agent stopped after 3 tool calls",
-        "python: can't open file 'x.py'",
-        "PermissionError: [Errno 13] Permission denied: 'out.csv'",
-        "写入失败：没有权限",
-        "something nobody classified",
-        "",
-        "    ",
     ],
 )
-def test_everything_but_a_wrong_request_is_retryable(error):
-    assert recover.classify({"error": error}) == "retryable"
+def test_transient_errors(error):
+    assert recover.classify({"error": error}) == "transient"
 
 
 @pytest.mark.parametrize(
@@ -148,22 +137,34 @@ def test_deterministic_errors(error):
     assert recover.classify({"error": error}) == "deterministic"
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        "exit code 1",
+        "agent stopped after 3 tool calls",
+        "python: can't open file 'x.py'",
+        # A filesystem permission failure is not a rejected API key. Saying
+        # "换密钥" here would send the operator to the wrong place.
+        "PermissionError: [Errno 13] Permission denied: 'out.csv'",
+        "写入失败：没有权限",
+        "something nobody classified",
+        "",
+        "    ",
+    ],
+)
+def test_unclassified_is_human(error):
+    # Guessing here is how an automatic retry applies the same edit twice.
+    assert recover.classify({"error": error}) == "human"
+
+
 def test_problem_text_is_a_sentence_not_an_error_dump():
     assert "进程退出了" in recover.problem_text({"error": ORPHAN})
     assert "重试不会好" in recover.problem_text({"error": "401 Unauthorized"})
-    # The old wording admitted the board could not tell what broke. It now
-    # names what it has (an exit code) instead of claiming ignorance.
-    assert "退出码" in recover.problem_text({"error": "exit code 1"})
+    assert "看不出" in recover.problem_text({"error": "exit code 1"})
     for error in (ORPHAN, "429", "content policy", "exit code 1"):
         text = recover.problem_text({"error": error})
         assert any("\u4e00" <= char <= "\u9fff" for char in text)
         assert "Error" not in text and "Traceback" not in text
-
-
-def test_a_deterministic_failure_says_why_a_retry_would_not_help():
-    text = recover.why_not_retried({"error": "401 Unauthorized"})
-    assert "401" in text and "再发一次" in text
-    assert recover.why_not_retried({"error": "exit code 1"}) == ""
 
 
 # ---- should_retry ------------------------------------------------------
@@ -172,13 +173,6 @@ def test_a_deterministic_failure_says_why_a_retry_would_not_help():
 def test_an_orphan_is_retryable_immediately(home, work):
     run = make_run(work, ORPHAN)
     assert recover.should_retry(run) is True
-
-
-def test_an_unclassified_failure_is_retried_not_escalated(home, work):
-    run = make_run(work, "exit code 1")
-    assert recover.classify(run) == "retryable"
-    assert recover.should_retry(run) is False  # waiting out the first backoff
-    assert recover.should_retry(run, now=time.time() + 61) is True
 
 
 def test_a_network_failure_waits_out_the_backoff(home, work):
@@ -198,14 +192,14 @@ def test_a_run_that_did_not_fail_is_never_retried(home, work):
     assert recover.should_retry(done) is False
 
 
-def test_the_retry_budget_is_three_and_per_chain(home, work):
+def test_the_retry_budget_is_per_chain(home, work):
     original = make_run(work, ORPHAN, ended=time.time() - 600)
     first = make_run(
         work,
         ORPHAN,
         task=db.get_task(original["task_id"]),
         parent=original["id"],
-        note="auto-retry 1/3\n继续",
+        note="auto-retry 1/2\n继续",
         ended=time.time() - 500,
     )
     second = make_run(
@@ -213,61 +207,31 @@ def test_the_retry_budget_is_three_and_per_chain(home, work):
         ORPHAN,
         task=db.get_task(original["task_id"]),
         parent=first["id"],
-        note="auto-retry 2/3\n继续",
+        note="auto-retry 2/2\n继续",
         ended=time.time() - 400,
-    )
-    third = make_run(
-        work,
-        ORPHAN,
-        task=db.get_task(original["task_id"]),
-        parent=second["id"],
-        note="auto-retry 3/3\n继续",
-        ended=time.time() - 300,
     )
 
     assert recover.retry_depth(original) == 0
     assert recover.retry_depth(first) == 1
     assert recover.retry_depth(second) == 2
-    assert recover.retry_depth(third) == 3
-    # Every failed run in the chain already has a child except the tip; the
-    # tip is the only one with attempts left (its depth is 2 before the 3rd).
+    # The original already has a child, so it is not retried again; the child
+    # is the live end of the chain until it too fails.
     assert recover.should_retry(original) is False
-    assert recover.should_retry(first) is False
-    assert recover.should_retry(second) is False  # it has a child too
-    assert recover.should_retry(third) is False  # depth 3 -> a 4th attempt
-    assert recover.block_reason(third) == "retry-limit"
+    assert recover.should_retry(first) is False  # it has a child too
+    assert recover.should_retry(second) is False  # depth 2 -> attempt 3
 
 
-def test_the_third_retry_is_still_allowed(home, work):
+def test_the_second_retry_is_still_allowed(home, work):
     original = make_run(work, ORPHAN, ended=time.time() - 600)
     first = make_run(
         work,
         ORPHAN,
         task=db.get_task(original["task_id"]),
         parent=original["id"],
-        note="auto-retry 1/3\n继续",
+        note="auto-retry 1/2\n继续",
         ended=time.time() - 500,
     )
-    second = make_run(
-        work,
-        ORPHAN,
-        task=db.get_task(original["task_id"]),
-        parent=first["id"],
-        note="auto-retry 2/3\n继续",
-        ended=time.time() - 400,
-    )
-    assert recover.should_retry(second) is True
-
-
-def test_the_limit_is_read_at_call_time(home, work, monkeypatch):
-    # NODUS_RETRY_LIMIT is the operator's dial; a test (or a long-lived
-    # process) may change it after import, and the decision must follow.
-    run = make_run(work, ORPHAN, ended=time.time() - 600)
-    monkeypatch.setattr(recover, "RETRY_LIMIT", 0)
-    assert recover.block_reason(run) == "retry-limit"
-    monkeypatch.setattr(recover, "RETRY_LIMIT", 1)
-    assert recover.block_reason(run) == ""
-    assert recover.auto_retry(limit=0)["retried"] == []
+    assert recover.should_retry(first) is True
 
 
 def test_a_task_budget_stops_the_retry(home, work):
@@ -299,28 +263,26 @@ def test_an_unreadable_budget_does_not_block(home, work):
 # ---- auto_retry --------------------------------------------------------
 
 
-def test_auto_retry_retries_everything_but_the_wrong_request(home, work, monkeypatch):
+def test_auto_retry_retries_one_and_names_the_other_two(home, work, monkeypatch):
     calls = fake_start(monkeypatch)
     orphan = make_run(work, ORPHAN)
     auth = make_run(work, "401 Unauthorized")
-    # Past the first backoff window: an unclassified failure is retried too.
-    unknown = make_run(work, "exit code 1", ended=time.time() - 600)
+    unknown = make_run(work, "exit code 1")
 
     result = recover.auto_retry()
 
     assert result["considered"] == 3
-    retried = {item["run_id"]: item for item in result["retried"]}
-    assert set(retried) == {orphan["id"], unknown["id"]}
-    assert retried[unknown["id"]]["cause"] == "unknown"
-    child = db.get_run(retried[orphan["id"]]["child_run_id"])
+    assert [item["run_id"] for item in result["retried"]] == [orphan["id"]]
+    child = db.get_run(result["retried"][0]["child_run_id"])
     assert child["parent_run_id"] == orphan["id"]
     assert child["task_id"] == orphan["task_id"]
     assert child["cwd"] == orphan["cwd"]
-    assert child["note"].splitlines()[0] == "auto-retry 1/3"
+    assert child["note"].splitlines()[0] == "auto-retry 1/2"
 
     skipped = {item["run_id"]: item for item in result["skipped"]}
     assert skipped[auth["id"]]["class"] == "deterministic"
-    assert len(calls) == 2
+    assert skipped[unknown["id"]]["class"] == "human"
+    assert len(calls) == 1
 
 
 def test_auto_retry_leaves_a_completed_run_alone(home, work, monkeypatch):
@@ -344,46 +306,26 @@ def test_auto_retry_does_not_retry_twice_without_progress(home, work, monkeypatc
     assert len(calls) == 1
 
 
-def test_a_chain_stops_after_three_retries(home, work, monkeypatch):
+def test_a_chain_stops_after_two_retries(home, work, monkeypatch):
     fake_start(monkeypatch)
-    original = make_run(work, ORPHAN, ended=time.time() - 3600)
-    ended = time.time() - 3000
+    original = make_run(work, ORPHAN, ended=time.time() - 600)
 
-    tip = original
-    for attempt in range(1, 4):
-        result = recover.auto_retry()
-        assert len(result["retried"]) == 1, (attempt, result)
-        tip = db.get_run(result["retried"][0]["child_run_id"])
-        db.update_run(
-            tip["id"],
-            status="failed",
-            error=ORPHAN,
-            started_at=ended - 42,
-            ended_at=ended,
-        )
-        ended += 100
+    first = recover.auto_retry()
+    child = db.get_run(first["retried"][0]["child_run_id"])
+    db.update_run(child["id"], status="failed", error=ORPHAN, ended_at=time.time() - 500)
 
-    fourth = recover.auto_retry()
-    assert fourth["retried"] == []
+    second = recover.auto_retry()
+    grandchild = db.get_run(second["retried"][0]["child_run_id"])
+    db.update_run(grandchild["id"], status="failed", error=ORPHAN, ended_at=time.time() - 400)
+
+    third = recover.auto_retry()
+    assert third["retried"] == []
     assert any(
-        item["run_id"] == tip["id"] and item["reason"] == "retry-limit"
-        for item in fourth["skipped"]
+        item["run_id"] == grandchild["id"] and item["reason"] == "retry-limit"
+        for item in third["skipped"]
     )
-    assert recover.retry_depth(db.get_run(tip["id"])) == 3
-    # The original's three retries were spent by the chain, not by the task.
+    # The original's two retries were spent by the chain, not by the task.
     assert db.get_run(original["id"])["status"] == "failed"
-
-
-def test_the_retry_note_carries_the_previous_error_tail(home, work, monkeypatch):
-    calls = fake_start(monkeypatch)
-    detail = "Traceback (most recent call last):\n" + ("x" * 400) + "\nModuleNotFoundError: jwt"
-    make_run(work, detail, ended=time.time() - 600)
-    recover.auto_retry()
-    note = calls[0]["note"]
-    assert note.splitlines()[0] == "auto-retry 1/3"
-    assert "ModuleNotFoundError: jwt" in note
-    assert "x" * 400 not in note          # 300-char tail, not the whole dump
-    assert len(note.splitlines()[1]) <= 320
 
 
 def test_a_retry_resumes_the_session_and_pins_the_endpoint(home, work, monkeypatch):
@@ -429,10 +371,8 @@ def test_recovering_shows_a_waiting_retry_and_then_the_live_child(home, work, mo
     assert len(waiting) == 1
     assert waiting[0]["run_id"] == failed["id"]
     assert waiting[0]["attempt"] == 1
-    assert waiting[0]["limit"] == 3
     assert waiting[0]["next_retry_at"] == pytest.approx(now + recover.BACKOFF[0])
     assert waiting[0]["task_title"] == "修复登录"
-    assert "网络" in waiting[0]["problem"]
 
     recover.auto_retry(now=now + 120)
     live = recover.recovering(now=now + 121)
@@ -464,7 +404,7 @@ def test_start_runs_one_pass_and_only_once(home, work, monkeypatch):
     assert seen == []
 
 
-# ---- the stage-1 contract: attempts, chain, next_retry_at, dry_run ----
+# ---- the stage-1 contract: attempts, next_retry_at, dry_run -----------
 
 
 def test_attempts_counts_the_whole_chain(home, work):
@@ -476,7 +416,7 @@ def test_attempts_counts_the_whole_chain(home, work):
         ORPHAN,
         task=db.get_task(original["task_id"]),
         parent=original["id"],
-        note="auto-retry 1/3\n继续",
+        note="auto-retry 1/2\n继续",
     )
     assert recover.attempts(original) == 1
     assert recover.attempts(first) == 1
@@ -486,26 +426,11 @@ def test_attempts_counts_the_whole_chain(home, work):
         ORPHAN,
         task=db.get_task(original["task_id"]),
         parent=first["id"],
-        note="auto-retry 2/3\n继续",
+        note="auto-retry 2/2\n继续",
     )
     assert recover.attempts(original) == 2
     assert recover.attempts(first) == 2
     assert recover.attempts(second) == 2
-
-
-def test_chain_is_root_first_and_stops_at_a_missing_parent(home, work):
-    original = make_run(work, ORPHAN)
-    first = make_run(
-        work,
-        ORPHAN,
-        task=db.get_task(original["task_id"]),
-        parent=original["id"],
-        note="auto-retry 1/3\n继续",
-    )
-    chain = recover.chain(first)
-    assert [row["id"] for row in chain] == [original["id"], first["id"]]
-    assert recover.is_retry(chain[0]) is False
-    assert recover.retry_number(chain[1]) == 1
 
 
 def test_attempts_do_not_leak_between_chains(home, work):
@@ -516,7 +441,7 @@ def test_attempts_do_not_leak_between_chains(home, work):
         ORPHAN,
         task=task,
         parent=left["id"],
-        note="auto-retry 1/3\n继续",
+        note="auto-retry 1/2\n继续",
     )
 
     right = make_run(work, ORPHAN, task=task)
@@ -525,14 +450,14 @@ def test_attempts_do_not_leak_between_chains(home, work):
         ORPHAN,
         task=task,
         parent=right["id"],
-        note="auto-retry 1/3\n继续",
+        note="auto-retry 1/2\n继续",
     )
     make_run(
         work,
         ORPHAN,
         task=task,
         parent=right_first["id"],
-        note="auto-retry 2/3\n继续",
+        note="auto-retry 2/2\n继续",
     )
 
     assert recover.attempts(left) == 1
@@ -557,20 +482,26 @@ def test_next_retry_at_names_the_backoff(home, work):
 def test_next_retry_at_is_none_when_the_chain_is_spent(home, work):
     now = time.time()
     original = make_run(work, ORPHAN, ended=now - 10_000)
-    parent = original
-    for attempt in (1, 2, 3):
-        parent = make_run(
-            work,
-            ORPHAN,
-            task=db.get_task(original["task_id"]),
-            parent=parent["id"],
-            note=f"auto-retry {attempt}/3\n继续",
-            ended=now - 10_000 + attempt * 100,
-        )
+    first = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=original["id"],
+        note="auto-retry 1/2\n继续",
+        ended=now - 9_000,
+    )
+    second = make_run(
+        work,
+        ORPHAN,
+        task=db.get_task(original["task_id"]),
+        parent=first["id"],
+        note="auto-retry 2/2\n继续",
+        ended=now - 8_000,
+    )
 
-    assert recover.attempts(parent) == 3
-    assert recover.should_retry(parent) is False
-    assert recover.next_retry_at(parent) is None
+    assert recover.attempts(second) == 2
+    assert recover.should_retry(second) is False
+    assert recover.next_retry_at(second) is None
 
 
 def test_dry_run_on_the_real_database_writes_nothing(home, work):
@@ -586,7 +517,7 @@ def test_dry_run_on_the_real_database_writes_nothing(home, work):
     assert [item["run_id"] for item in result["retried"]] == [retryable["id"]]
     assert result["retried"][0]["child_run_id"] == ""
     assert result["retried"][0]["attempt"] == 1
-    assert result["retried"][0]["limit"] == 3
+    assert result["retried"][0]["limit"] == 2
     reasons = {item["run_id"]: item["reason"] for item in result["skipped"]}
     assert reasons[fixed["id"]] == "deterministic"
     assert done["id"] not in reasons
@@ -613,7 +544,7 @@ def test_auto_retry_starts_two_children_for_two_failures(home, work, monkeypatch
         assert child["task_id"] == parent["task_id"]
         assert child["cwd"] == parent["cwd"]
         assert child["route"] == parent["route"]
-        assert child["note"].splitlines()[0] == "auto-retry 1/3"
+        assert child["note"].splitlines()[0] == "auto-retry 1/2"
     assert len(calls) == 2
 
 

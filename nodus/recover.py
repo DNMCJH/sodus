@@ -1,21 +1,15 @@
-"""Automatic recovery: a failed run is retried by default.
+"""Automatic recovery: retry only what a retry can actually fix.
 
-Retrying is the normal response to a failure, not an exception that needs a
-human. A failure therefore has exactly two classes:
+A failure is one of three things, and only the first one is ours to handle:
 
-    retryable      everything else — a dead owner process, a dropped network,
-                   a timeout, a non-zero exit, a red test, or an error nobody
-                   has classified. Running the same work again is the first
-                   answer, and the only cost of being wrong is one more attempt.
+    transient      the attempt never got a fair chance — the owner process
+                   died, the network dropped, the endpoint was rate limiting
+                   or returned 5xx. Running the same work again is the fix.
     deterministic  the request itself is wrong — bad key, bad model name, bad
                    parameters, content policy. Running it again produces the
-                   same error and one more invoice line, so it is listed with
-                   the reason a human has to change something first.
-
-There used to be a third class, `human`, for "nothing proves either way". It
-was the reason the board asked for decisions nobody could make: an `exit code 1`
-is not a decision, it is a run to try again. Unclassified failures now take the
-normal retry path and only reach the board after the chain is exhausted.
+                   same error and one more invoice line.
+    human          nothing proves either way. Guessing here is how an
+                   automatic retry corrupts a tree somebody half-edited.
 
 The retry is a *child* run, not a resurrection of the failed row: the failed
 attempt keeps its own record, and the child points back with `parent_run_id`.
@@ -45,15 +39,12 @@ import time
 
 from . import db, routes
 
-#: How many retries a single run chain gets. Three is the operator's line:
-#: "rerun is normal, unless two or three reruns still produce nothing". The
-#: first retry is attempt 1 of 3; `NODUS_RETRY_LIMIT=0` turns retrying off
-#: without turning recovery off (the failure then lands on the board at once).
-RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "3"))
+#: How many retries a single run chain gets. The first retry is attempt 1 of 2.
+RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "2"))
 
-#: Seconds to wait before attempt 1, 2, 3. Orphaned runs skip this: the process
-#: that would have been racing us is already gone.
-BACKOFF = (60.0, 300.0, 900.0)
+#: Seconds to wait before attempt 1, then attempt 2. Orphaned runs skip this:
+#: the process that would have been racing us is already gone.
+BACKOFF = (60.0, 300.0)
 
 #: A failure older than this is history, not an interruption. Without a floor,
 #: the first daemon start would resume every failure ever recorded.
@@ -112,6 +103,7 @@ _UPSTREAM = re.compile(
     re.I,
 )
 
+_TRANSIENT = {"orphaned", "timeout", "network", "rate_limit", "upstream"}
 _DETERMINISTIC = {"auth", "param", "policy", "model"}
 
 _PROBLEM = {
@@ -124,7 +116,7 @@ _PROBLEM = {
     "param": "请求参数被拒绝（400），重试不会好，需要改配置或这次指令。",
     "policy": "内容被上游安全策略拦了，重试不会好。",
     "model": "模型名不存在或没有权限，重试不会好，需要换模型。",
-    "unknown": "执行失败，报错里只有退出码，没有能归因的文案。",
+    "unknown": "执行失败，从报错里看不出是环境问题还是任务本身的问题。",
 }
 
 _SUGGESTION = {
@@ -137,7 +129,7 @@ _SUGGESTION = {
     "param": "检查这次指令/模型/参数，改完再重跑。",
     "policy": "换个说法或换个模型再派。",
     "model": "换一个可用模型再重跑。",
-    "unknown": "系统会照常自动重试；重试次数用完了才需要你看一眼。",
+    "unknown": "点「看日志」看一眼，再决定重跑还是自己接手。",
 }
 
 #: Why a retry cannot help, in the operator's terms. Shown on the one section
@@ -188,15 +180,13 @@ def _cause(run: dict) -> str:
 
 
 def classify(run: dict) -> str:
-    """Retryable or deterministic. There is no third class any more.
-
-    An unclassified failure is retryable: `exit code 1` is an answer the
-    machine can act on (run it again), not a question a human must answer.
-    Only after `RETRY_LIMIT` attempts does the chain become a decision.
-    """
-    if _cause(run) in _DETERMINISTIC:
+    """Transient, deterministic, or human. Unknown is human on purpose."""
+    reason = _cause(run)
+    if reason in _TRANSIENT:
+        return "transient"
+    if reason in _DETERMINISTIC:
         return "deterministic"
-    return "retryable"
+    return "human"
 
 
 def problem_text(run: dict) -> str:
@@ -446,7 +436,7 @@ def block_reason(
     if str(run.get("status") or "") != "failed":
         return "not-failed"
     cls = classify(run)
-    if cls != "retryable":
+    if cls != "transient":
         return cls
     if not run.get("task_id") or not run.get("cwd"):
         return "missing-context"

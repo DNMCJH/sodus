@@ -1,11 +1,8 @@
 """The first screen must separate "the machine is on it" from "you must decide".
 
 `/board` keeps `decisions`/`decision_counts` for MCP and the pet; these tests
-pin the newer contract: a retryable failure with attempts left is recovered
-automatically, a spent chain or a red test arrives under `needs_you` with the
-four pieces of evidence (which step, which error, which files, which attempts),
-and a deterministic failure has its own section with the reason a rerun cannot
-help.
+pin the newer contract: `needs_you` carries full context for a human, while
+`auto_recovering` and `deterministic` keep the other two classes off that list.
 """
 
 from __future__ import annotations
@@ -32,6 +29,37 @@ tests/test_auth.py:14: AssertionError
 FAILED tests/test_auth.py::test_token_refresh - assert 401 == 200
 1 failed, 2 passed in 0.31s
 """
+
+
+def add_event(run: dict, etype: str, payload: dict) -> None:
+    db.append_event(run["id"], db.next_seq(run["id"]), etype, payload)
+
+
+def add_tool_call(run: dict, name: str, **args) -> None:
+    add_event(run, "tool_call", {"id": "call-1", "name": name, "input": args})
+
+
+def add_artifact(run: dict, task: dict, rel: str) -> None:
+    from pathlib import Path as _P
+
+    db.add_artifact(
+        run["id"], task["id"], "file", str(_P(run["cwd"]) / rel), "h", rel_path=rel
+    )
+
+
+def red_event(run: dict) -> None:
+    add_event(
+        run,
+        "verify.red",
+        {
+            "phase": "red",
+            "ok": False,
+            "exit": 1,
+            "duration_ms": 310,
+            "cmd": ["python", "-m", "pytest", "-q"],
+            "tail": PYTEST_RED,
+        },
+    )
 
 
 @pytest.fixture()
@@ -79,144 +107,29 @@ def find(board: dict, field: str, run_id: str) -> dict:
     return next(item for item in board[field] if item.get("run") == run_id)
 
 
-def add_event(run: dict, etype: str, payload: dict) -> None:
-    db.append_event(run["id"], db.next_seq(run["id"]), etype, payload)
-
-
-def add_artifact(run: dict, task: dict, rel: str) -> None:
-    from pathlib import Path
-
-    db.add_artifact(
-        run["id"], task["id"], "file", str(Path(run["cwd"]) / rel), "h", rel_path=rel
-    )
-
-
-def add_tool_call(run: dict, name: str, **args) -> None:
-    add_event(run, "tool_call", {"id": "call-1", "name": name, "input": args})
-
-
-def red_event(run: dict) -> None:
-    add_event(
-        run,
-        "verify.red",
-        {
-            "phase": "red",
-            "ok": False,
-            "exit": 1,
-            "duration_ms": 310,
-            "cmd": ["python", "-m", "pytest", "-q"],
-            "tail": PYTEST_RED,
-        },
-    )
-
-
-def seed_spent_chain(home, *, title: str = "修复登录") -> tuple[dict, dict, list[dict]]:
-    """A task whose three retries were spent: red, timeout, then exit 1.
-
-    Mirrors the operator's sentence: rerun twice, maybe three times, and only
-    then is it a decision. The timings are the ones the summary line quotes.
-    """
-    now = time.time()
-    task, original = seed(
-        home, error="exit code 1", title=title, ended=now - 900, started_at=now - 960
-    )
-    children = [
-        seed(home, error="exit code 1", task=task, parent=original["id"],
-             note="auto-retry 1/3\n继续", ended=now - 700, started_at=now - 742)[1],
-        seed(home, error="timeout", task=task,
-             note="auto-retry 2/3\n继续", ended=now - 500, started_at=now - 538)[1],
-        seed(home, error="exit code 1", task=task,
-             note="auto-retry 3/3\n继续", ended=now - 300, started_at=now - 351)[1],
-    ]
-    # Re-parent the tail: seed() writes parent_run_id at insert, and the second
-    # and third children are created before their parents' ids are known to it.
-    db.update_run(children[1]["id"], parent_run_id=children[0]["id"])
-    db.update_run(children[2]["id"], parent_run_id=children[1]["id"])
-    children = [db.get_run(row["id"]) for row in children]
-    red_event(children[0])
-    add_tool_call(children[2], "write", filePath=str(home / "work" / "shop" / "app.py"))
-    add_event(
-        children[2],
-        "tool_result",
-        {
-            "id": "call-1",
-            "ok": False,
-            "text": "Traceback (most recent call last):\n"
-            '  File "tests/test_auth.py", line 12, in test_token_refresh\n'
-            "    import jwt\nModuleNotFoundError: No module named 'jwt'",
-        },
-    )
-    add_artifact(children[2], task, "app.py")
-    add_artifact(children[2], task, "tests/test_auth.py")
-    return task, original, children
-
-
 # ---- needs_you ---------------------------------------------------------
 
 
-def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
-    task, _original, children = seed_spent_chain(home)
+def test_the_unknown_failure_arrives_with_project_task_problem_change(home):
+    task, run = seed(
+        home,
+        error="exit code 1",
+        title="修复登录",
+        goal="x" * 200,
+    )
+    db.add_artifact(run["id"], task["id"], "file", str(home / "app.py"), "h", rel_path="app.py")
 
-    entry = find(server.board_state(), "needs_you", children[2]["id"])
+    board = server.board_state()
+    entry = find(board, "needs_you", run["id"])
 
-    # Line 1: project · task; line 2: a conclusion, not "执行失败".
     assert entry["project"] == "shop"
     assert entry["cwd"].endswith("shop")
     assert entry["task_title"] == "修复登录"
-    assert len(entry["goal"]) <= 120
-    assert entry["headline"].startswith("第 3 次重试仍失败：")
-    assert "ModuleNotFoundError" in entry["headline"]
-    assert set(entry["evidence"]) >= {
-        "action", "error_tail", "tests", "change", "attempts", "missing",
-    }
-
-    ev = entry["evidence"]
-    # 哪一步
-    assert "write" in ev["action"] and "app.py" in ev["action"]
-    # 什么错: the raw tail, not a paraphrase
-    assert "ModuleNotFoundError" in ev["error_tail"]
-    assert len(ev["error_tail"]) <= 301
-    # 改了哪
-    assert entry["change"] == "改了 2 个文件：app.py、test_auth.py"
-    assert ev["change"]["files"] == ["app.py", "tests/test_auth.py"]
-    # 试过什么: one entry per retry, with what it returned
-    assert [item["outcome"] for item in ev["attempts"]] == ["tests_red", "timeout", "exit 1"]
-    assert [item["seconds"] for item in ev["attempts"]] == [42, 38, 51]
-    assert entry["suggestion"]
-
-
-def test_a_red_test_names_the_failed_test_and_its_assertion(home):
-    task, run = seed(home, error="", status="completed", title="修复登录")
-    red_event(run)
-    add_tool_call(run, "edit", file_path=str(home / "work" / "shop" / "app.py"))
-    add_artifact(run, task, "app.py")
-
-    entry = find(server.board_state(), "needs_you", run["id"])
-
-    assert entry["kind"] == "red"
-    assert entry["headline"] == "测试红：test_token_refresh 断言 401 == 200"
-    assert entry["evidence"]["tests"] == [
-        {
-            "name": "tests/test_auth.py::test_token_refresh",
-            "test": "test_token_refresh",
-            "assertion": "assert 401 == 200",
-        }
-    ]
-    assert entry["evidence"]["test_cmd"] == "python -m pytest -q"
-
-
-def test_a_failed_run_with_red_tests_is_listed_once(home, monkeypatch):
-    # Recovery off makes the failed row a decision immediately; the red-test
-    # loop must not add the same run a second time.
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
-    task, run = seed(home, error="exit code 1", title="修复登录")
-    red_event(run)
-    add_artifact(run, task, "app.py")
-
-    board = server.board_state()
-    matches = [item for item in board["needs_you"] if item.get("run") == run["id"]]
-    assert len(matches) == 1
-    assert matches[0]["headline"].startswith("测试红：test_token_refresh")
+    assert len(entry["goal"]) <= 120          # truncated, not the whole essay
+    assert "看不出" in entry["problem"]        # recover.problem_text, not the page
+    assert entry["change"] == "改了 1 个文件：app.py"
+    assert entry["suggestion"]                  # one actionable sentence
+    assert entry["kind"] == "failed" and entry["run"] == run["id"]
 
 
 def test_a_deterministic_failure_is_not_a_decision(home):
@@ -226,23 +139,8 @@ def test_a_deterministic_failure_is_not_a_decision(home):
     assert all(item.get("run") != run["id"] for item in board["needs_you"])
     entry = find(board, "deterministic", run["id"])
     assert "重试不会好" in entry["problem"]
-    assert "401" in entry["headline"]
-    assert "密钥" in entry["why"]
+    assert "密钥" in entry["suggestion"]
     assert entry["project"] == "shop"
-    assert entry["evidence"]["attempts"] == []
-
-
-def test_an_unclassified_failure_with_retries_left_is_recovering(home):
-    _, run = seed(home, error="exit code 1")
-
-    board = server.board_state()
-    assert all(item.get("run") != run["id"] for item in board["needs_you"])
-    entry = next(item for item in board["auto_recovering"] if item["run_id"] == run["id"])
-    assert entry["task_title"] == "修复登录"
-    assert entry["attempt"] == 1
-    assert entry["limit"] == 3
-    assert entry["next_retry_at"] > time.time()
-    assert "退出码" in entry["problem"]
 
 
 def test_a_transient_failure_with_retries_left_is_recovering(home):
@@ -266,20 +164,18 @@ def test_an_orphan_is_scheduled_immediately(home):
 
 def test_exhausted_retries_become_a_decision_again(home):
     task, original = seed(home, error=ORPHAN, ended=time.time() - 600)
-    parent = original
-    rows = []
-    for attempt in (1, 2, 3):
-        _, row = seed(
-            home, error=ORPHAN, task=task, parent=parent["id"],
-            note=f"auto-retry {attempt}/3\n继续", ended=time.time() - 500 + attempt * 10,
-        )
-        rows.append(row)
-        parent = row
+    _, first = seed(
+        home, error=ORPHAN, task=task, parent=original["id"],
+        note="auto-retry 1/2\n继续", ended=time.time() - 500,
+    )
+    _, second = seed(
+        home, error=ORPHAN, task=task, parent=first["id"],
+        note="auto-retry 2/2\n继续", ended=time.time() - 400,
+    )
 
-    entry = find(server.board_state(), "needs_you", rows[-1]["id"])
-    assert "自动重试 3 次都没成功" in entry["problem"]
-    assert entry["headline"].startswith("第 3 次重试仍失败：")
-    assert len(entry["evidence"]["attempts"]) == 3
+    entry = find(server.board_state(), "needs_you", second["id"])
+    assert "自动重试 2 次都没成功" in entry["problem"]
+    assert "日志" in entry["suggestion"]
 
 
 def test_over_budget_is_a_decision_not_a_retry(home):
@@ -304,11 +200,10 @@ def test_a_failure_the_chain_moved_past_is_kept_in_history(home):
     assert all(item.get("run") != original["id"] for item in board["needs_you"])
     entry = find(board, "history_failures", original["id"])
     assert "已经自动重试过" in entry["problem"]
-    assert entry["headline"] == "已经自动重试过，不会再试了"
     assert board["decision_counts"]["history_failed"] == 1
 
 
-def test_switching_recovery_off_makes_retryable_failures_a_decision(home, monkeypatch):
+def test_switching_recovery_off_makes_transient_failures_a_decision(home, monkeypatch):
     monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
     _, run = seed(home, error=ORPHAN)
 
@@ -342,7 +237,6 @@ def test_a_proposal_carries_the_repo_and_the_stat(home):
     assert entry["task_title"] == "修复登录"
     assert entry["change"].startswith("1 file changed")
     assert "合并" in entry["suggestion"]
-    assert "nodus/fix-login" in entry["headline"]
 
 
 def test_unverified_runs_stay_one_explained_row(home):
@@ -352,7 +246,6 @@ def test_unverified_runs_stay_one_explained_row(home):
     entry = next(item for item in board["needs_you"] if item["kind"] == "unverified")
     assert "没有测试证据" in entry["problem"]
     assert entry["project"] == "shop"
-    assert entry["headline"].startswith("最近 1 个 run 跑完却没有测试证据")
     assert board["unverified_runs"][0]["id"] == run["id"]
 
 
@@ -395,7 +288,53 @@ def test_failures_recovery_gave_up_on_are_still_visible(home):
         assert item.get("problem")  # a reason the reader can act on
 
 
-# ---- the page renders the evidence, not a summary ----------------------
+# ---- evidence on the row -----------------------------------------------
+
+
+def test_a_human_failure_arrives_with_the_last_action_and_the_files(home):
+    task, run = seed(home, error="exit code 1", title="修复登录")
+    add_tool_call(run, "edit", file_path=str(home / "work" / "shop" / "app.py"))
+    add_artifact(run, task, "app.py")
+
+    entry = find(server.board_state(), "needs_you", run["id"])
+
+    assert entry["headline"] == "进程退出码 1"
+    assert "edit" in entry["evidence"]["action"] and "app.py" in entry["evidence"]["action"]
+    assert entry["change"] == "改了 1 个文件：app.py"
+    assert entry["evidence"]["change"]["files"] == ["app.py"]
+    assert entry["suggestion"]
+
+
+def test_a_spent_chain_lists_each_attempt_and_the_failed_test(home):
+    now = time.time()
+    task, original = seed(home, error=ORPHAN, ended=now - 900, started_at=now - 960)
+    _, first = seed(
+        home, error=ORPHAN, task=task, parent=original["id"],
+        note="auto-retry 1/2\n继续", ended=now - 700, started_at=now - 742,
+    )
+    _, second = seed(
+        home, error="orphaned: killed while running tests", task=task, parent=first["id"],
+        note="auto-retry 2/2\n继续", ended=now - 500, started_at=now - 538,
+    )
+    red_event(first)
+    add_tool_call(second, "write", filePath=str(home / "work" / "shop" / "app.py"))
+    add_event(
+        second,
+        "tool_result",
+        {"id": "call-1", "ok": False, "text": "ModuleNotFoundError: No module named 'jwt'"},
+    )
+    add_artifact(second, task, "app.py")
+
+    entry = find(server.board_state(), "needs_you", second["id"])
+
+    assert entry["headline"].startswith("第 2 次重试仍失败：")
+    assert "ModuleNotFoundError" in entry["headline"]
+    assert "write" in entry["evidence"]["action"]
+    assert "ModuleNotFoundError" in entry["evidence"]["error_tail"]
+    assert [item["outcome"] for item in entry["evidence"]["attempts"]] == [
+        "tests_red", "orphaned",
+    ]
+    assert [item["seconds"] for item in entry["evidence"]["attempts"]] == [42, 38]
 
 
 def test_the_page_renders_the_four_evidence_blocks():
@@ -404,4 +343,3 @@ def test_the_page_renders_the_four_evidence_blocks():
     assert "没有需要你决定的事" in ui.PAGE
     assert "这类证据没有记录" in ui.PAGE
     assert "headline" in ui.PAGE
-    assert "第 ${a.n} 次" in ui.PAGE

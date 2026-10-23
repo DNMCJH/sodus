@@ -890,11 +890,15 @@ def _needs_you(
     for run in runs:
         if str(run.get("status") or "") != "failed":
             continue
-        if recover.classify(run) == "deterministic":
+        cls = recover.classify(run)
+        if cls == "deterministic":
             continue
         state = states.get(str(run.get("id") or ""), "none")
+        if cls != "transient":
+            failed.append(_run_entry(run, facts, state=state))
+            continue
         # With recovery switched off there is no machine to wait for, so a
-        # retryable failure is a human decision instead of silently
+        # transient failure is a human decision instead of silently
         # disappearing from both lists.
         reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
         if reason in history_reasons:
