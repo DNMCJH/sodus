@@ -1,32 +1,40 @@
-"""Automatic recovery: retry only what a retry can actually fix.
+"""Automatic recovery: retry by value, not by a counter.
 
-A failure is one of three things, and only the first one is ours to handle:
+A retry spends money, so "failed" is not by itself a reason to spend it. Each
+failed run is judged on five questions, in this order; the first one that says
+no ends the conversation:
 
-    transient      the attempt never got a fair chance — the owner process
-                   died, the network dropped, the endpoint was rate limiting
-                   or returned 5xx. Running the same work again is the fix.
-    deterministic  the request itself is wrong — bad key, bad model name, bad
-                   parameters, content policy. Running it again produces the
-                   same error and one more invoice line.
-    human          nothing proves either way. Guessing here is how an
-                   automatic retry corrupts a tree somebody half-edited.
+    the request     a 401/403/400, a content policy block, a model that does
+                    not exist. Running it again returns the same answer and
+                    bills for it. These are `deterministic`, shown on their own
+                    section with what has to change first.
+    how far it got  a run that never got going (0-1 tool calls, no files) is
+                    cheap to redo; one that already edited a tree is worth
+                    continuing in its own session instead of starting over.
+    the signature   the same cause, the same key error and the same failure
+                    stage as the previous attempt means the same death. A
+                    second identical attempt is money for the same wall.
+    the headroom    the remaining daily/task budget versus what one retry of
+                    this task has cost historically. Not enough left is a
+                    question for the operator, not a decision for the daemon.
+    the cap         `NODUS_RETRY_COST_CAP` (CNY, default 0.5) is the most one
+                    automatic retry may be estimated to cost; above it the
+                    retry waits for a human click.
+
+`RETRY_LIMIT` (default 3) is a ceiling, not a schedule: with no evidence of
+progress the chain stops earlier, and a chain of identical failures stops
+after the second one.
 
 The retry is a *child* run, not a resurrection of the failed row: the failed
 attempt keeps its own record, and the child points back with `parent_run_id`.
-A chain gets `RETRY_LIMIT` retries (3 by default, `NODUS_RETRY_LIMIT`), each
-after a backoff long enough for a provider blip to pass. The old task,
-directory, route, model and session are kept, so a resumed conversation
-continues instead of starting over.
+The original task, directory, route and model are kept. A retry that can
+resume continues the same vendor session; one that cannot records what has to
+be redone so the cost of starting over is on the record, not hidden.
 
-The board does not retell a failure as "执行失败": `cause()` names the matched
-signal, `why_not_retried()` explains what has to be fixed first, `chain()` and
-`retry_number()` let one decision row list every attempt that led to it.
-
-The daemon calls `auto_retry()` once after reaping orphans (the case the
-operator actually complained about: a restart should not require them to press
-anything), then every `SWEEP_SECONDS`. `NODUS_AUTO_RECOVER=0` turns both the
-startup pass and the sweep off; the board still classifies, it just stops
-claiming work is being retried.
+The daemon calls `auto_retry()` once after reaping orphans (a restart should
+not require pressing anything), then every `SWEEP_SECONDS`.
+`NODUS_AUTO_RECOVER=0` turns both passes off; the board still classifies, it
+just stops claiming work is being retried.
 """
 
 from __future__ import annotations
@@ -37,14 +45,16 @@ import re
 import threading
 import time
 
-from . import db, routes
+from . import budget, db, routes
 
-#: How many retries a single run chain gets. The first retry is attempt 1 of 2.
-RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "2"))
+#: The ceiling on automatic retries per chain. Three is the operator's line
+#: ("rerun is normal, unless two or three reruns still produce nothing"), but
+#: the gates below are expected to stop a chain long before the ceiling does.
+RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "3"))
 
-#: Seconds to wait before attempt 1, then attempt 2. Orphaned runs skip this:
-#: the process that would have been racing us is already gone.
-BACKOFF = (60.0, 300.0)
+#: Seconds to wait before attempt 1, 2, 3. Orphaned runs skip this: the
+#: process that would have been racing us is already gone.
+BACKOFF = (60.0, 300.0, 900.0)
 
 #: A failure older than this is history, not an interruption. Without a floor,
 #: the first daemon start would resume every failure ever recorded.
@@ -57,6 +67,14 @@ NOTE_PREFIX = "auto-retry"
 
 #: A corrupt `parent_run_id` chain must terminate. Nobody retries 50 times.
 MAX_CHAIN = 50
+
+#: The most one automatic retry may be estimated to cost, in CNY. Above this
+#: the daemon does not spend: the retry becomes a question on the board.
+COST_CAP = float(os.environ.get("NODUS_RETRY_COST_CAP", "0.5"))
+
+#: Only costs in this currency are compared with the caps above. Converting at
+#: an invented rate is how a 7x error gets into a budget.
+COST_CURRENCY = "CNY"
 
 #: Failure signals, checked in this order. Deterministic reasons come before
 #: network ones on purpose: a 401 wrapped in a connection reset is still a
@@ -91,7 +109,7 @@ _RATE = re.compile(
 )
 _TIMEOUT = re.compile(r"timed?[\s_-]?out|\btimeout\b|no output for|etimedout|超时", re.I)
 _NETWORK = re.compile(
-    r"econnreset|econnrefused|econnaborted|etimedout|enotfound|eai_again|epipe|"
+    r"econnreset|econnrefused|econnaborted|etimedout|\benotfound\b|eai_again|epipe|"
     r"ehostunreach|enetunreach|connection (?:reset|refused|closed|aborted|error)|"
     r"reset by peer|broken pipe|fetch failed|network|socket|dns|tls|ssl|"
     r"网络|连接(?:断|被重置|失败|超时)|断线|掉线",
@@ -103,7 +121,7 @@ _UPSTREAM = re.compile(
     re.I,
 )
 
-_TRANSIENT = {"orphaned", "timeout", "network", "rate_limit", "upstream"}
+#: Retrying cannot fix these: the request itself has to change first.
 _DETERMINISTIC = {"auth", "param", "policy", "model"}
 
 _PROBLEM = {
@@ -116,7 +134,7 @@ _PROBLEM = {
     "param": "请求参数被拒绝（400），重试不会好，需要改配置或这次指令。",
     "policy": "内容被上游安全策略拦了，重试不会好。",
     "model": "模型名不存在或没有权限，重试不会好，需要换模型。",
-    "unknown": "执行失败，从报错里看不出是环境问题还是任务本身的问题。",
+    "unknown": "执行失败，报错里只有退出码，没有能归因的文案。",
 }
 
 _SUGGESTION = {
@@ -129,18 +147,46 @@ _SUGGESTION = {
     "param": "检查这次指令/模型/参数，改完再重跑。",
     "policy": "换个说法或换个模型再派。",
     "model": "换一个可用模型再重跑。",
-    "unknown": "点「看日志」看一眼，再决定重跑还是自己接手。",
+    "unknown": "先看最后一次动作和报错尾部，再决定重跑还是自己接手。",
 }
 
-#: Why a retry cannot help, in the operator's terms. Shown on the one section
-#: that exists for deterministic failures, so "fix the cause first" is a reason
-#: and not a rule the reader has to trust.
+#: Why a retry cannot help, in the operator's terms. Shown with a deterministic
+#: failure, so "fix the cause first" is a reason and not a rule to trust.
 _WHY_NOT_RETRIED = {
     "auth": "上游判定这次请求无权（401/403）。密钥和权限不变，再发一次还是同一个结果。",
     "param": "请求本身不合法（400）。参数不改，重发只会得到同一个 400。",
     "policy": "输入被上游安全策略拦下。同样的内容再发一次还是被拦。",
     "model": "模型名不存在或这个密钥没有该模型权限。换模型之前，重试没有意义。",
 }
+
+#: The stage a failure happened in, inferred from what the worker last did.
+_STAGE_LABEL = {
+    "start": "刚启动",
+    "edit": "改文件",
+    "test": "跑测试",
+    "shell": "跑命令",
+    "tool": "调工具",
+}
+_EDIT_TOOL = re.compile(r"write|edit|patch|create|apply", re.I)
+_SHELL_TOOL = re.compile(r"bash|shell|exec|command|run", re.I)
+_TEST_CMD = re.compile(
+    r"pytest|unittest|npm (?:run )?test|pnpm test|yarn test|go test|cargo test|"
+    r"jest|vitest|tox|nox|make test|ctest",
+    re.I,
+)
+
+
+def _short(text: str, n: int = 90) -> str:
+    value = " ".join(str(text or "").split())
+    return value if len(value) <= n else value[: n - 1].rstrip() + "…"
+
+
+def _usage(raw) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def cause(run: dict) -> str:
@@ -180,13 +226,10 @@ def _cause(run: dict) -> str:
 
 
 def classify(run: dict) -> str:
-    """Transient, deterministic, or human. Unknown is human on purpose."""
-    reason = _cause(run)
-    if reason in _TRANSIENT:
-        return "transient"
-    if reason in _DETERMINISTIC:
+    """Retryable or deterministic. An unclassified exit is still a failure to judge."""
+    if _cause(run) in _DETERMINISTIC:
         return "deterministic"
-    return "human"
+    return "retryable"
 
 
 def problem_text(run: dict) -> str:
@@ -197,6 +240,432 @@ def problem_text(run: dict) -> str:
 def suggestion_text(run: dict) -> str:
     """What to do about it, in the operator's terms."""
     return _SUGGESTION[_cause(run)]
+
+
+# ---- what the attempt did before it died -------------------------------
+
+
+def _events(run: dict, prefixes: tuple[str, ...]) -> list[dict]:
+    rid = str(run.get("id") or "")
+    if not rid:
+        return []
+    try:
+        return db.events_filtered(rid, prefixes=prefixes)
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+def _changed_files(run: dict) -> list[str]:
+    rid = str(run.get("id") or "")
+    if not rid:
+        return []
+    try:
+        artifacts = db.artifacts_for(rid)
+    except (KeyError, TypeError):
+        return []
+    files: list[str] = []
+    for artifact in artifacts:
+        if artifact.get("kind") != "file":
+            continue
+        path = str(artifact.get("rel_path") or artifact.get("path") or "")
+        if path and path not in files:
+            files.append(path)
+    return files
+
+
+def progress(run: dict) -> dict:
+    """How far the attempt got: tool calls made, files already changed.
+
+    This is the cheap-vs-expensive axis. Zero or one tool call with no files
+    touched means almost nothing has to be redone; a tree that already changed
+    is worth continuing rather than starting over.
+    """
+    calls = len(_events(run, ("tool_call",)))
+    files = len(_changed_files(run))
+    return {
+        "tool_calls": calls,
+        "files": files,
+        "barely": calls <= 1 and files == 0,
+        "moved": calls >= 2 or files >= 1,
+    }
+
+
+def stage(run: dict) -> str:
+    """Where the attempt died: start, edit, test, shell or tool.
+
+    Read from what actually happened, not from the task's acceptance text: a
+    run that never called a tool did not fail "while running tests".
+    """
+    rid = str(run.get("id") or "")
+    if rid:
+        try:
+            if db.verify_states([rid]).get(rid) == "red":
+                return "test"
+        except (KeyError, TypeError):
+            pass
+    calls = _events(run, ("tool_call",))
+    if not calls:
+        return "start"
+    payload = calls[-1].get("payload") or {}
+    name = str(payload.get("name") or "")
+    args = payload.get("input")
+    args = args if isinstance(args, dict) else {}
+    if _EDIT_TOOL.search(name):
+        return "edit"
+    if _SHELL_TOOL.search(name):
+        command = str(args.get("command") or "")
+        return "test" if _TEST_CMD.search(command) else "shell"
+    return "tool"
+
+
+def _key_error(run: dict) -> str:
+    """The line of the error that names the failure, normalized for comparison.
+
+    Paths, line numbers and long hex ids vary between attempts of the same
+    failure; the sentence does not. Numbers that are the failure itself (401,
+    exit code 2) are kept, so a different assertion is a different signature.
+    """
+    text = str(run.get("error") or "").strip()
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    key = ""
+    for line in reversed(lines):
+        if re.search(
+            r"(?:error|exception|failed|failure|denied|not found|timed out|"
+            r"超时|失败|refused|forbidden|unauthorized|exit code)",
+            line,
+            re.I,
+        ):
+            key = line
+            break
+    if not key and lines:
+        key = lines[-1]
+    key = re.sub(r"\b[0-9a-f]{8,}\b", "#", key, flags=re.I)
+    key = re.sub(r"(?i)\bline\s+\d+\b", "line #", key)
+    key = re.sub(r":\d+:", ":#:", key)
+    key = re.sub(r"\s+", " ", key).strip().lower()
+    return key[:160]
+
+
+def signature(run: dict) -> dict:
+    """The identity of this failure: cause + key error + stage."""
+    return {"cause": cause(run), "error": _key_error(run), "stage": stage(run)}
+
+
+def signature_text(sig: dict | None) -> str:
+    """One readable phrase for a signature, used in the "why not retry" line."""
+    sig = sig or {}
+    where = _STAGE_LABEL.get(str(sig.get("stage") or ""), "未知阶段")
+    what = str(sig.get("error") or "").strip() or _PROBLEM.get(
+        str(sig.get("cause") or ""), "执行失败"
+    )
+    return f"都在{where}阶段、都是「{_short(what, 80)}」"
+
+
+def previous_attempt(run: dict) -> dict:
+    """The attempt this one should be compared with, or {} when it is the first.
+
+    The parent is the previous attempt by definition. A manually dispatched
+    rerun has no parent, so the newest earlier failure of the same task is
+    used instead: the point is to compare against *the last attempt*, not to
+    insist on the automatic chain.
+    """
+    rid = str(run.get("id") or "")
+    parent_id = str(run.get("parent_run_id") or "")
+    if parent_id:
+        parent = db.get_run(parent_id)
+        if parent and str(parent.get("status") or "") == "failed":
+            return parent
+    tid = str(run.get("task_id") or "")
+    if not tid:
+        return {}
+    started = float(run.get("started_at") or 0)
+    best: dict = {}
+    for other in db.list_runs(tid, limit=200):
+        oid = str(other.get("id") or "")
+        if not oid or oid == rid or oid == parent_id:
+            continue
+        if str(other.get("status") or "") != "failed":
+            continue
+        ended = float(other.get("ended_at") or other.get("started_at") or 0)
+        if started and ended and ended > started:
+            continue
+        if not best or ended > float(best.get("ended_at") or best.get("started_at") or 0):
+            best = other
+    return best
+
+
+def repeated(run: dict) -> dict:
+    """The previous attempt when this failure is the same death, else {}."""
+    previous = previous_attempt(run)
+    if not previous:
+        return {}
+    return previous if signature(previous) == signature(run) else {}
+
+
+# ---- what one retry is likely to cost ----------------------------------
+
+
+def estimate_cost(run: dict) -> float | None:
+    """What one retry of this task has cost historically, in CNY.
+
+    The task's own record is the only honest basis: a global average would let
+    a cheap task inherit an expensive one's cost. The failed run is excluded
+    from the mean (it stopped early); when it is the only priced attempt, its
+    own bill is the best available estimate.
+    """
+    tid = str(run.get("task_id") or "")
+    if not tid:
+        return None
+    costs: list[float] = []
+    own: float | None = None
+    for other in db.list_runs(tid, limit=200):
+        usage = _usage(other.get("usage_json"))
+        cost = usage.get("cost")
+        if not isinstance(cost, (int, float)):
+            continue
+        currency = str(usage.get("currency") or "").upper()
+        if currency and currency != COST_CURRENCY:
+            continue
+        if str(other.get("id") or "") == str(run.get("id") or ""):
+            own = float(cost)
+        else:
+            costs.append(float(cost))
+    if costs:
+        return sum(costs) / len(costs)
+    return own
+
+
+def _task_remaining(run: dict, task: dict | None) -> float | None:
+    """The task's own budget left, in CNY, or None when it has no cost budget."""
+    raw = task.get("budget_json") if task else None
+    if not raw:
+        return None
+    try:
+        shape = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(shape, dict):
+        return None
+    max_cost = shape.get("max_cost")
+    if not isinstance(max_cost, (int, float)) or max_cost <= 0:
+        return None
+    currency = str(shape.get("currency") or COST_CURRENCY).upper()
+    if currency != COST_CURRENCY:
+        return None
+    spent = 0.0
+    for other in db.list_runs(str(run.get("task_id") or ""), limit=500):
+        usage = _usage(other.get("usage_json"))
+        if str(usage.get("currency") or COST_CURRENCY).upper() != currency:
+            continue
+        cost = usage.get("cost")
+        if isinstance(cost, (int, float)):
+            spent += float(cost)
+    return max(0.0, float(max_cost) - spent)
+
+
+def headroom(run: dict, task: dict | None = None, now: float | None = None) -> dict:
+    """The tightest remaining budget that applies, plus the daily figure."""
+    daily = budget.check(now)
+    task_left = _task_remaining(run, task if task is not None else _task(run))
+    left: list[float] = []
+    if daily.get("limit"):
+        left.append(float(daily["remaining"]))
+    if task_left is not None:
+        left.append(task_left)
+    return {
+        "daily": daily,
+        "task": task_left,
+        "remaining": min(left) if left else None,
+    }
+
+
+# ---- the decision ------------------------------------------------------
+
+
+def retry_plan(
+    run: dict,
+    now: float | None = None,
+    limit: int | None = None,
+    task: dict | None = None,
+) -> dict:
+    """Everything the retry decision is based on, as data.
+
+    The board and the daemon call the same function: a row that says "will
+    retry" and a daemon that does not retry are the same bug seen twice. The
+    returned `gate` is "" when the retry may start now, "backoff" while it is
+    waiting for its slot, and a named reason otherwise.
+    """
+    now = time.time() if now is None else now
+    limit = RETRY_LIMIT if limit is None else int(limit)
+    plan: dict = {
+        "run_id": str(run.get("id") or ""),
+        "task_id": str(run.get("task_id") or ""),
+        "retry": False,
+        "gate": "",
+        "why": "",
+        "mode": "",
+        "attempt": retry_depth(run) + 1,
+        "limit": limit,
+        "progress": {},
+        "signature": {},
+        "previous": {},
+        "estimate": None,
+        "remaining": None,
+        "cost_cap": COST_CAP,
+        "redo": {},
+        "due_at": None,
+    }
+
+    def stop(gate: str, why: str = "") -> dict:
+        plan["gate"] = gate
+        plan["why"] = why
+        return plan
+
+    if str(run.get("status") or "") != "failed":
+        return stop("not-failed")
+    if classify(run) == "deterministic":
+        why = why_not_retried(run) or "请求本身要先改掉，重发只会得到同一个错误。"
+        return stop("deterministic", why)
+    if not run.get("task_id") or not run.get("cwd"):
+        return stop(
+            "missing-context",
+            "这条 run 缺任务或目录信息，系统不知道该把重试派到哪里。",
+        )
+    task = task if task is not None else _task(run)
+    if not task:
+        return stop("task-gone", "任务记录已经不在库里，旧 run 只能当历史看。")
+
+    # Cheap bookkeeping first: a failure the chain has moved past must not pay
+    # for signature or budget queries.
+    if retry_depth(run) + 1 > limit:
+        return stop(
+            "retry-limit",
+            f"自动重试已经到上限（{limit} 次）还没成功。天花板就是 {limit} 次，"
+            "再自动试下去只是换个时间死同一处。",
+        )
+    if _has_retry_child(run):
+        return stop(
+            "already-retried",
+            "这条失败已经派出过一条重试，系统不会为同一次失败开两张单。",
+        )
+    if _task_has_live_run(run):
+        return stop("task-running", "这个任务已经有新的一条在跑，等它结束再看。")
+    ended = _ended(run)
+    if not ended:
+        return stop("no-end-time", "这条 run 没有结束时间，无法判断它是不是刚失败。")
+    if now - ended > MAX_AGE:
+        return stop(
+            "too-old",
+            f"失败已经超过 {MAX_AGE / 3600:.0f} 小时，算历史记录，不在自动恢复窗口内。",
+        )
+
+    plan["progress"] = progress(run)
+    plan["signature"] = sig = signature(run)
+    previous = previous_attempt(run)
+    if previous:
+        plan["previous"] = {
+            "run_id": str(previous.get("id") or ""),
+            "ended_at": previous.get("ended_at"),
+            "signature": signature(previous),
+        }
+        if signature(previous) == sig:
+            when = time.strftime(
+                "%m-%d %H:%M", time.localtime(float(previous.get("ended_at") or 0))
+            )
+            return stop(
+                "same-signature",
+                f"连续两次同样的错：{signature_text(sig)}。"
+                f"{when} 那次已经这样死过一次，再跑一遍只会一样。",
+            )
+
+    plan["estimate"] = estimate = estimate_cost(run)
+    money = headroom(run, task, now)
+    plan["remaining"] = money["remaining"]
+    if _over_budget(run, task):
+        return stop(
+            "over-budget",
+            "这个任务已经到自己的预算上限（budget_json 的 max_runs 或 max_cost）。",
+        )
+    remaining = money["remaining"]
+    if remaining is not None and (
+        remaining <= 0 or (estimate is not None and remaining < estimate)
+    ):
+        have = f"¥{remaining:.2f}"
+        need = f"，上一次这类重试约 ¥{estimate:.2f}" if estimate is not None else ""
+        return stop(
+            "budget",
+            f"剩余额度不够再自动试一次：只剩 {have}{need}。要不要继续花钱由你定。",
+        )
+    if estimate is not None and estimate > COST_CAP:
+        return stop(
+            "cost-cap",
+            f"这次重试预计要 ¥{estimate:.2f}，超过自动重试的成本上限 ¥{COST_CAP:.2f}；"
+            "系统没有先花这笔钱。",
+        )
+
+    # The decision is "retry"; what remains is when and how.
+    mode = "resume" if _session_id(run) else "fresh"
+    plan["mode"] = mode
+    if mode == "fresh" and plan["progress"]["moved"]:
+        # The work already in the tree is what makes a from-scratch retry
+        # expensive. Put that cost on the record instead of hiding it.
+        plan["redo"] = {
+            "tool_calls": plan["progress"]["tool_calls"],
+            "files": plan["progress"]["files"],
+            "note": (
+                "没有可续的会话，只能从头跑：上次已经调用 "
+                f"{plan['progress']['tool_calls']} 次工具、改了 "
+                f"{plan['progress']['files']} 个文件，这些工作要重做。"
+            ),
+        }
+    plan["due_at"] = _due_at(run)
+    if now < plan["due_at"]:
+        return stop("backoff")
+    plan["retry"] = True
+    return plan
+
+
+def block_reason(
+    run: dict,
+    limit: int | None = None,
+    now: float | None = None,
+    task: dict | None = None,
+) -> str:
+    """Why this run must not be retried right now; empty string means retry.
+
+    Kept as the short form of `retry_plan`: the board asks the same question,
+    and a failure in backoff reports "backoff" so a caller can tell "waiting"
+    from "refused".
+    """
+    return retry_plan(run, now=now, limit=limit, task=task)["gate"]
+
+
+def should_retry(
+    run: dict, limit: int | None = None, now: float | None = None
+) -> bool:
+    """Will the next sweep retry this run? Kept pure enough to unit-test."""
+    return retry_plan(run, now=now, limit=limit)["retry"]
+
+
+def next_retry_at(
+    run: dict, limit: int | None = None, now: float | None = None
+) -> float | None:
+    """When the next attempt may start, or None when no retry is coming.
+
+    None is the honest answer for a deterministic failure, a repeated
+    signature, an exhausted chain, or a budget that cannot cover it. During
+    the backoff window this is the timestamp itself. An orphan has nothing to
+    wait for, so it is its own end.
+    """
+    plan = retry_plan(run, now=now, limit=limit)
+    if plan["gate"] not in ("", "backoff"):
+        return None
+    return _due_at(run)
+
+
+# ---- chain bookkeeping -------------------------------------------------
 
 
 def _is_retry(run: dict) -> bool:
@@ -259,15 +728,7 @@ def retry_depth(run: dict) -> int:
 
 
 def attempts(run: dict) -> int:
-    """How many automatic retries this run's chain has already used.
-
-    The convention is the `parent_run_id` chain plus the note: every run in the
-    same chain whose note starts with `auto-retry` counts. The original failure
-    and all of its descendants therefore report the same number — 2 after two
-    retries — which is the "this task has been retried N times" figure the
-    board shows. Two independent failures of one task each count their own
-    chain, so they do not share a budget.
-    """
+    """How many automatic retries this run's chain has already used."""
     tid = str(run.get("task_id") or "")
     if not tid:
         return retry_depth(run)
@@ -295,12 +756,7 @@ def retry_number(run: dict) -> int:
 
 
 def chain(run: dict) -> list[dict]:
-    """The whole retry chain this run belongs to, oldest first.
-
-    Bounded by `MAX_CHAIN`: a corrupt `parent_run_id` must not turn one board
-    request into an infinite walk. The list is what the board's "试过什么"
-    line reads: the original failure plus each retry that followed it.
-    """
+    """The whole retry chain this run belongs to, oldest first."""
     rows: list[dict] = []
     seen: set[str] = set()
     current: dict | None = run
@@ -314,6 +770,9 @@ def chain(run: dict) -> list[dict]:
         current = db.get_run(parent) if parent else None
     rows.reverse()
     return rows
+
+
+# ---- reachability ------------------------------------------------------
 
 
 def _ended(run: dict) -> float:
@@ -358,29 +817,23 @@ def _task_has_live_run(run: dict) -> bool:
 def _over_budget(run: dict, task: dict | None = None) -> bool:
     """Does this task's own budget say stop?
 
-    `task.budget_json` has been in the schema since the beginning and nothing
-    enforced it. It is read here, narrowly: an absent or unreadable budget
-    means "no limit", not "block everything". Recognised keys:
-
-        {"max_runs": 20}                     total runs for this task
-        {"max_cost": 5.0, "currency": "CNY"} priced spend for this task
-
-    A budget is the operator's line, and an automatic retry must not cross it.
+    Recognised keys: `{"max_runs": 20}`, `{"max_cost": 5.0, "currency": "CNY"}`.
+    An absent or unreadable budget means "no limit", not "block everything".
     """
     task = task if task is not None else _task(run)
     raw = task.get("budget_json") if task else None
     if not raw:
         return False
     try:
-        budget = json.loads(raw)
+        shape = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return False
-    if not isinstance(budget, dict):
+    if not isinstance(shape, dict):
         return False
     tid = str(run.get("task_id") or "")
     if not tid:
         return True
-    max_runs = budget.get("max_runs")
+    max_runs = shape.get("max_runs")
     if isinstance(max_runs, (int, float)) and max_runs > 0:
         conn = db.connect()
         try:
@@ -391,15 +844,12 @@ def _over_budget(run: dict, task: dict | None = None) -> bool:
             conn.close()
         if row and int(row["n"]) >= int(max_runs):
             return True
-    max_cost = budget.get("max_cost")
+    max_cost = shape.get("max_cost")
     if isinstance(max_cost, (int, float)) and max_cost > 0:
-        currency = str(budget.get("currency") or "").upper()
+        currency = str(shape.get("currency") or "").upper()
         spent = 0.0
         for other in db.list_runs(tid, limit=500):
-            try:
-                usage = json.loads(other.get("usage_json") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                continue
+            usage = _usage(other.get("usage_json"))
             if currency and str(usage.get("currency") or "").upper() != currency:
                 continue
             cost = usage.get("cost")
@@ -419,70 +869,7 @@ def _due_at(run: dict) -> float:
     return ended + BACKOFF[depth]
 
 
-def block_reason(
-    run: dict,
-    limit: int | None = None,
-    now: float | None = None,
-    task: dict | None = None,
-) -> str:
-    """Why this run must not be retried right now; empty string means retry.
-
-    Public because the board asks the same question: a transient failure with
-    attempts left belongs to "auto recovering", the same failure without them
-    is a human decision again. `limit=None` reads `RETRY_LIMIT` now instead of
-    at import, so an env change or a test override is not silently ignored.
-    """
-    limit = RETRY_LIMIT if limit is None else int(limit)
-    if str(run.get("status") or "") != "failed":
-        return "not-failed"
-    cls = classify(run)
-    if cls != "transient":
-        return cls
-    if not run.get("task_id") or not run.get("cwd"):
-        return "missing-context"
-    task = task if task is not None else _task(run)
-    if not task:
-        return "task-gone"
-    if retry_depth(run) + 1 > limit:
-        return "retry-limit"
-    if _has_retry_child(run):
-        return "already-retried"
-    if _task_has_live_run(run):
-        return "task-running"
-    if _over_budget(run, task):
-        return "over-budget"
-    ended = _ended(run)
-    if not ended:
-        return "no-end-time"
-    now = time.time() if now is None else now
-    if now - ended > MAX_AGE:
-        return "too-old"
-    if now < _due_at(run):
-        return "backoff"
-    return ""
-
-
-def should_retry(
-    run: dict, limit: int | None = None, now: float | None = None
-) -> bool:
-    """Will the next sweep retry this run? Kept pure enough to unit-test."""
-    return block_reason(run, limit, now) == ""
-
-
-def next_retry_at(
-    run: dict, limit: int | None = None, now: float | None = None
-) -> float | None:
-    """When the next attempt may start, or None when no retry is coming.
-
-    None is the honest answer for a deterministic failure, an exhausted chain,
-    an over-budget task, or one whose retry is already in flight. During the
-    backoff window this is the timestamp itself — what the board needs to say
-    "下次什么时候". An orphan has nothing to wait for, so it is its own end.
-    """
-    reason = block_reason(run, limit, now)
-    if reason not in ("", "backoff"):
-        return None
-    return _due_at(run)
+# ---- starting one retry ------------------------------------------------
 
 
 def _session_id(run: dict) -> str:
@@ -493,27 +880,29 @@ def _session_id(run: dict) -> str:
     return str((ref or {}).get("session_id") or "")
 
 
-def _note(run: dict, attempt: int, limit: int) -> str:
-    """First line is the label; the rest is the only instruction a resume gets.
+def _note(run: dict, plan: dict, attempt: int, limit: int) -> str:
+    """First line is the label; the rest is the only instruction a retry gets.
 
-    The previous failure's own last 300 characters go in with it: a retry that
-    only says "it failed" asks the worker to rediscover the same wall. The
-    label still comes first because `_retry_label` and the live row parse it.
+    The previous failure's last 300 characters go in with it: a retry that
+    only says "it failed" asks the worker to rediscover the same wall. When
+    starting over costs work, that cost is stated instead of being hidden.
     """
     previous = "原始执行" if attempt <= 1 else f"第 {attempt - 1} 次重试"
     tail = str(run.get("error") or "").strip()
     if len(tail) > 300:
         tail = "…" + tail[-300:]
     detail = f"上一次（{previous}）失败：{tail}\n" if tail else ""
+    redo = f"{plan['redo']['note']}\n" if plan.get("redo") else ""
+    resume = "接着上次的会话继续，不要从零开始。\n" if plan.get("mode") == "resume" else ""
     return (
         f"{NOTE_PREFIX} {attempt}/{limit}\n"
-        f"{detail}"
+        f"{detail}{redo}{resume}"
         "请继续完成原任务：先看工作目录里已有的改动，不要重复已经做过的步骤。"
         "如果上次是测试红，先修失败的那条测试；看不出原因就先复现一次，再改。"
     )
 
 
-def _start_retry(run: dict, attempt: int, limit: int) -> dict:
+def _start_retry(run: dict, plan: dict, attempt: int, limit: int) -> dict:
     """Create the child run and hand it to the normal runner.
 
     The endpoint that actually served the failed attempt is pinned when the
@@ -528,16 +917,17 @@ def _start_retry(run: dict, attempt: int, limit: int) -> dict:
     provider = str(run.get("provider") or "")
     pin = provider if provider in route.providers else ""
     model = str(run.get("model") or "") if pin else ""
+    session = _session_id(run) if plan.get("mode") == "resume" else ""
     return runner.RUNNER.start(
         task_id=str(run["task_id"]),
         route_name=route.name,
         cwd=str(run.get("cwd") or ""),
         parent_run_id=str(run["id"]),
-        note=_note(run, attempt, limit),
+        note=_note(run, plan, attempt, limit),
         effort=str(run.get("effort") or ""),
         model=model,
-        session_id=_session_id(run),
-        session_mode="resume",
+        session_id=session,
+        session_mode="resume" if session else "fresh",
         profile=str(run.get("profile") or ""),
         provider=pin,
     )
@@ -546,15 +936,14 @@ def _start_retry(run: dict, attempt: int, limit: int) -> dict:
 def auto_retry(
     limit: int | None = None, dry_run: bool = False, now: float | None = None
 ) -> dict:
-    """Scan failures and start a child run for each transient one.
+    """Scan failures and start a child run for each one that is worth it.
 
-    Returns what was done, not just a count: the caller (daemon log, a human
-    checking the board, a test) needs to see which run was retried and which
-    one was deliberately left alone, with the reason. A retry that could not be
-    started is an `errors` entry rather than a silent success.
+    Returns what was done, not just a count: which run was retried, how
+    (resume or from scratch, and what that redoes), and which one was left
+    alone with the gate that stopped it. A retry that could not be started is
+    an `errors` entry rather than a silent success.
 
-    `dry_run=True` makes the same decisions and writes nothing — no run row, no
-    event, no session copy. Its `child_run_id` values are empty.
+    `dry_run=True` makes the same decisions and writes nothing.
     """
     limit = RETRY_LIMIT if limit is None else int(limit)
     now = time.time() if now is None else now
@@ -565,8 +954,8 @@ def auto_retry(
     for run in failed:
         tid = str(run.get("task_id") or "")
         title = (facts.get(tid) or {}).get("title") or _first_line(run.get("note")) or ""
-        reason = block_reason(run, limit, now)
-        if reason:
+        plan = retry_plan(run, now=now, limit=limit)
+        if not plan["retry"]:
             out["skipped"].append(
                 {
                     "run_id": str(run.get("id") or ""),
@@ -574,11 +963,13 @@ def auto_retry(
                     "task_title": title,
                     "class": classify(run),
                     "cause": cause(run),
-                    "reason": reason,
+                    "reason": plan["gate"],
+                    "why": plan["why"],
+                    "estimate": plan["estimate"],
                 }
             )
             continue
-        attempt = retry_depth(run) + 1
+        attempt = plan["attempt"]
         if dry_run:
             out["retried"].append(
                 {
@@ -589,11 +980,14 @@ def auto_retry(
                     "attempt": attempt,
                     "limit": limit,
                     "cause": cause(run),
+                    "mode": plan["mode"],
+                    "estimate": plan["estimate"],
+                    "redo": plan["redo"],
                 }
             )
             continue
         try:
-            child = _start_retry(run, attempt, limit)
+            child = _start_retry(run, plan, attempt, limit)
         except Exception as exc:  # noqa: BLE001 - one bad run must not stop the sweep
             out["errors"].append(
                 {
@@ -614,6 +1008,9 @@ def auto_retry(
                     "attempt": attempt,
                     "limit": limit,
                     "reason": problem_text(run),
+                    "mode": plan["mode"],
+                    "estimate": plan["estimate"],
+                    "redo": plan["redo"],
                 },
             )
         except Exception:  # noqa: BLE001 - the retry is already running
@@ -627,6 +1024,9 @@ def auto_retry(
                 "attempt": attempt,
                 "limit": limit,
                 "cause": cause(run),
+                "mode": plan["mode"],
+                "estimate": plan["estimate"],
+                "redo": plan["redo"],
             }
         )
     return out
@@ -636,9 +1036,9 @@ def recovering(now: float | None = None) -> list[dict]:
     """Rows for the board's "auto retrying" block.
 
     Two shapes are the same fact: a failed run waiting out its backoff, and a
-    live retry child. `run_id` names the run the row is about, so a click can
-    open the right log; `attempt` is which retry that is (1 of `limit`); and
-    `next_retry_at` is None while the retry is already running.
+    live retry child. `run_id` names the run the row is about; `attempt` is
+    which retry that is (1 of `limit`); `next_retry_at` is None while the
+    retry is already running.
     """
     if not enabled():
         return []
@@ -655,8 +1055,6 @@ def recovering(now: float | None = None) -> list[dict]:
             "task_title": title,
             "project": _project(run.get("cwd")),
             "limit": RETRY_LIMIT,
-            # What failed the last time: one sentence, so the row can say
-            # "waiting to retry the timeout" instead of just an attempt count.
             "problem": problem_text(run),
         }
         if status in ("queued", "running") and _is_retry(run):
@@ -666,20 +1064,24 @@ def recovering(now: float | None = None) -> list[dict]:
                     "run_id": str(run.get("id") or ""),
                     "attempt": max(1, retry_depth(run)),
                     "next_retry_at": None,
+                    "mode": "resume" if _session_id(run) else "fresh",
+                    "estimate": None,
                 }
             )
             continue
         if status != "failed":
             continue
-        reason = block_reason(run, RETRY_LIMIT, now)
-        if reason not in ("", "backoff"):
+        plan = retry_plan(run, now=now, limit=RETRY_LIMIT)
+        if plan["gate"] not in ("", "backoff"):
             continue
         out.append(
             {
                 **base,
                 "run_id": str(run.get("id") or ""),
-                "attempt": retry_depth(run) + 1,
+                "attempt": plan["attempt"],
                 "next_retry_at": _due_at(run),
+                "mode": plan["mode"],
+                "estimate": plan["estimate"],
             }
         )
     return out
@@ -720,12 +1122,7 @@ _start_lock = threading.Lock()
 
 
 def start(interval: float | None = None, log=None) -> bool:
-    """Run one recovery pass now, then keep sweeping in the background.
-
-    Called by `server.serve()` right after orphan reaping. The first pass is
-    synchronous so the startup log explains what happened before the port
-    answers; the loop is a daemon thread, so it never keeps the process alive.
-    """
+    """Run one recovery pass now, then keep sweeping in the background."""
     global _started
     with _start_lock:
         if _started:

@@ -461,10 +461,15 @@ function decisionRow(d) {
     act = `<button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + n + " 次"}</button>` +
       (unvList[0] ? `<button class="primary" onclick="rerunOne('${unvList[0].id}')">重跑最近一次</button>` : "");
   } else if (kind === "red" || kind === "failed") {
-    const label = d.why ? "修好后重跑" : "重跑";
+    const label = d.gate === "cost-cap" ? "花这笔钱重跑"
+      : d.gate === "budget" ? "加额度后重跑"
+      : d.why ? "修好后重跑" : "重跑";
+    const hint = d.gate === "budget" ? "系统没有自动花这笔钱"
+      : d.gate === "cost-cap" ? "超过自动上限，你点才花"
+      : d.why ? "现在重跑只会换回同一个错误" : "";
     act = `<button class="primary" onclick="rerun('${d.run}')">${label}</button>` +
       `<button onclick="showLog('${d.run}')">看日志</button>` +
-      (d.why ? `<span class="hint">现在重跑只会换回同一个错误</span>` : "");
+      (hint ? `<span class="hint">${esc(hint)}</span>` : "");
 
     const rows = [];
     if (ev.action) {
@@ -490,6 +495,7 @@ function decisionRow(d) {
     }
     if (d.change) {
       rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><div class="ev-v">${esc(d.change)}
+        ${ev.change && ev.change.stat ? `<div class="ev-src mono">${esc(ev.change.stat)}</div>` : ""}
         ${ev.change && ev.change.basis ? `<div class="ev-src">${esc(ev.change.basis)}</div>` : ""}</div></div>`);
     } else {
       rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><span class="ev-v na">这类证据没有记录：artifact 是空的</span></div>`);
@@ -497,14 +503,18 @@ function decisionRow(d) {
     const attempts = ev.attempts || [];
     if (attempts.length) {
       const chips = attempts.map(a => `<span class="attempt ${outcomeTone(a.outcome)}"><b>第 ${a.n} 次</b>${a.seconds == null ? "" : ` · ${a.seconds}s`}${a.outcome ? ` · ${esc(a.outcome)}` : ""}</span>`).join("");
+      const how = d.retry && d.retry.mode ? (d.retry.mode === "resume" ? "续会话" : "从头跑") : "";
       rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><div class="ev-v"><div class="attempts">${chips}</div>
-        ${d.why ? `<div class="ev-src">${esc(d.why)}</div>` : ""}</div></div>`);
-    } else if (d.why) {
-      rows.push(`<div class="ev-row"><span class="ev-k">为什么</span><span class="ev-v">${esc(d.why)}</span></div>`);
+        ${how ? `<div class="ev-src">重试方式：${esc(how)}</div>` : ""}</div></div>`);
     } else if (kind === "red") {
       rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v">没有自动重试：这个 run 跑完了，问题出在验收结果</span></div>`);
     } else {
       rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v na">还没有自动重试过</span></div>`);
+    }
+    // The second of the three things a decision must answer: why the machine
+    // stopped trying. A row without it sends the reader back to a log.
+    if (d.why) {
+      rows.push(`<div class="ev-row"><span class="ev-k">为什么</span><span class="ev-v">${esc(d.why)}</span></div>`);
     }
     if ((ev.missing || []).length) {
       rows.push(`<div class="ev-row"><span class="ev-k">缺什么</span><span class="ev-v na">${ev.missing.map(esc).join("；")}</span></div>`);
@@ -551,7 +561,7 @@ function renderRecover(rows) {
     return `<div class="retry-row">
        <span class="status-dot warn"></span>
        <div class="retry-who"><b>${esc(r.project || "未记录项目")}</b><span class="sep">·</span>${esc(r.task_title || "（任务没写标题）")}
-         <div class="retry-last">上次：${esc(r.problem || "执行失败")}</div></div>
+         <div class="retry-last">上次：${esc(r.problem || "执行失败")}${r.mode ? ` · ${r.mode === "resume" ? "续会话" : "从头跑"}` : ""}${typeof r.estimate === "number" ? ` · 预计 ¥${r.estimate.toFixed(2)}` : ""}</div></div>
        <div class="retry-progress"><span class="dots">${dots}</span>第 ${r.attempt}/${limit} 次重试</div>
        <div class="when">${esc(retryWait(r.next_retry_at))}</div>
      </div>`;
@@ -586,9 +596,10 @@ function renderTodo() {
   $("todo-n").textContent = needs.length ? needs.length + " 件" : "";
   $("todo-n").className = "count" + (needs.length ? " bad" : "");
   if (!needs.length) {
-    const retryLine = recovering.length
-      ? `${recovering.length} 件失败正在自动重试（上限 ${recovering[0].limit || 3} 次），按退避时间自己跑，不用你管。`
-      : "系统没有正在重试的失败。";
+    const retrying = new Set(recovering.map(r => r.task_id || r.run_id)).size;
+    const retryLine = retrying
+      ? `${retrying} 个任务正在自动重试（每个最多 ${recovering[0].limit || 3} 次），按退避时间自己跑，不用你点。`
+      : "现在没有任务在自动重试。";
     const fixLine = blocked.length ? `另有 ${blocked.length} 件要先改配置才能继续，见下面「不会自动重试」。` : "";
     $("todo").innerHTML = `<div class="empty-card">
       <span class="empty-icon">✓</span>
