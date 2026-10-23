@@ -479,6 +479,18 @@ def _git_numstat_all(cwd: str) -> dict[str, tuple[int, int]]:
     return {}
 
 
+def _diff_stat(rows: list[dict], limit: int = 5) -> str:
+    """A `git diff --stat` style line per file, for a card, not a terminal."""
+    parts = []
+    for row in rows[:limit]:
+        added = int(row.get("added") or 0)
+        removed = int(row.get("removed") or 0)
+        parts.append(f"{_project(str(row.get('path') or ''))} | +{added} −{removed}")
+    if len(rows) > limit:
+        parts.append(f"… 另有 {len(rows) - limit} 个文件")
+    return "；".join(parts)
+
+
 def _git_numstat(cwd: str, files: list[str]) -> dict:
     """Line counts for the files this run touched, from the cached diff."""
     if not cwd or not files:
@@ -488,6 +500,7 @@ def _git_numstat(cwd: str, files: list[str]) -> dict:
         return {}
     added = removed = 0
     seen: list[str] = []
+    rows: list[dict] = []
     for path in files:
         key = str(path or "").replace("\\", "/").lstrip("/")
         while key.startswith("./"):
@@ -503,9 +516,16 @@ def _git_numstat(cwd: str, files: list[str]) -> dict:
         added += match[0]
         removed += match[1]
         seen.append(key)
+        rows.append({"path": key, "added": match[0], "removed": match[1]})
     if not seen:
         return {}
-    return {"files": seen, "added": added, "removed": removed}
+    return {
+        "files": seen,
+        "added": added,
+        "removed": removed,
+        "rows": rows,
+        "stat": _diff_stat(rows),
+    }
 
 
 def _change_evidence(run: dict, deep: bool = True) -> dict:
@@ -540,11 +560,21 @@ def _change_evidence(run: dict, deep: bool = True) -> dict:
         rows = [f for f in (record.get("files") or []) if isinstance(f, dict)]
         added = sum(int(f.get("added") or 0) for f in rows)
         removed = sum(int(f.get("removed") or 0) for f in rows)
+        clean = [
+            {
+                "path": str(f.get("path") or ""),
+                "added": int(f.get("added") or 0),
+                "removed": int(f.get("removed") or 0),
+            }
+            for f in rows
+            if f.get("path")
+        ]
         return {
-            "files": [str(f.get("path") or "") for f in rows if f.get("path")],
+            "files": [row["path"] for row in clean],
             "added": added,
             "removed": removed,
-            "stat": str(record.get("stat") or ""),
+            "rows": clean,
+            "stat": str(record.get("stat") or _diff_stat(clean)),
             "basis": "git diff --numstat（提案分支）",
         }
     if not files:
@@ -667,7 +697,14 @@ def _error_phrase(text: str) -> str:
     return _clip(lines[-1], 100) if lines else ""
 
 
-def _headline(run: dict, evidence: dict, problem: str, state: str) -> str:
+def _headline(
+    run: dict,
+    evidence: dict,
+    problem: str,
+    state: str,
+    plan: dict | None = None,
+    gate: str = "",
+) -> str:
     """The one-sentence conclusion on the second line of a decision row."""
     attempts = len(evidence.get("attempts") or [])
     tests = evidence.get("tests") or []
@@ -694,6 +731,14 @@ def _headline(run: dict, evidence: dict, problem: str, state: str) -> str:
         if "重试不会好" in problem:
             return problem
         return f"重试不会好：{problem}"
+    if gate == "same-signature":
+        return f"连续两次同样的错：{phrase}"
+    if gate in ("budget", "cost-cap", "over-budget"):
+        # The money sentence is already the conclusion; repeating the error
+        # after it would bury the number the operator has to decide about.
+        return problem
+    if gate == "disabled":
+        return problem
     if attempts:
         return f"第 {attempts} 次重试仍失败：{phrase}"
     return phrase
@@ -709,13 +754,34 @@ def _change_line(change: dict) -> str | None:
     return f"改了 {len(files)} 个文件：{shown}"
 
 
-def _next_step(evidence: dict, fallback: str) -> str:
+def _next_step(
+    evidence: dict, fallback: str, plan: dict | None = None, gate: str = ""
+) -> str:
     """The suggestion, built from what actually happened.
 
     "由你决定" is not a suggestion. A failed test names the test and the
-    assertion; a failed tool call names the file or command. When the record
+    assertion; a failed tool call names the file or command; a money gate
+    names the number to raise and the number it would cost. When the record
     has none of that, the honest next step is to read the first error line.
     """
+    plan = plan or {}
+    if gate == "budget":
+        remaining = plan.get("remaining")
+        estimate = plan.get("estimate")
+        left = f"¥{remaining:.2f}" if isinstance(remaining, (int, float)) else "当前额度"
+        cost = f"一次约 ¥{estimate:.2f}" if isinstance(estimate, (int, float)) else "一次重试"
+        return (
+            f"确认值得继续：把 NODUS_DAILY_BUDGET（或任务 budget_json.max_cost）"
+            f"在 {left} 之上再加 {cost}，然后点「重跑」。不想花就自己接手改。"
+        )
+    if gate == "cost-cap":
+        estimate = plan.get("estimate")
+        cap = plan.get("cost_cap")
+        return (
+            f"这次重试预计 ¥{estimate:.2f}，超过自动上限 ¥{cap:.2f}。"
+            "先看「试过什么」判断值不值：值得就点「重跑」手动批准，"
+            "不值得就自己接手改。"
+        )
     tests = evidence.get("tests") or []
     if tests:
         first = tests[0]
@@ -759,12 +825,17 @@ def _run_entry(
     evidence: bool = True,
     deep: bool = True,
     kind: str = "failed",
+    plan: dict | None = None,
+    why: str = "",
+    gate: str = "",
 ) -> dict:
     """One decision row: which project, which task, what broke, what it cost.
 
     `problem` stays a one-sentence judgement (used by the log view and the old
     API consumers); `headline` is the conclusion the card leads with, built
-    from evidence. Both are always present, even when the evidence is missing —
+    from evidence. `why` is the one sentence that explains why the machine
+    stopped retrying — every decision row has one, and none of them is
+    "由你决定". Both are always present, even when the evidence is missing —
     "这类证据没有记录" is a fact, "执行失败" is not.
     """
     tid = str(run.get("task_id") or "")
@@ -772,10 +843,24 @@ def _run_entry(
     cwd = str(run.get("cwd") or "")
     issue = problem or recover.problem_text(run)
     facts_ev = _evidence(run, state, deep=deep) if evidence else {}
+    if plan:
+        gate = gate or str(plan.get("gate") or "")
+        why = why or str(plan.get("why") or "")
     advice = suggestion or recover.suggestion_text(run)
     if not suggestion and facts_ev and str(run.get("status") or "") == "failed":
-        advice = _next_step(facts_ev, advice)
+        advice = _next_step(facts_ev, advice, plan=plan, gate=gate)
     change = _change_line(facts_ev.get("change") or {}) if facts_ev else _change_summary(run)
+    retry_view = None
+    if plan:
+        retry_view = {
+            "attempt": plan.get("attempt"),
+            "limit": plan.get("limit"),
+            "mode": plan.get("mode") or "",
+            "estimate": plan.get("estimate"),
+            "remaining": plan.get("remaining"),
+            "cost_cap": plan.get("cost_cap"),
+            "redo": plan.get("redo") or {},
+        }
     return {
         "kind": kind,
         "id": str(run.get("id") or ""),
@@ -788,10 +873,16 @@ def _run_entry(
         "goal": _clip(task.get("goal") or ""),
         "cause": recover.cause(run),
         "problem": issue,
-        "headline": headline or _headline(run, facts_ev, issue, state),
+        "headline": headline or _headline(run, facts_ev, issue, state, plan=plan, gate=gate),
         "change": change,
         "suggestion": advice,
-        "why": recover.why_not_retried(run) if recover.classify(run) == "deterministic" else "",
+        "why": why or (
+            recover.why_not_retried(run)
+            if recover.classify(run) == "deterministic"
+            else ""
+        ),
+        "gate": gate,
+        "retry": retry_view,
         "evidence": facts_ev,
         "title": issue,
         "detail": str(run.get("error") or "")[:160],
@@ -866,15 +957,13 @@ def _needs_you(
 ) -> tuple[list[dict], list[dict]]:
     """Only what a person must decide. Recovery decides the rest by itself.
 
-    A transient failure that still has attempts left is *not* here: the board
-    shows it under "auto recovering" instead. The moment the chain is spent,
-    the same failure moves here — an exhausted retry is a decision again. A
-    deterministic failure is never here either: it has its own section, because
-    the decision is "change the key/parameters", not "run it again".
+    A retryable failure that still has attempts left is *not* here: the board
+    shows it under "auto recovering" instead. The moment the judgement says
+    stop, the same failure moves here — with the reason it stopped, because a
+    decision without a reason is not a decision.
 
-    A failure nobody could classify is a decision from the first attempt. Its
-    row still carries the evidence (last tool call, error tail, files changed,
-    which retries happened), so the decision is answerable without a log.
+    A deterministic failure is never here: it has its own section, because the
+    decision is "change the key/parameters", not "run it again".
     """
     items: list[dict] = []
     failed: list[dict] = []
@@ -893,48 +982,58 @@ def _needs_you(
         if recover.classify(run) == "deterministic":
             continue
         state = states.get(str(run.get("id") or ""), "none")
-        # With recovery switched off there is no machine to wait for, so a
-        # retryable failure is a human decision instead of silently
-        # disappearing from both lists.
-        reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
-        if reason in history_reasons:
+        plan = recover.retry_plan(run, now=now)
+        gate = plan["gate"] if recover.enabled() else "disabled"
+        if gate in history_reasons:
             history.append(
                 _run_entry(
                     run,
                     facts,
-                    history_reasons[reason],
+                    history_reasons[gate],
                     "看日志确认它到底改到哪一步。",
                     state=state,
-                    headline=history_reasons[reason],
+                    headline=history_reasons[gate],
                     deep=False,
+                    gate=gate,
+                    why=plan["why"],
                 )
             )
             continue
-        if reason not in (
-            "retry-limit", "over-budget", "missing-context", "task-gone", "disabled",
-        ):
-            # "" / "backoff" are being recovered right now: visible under
-            # "auto recovering", so listing them twice would be noise.
+        if gate in ("", "backoff"):
+            # Being recovered right now: visible under "auto recovering", so
+            # listing it twice would be noise.
             continue
         depth = recover.retry_depth(run)
-        if reason == "retry-limit":
-            if depth:
-                problem = (
-                    f"自动重试 {depth} 次都没成功，最后一次是：{recover.problem_text(run)}"
-                )
-            else:
-                problem = f"重试上限是 {recover.RETRY_LIMIT} 次，这条不会再自动重试了。"
-            suggestion = ""  # _run_entry builds the next step from the evidence
-        elif reason == "over-budget":
-            problem = "这个任务已经到预算上限，系统没有继续重试。"
-            suggestion = "确认值得继续就手动重跑，或调高 task 的 budget_json。"
-        elif reason == "disabled":
+        if gate == "disabled":
             problem = "自动恢复已关闭，这个失败不会有人重试。"
             suggestion = "手动点「重跑」，或去掉 NODUS_AUTO_RECOVER=0 再启动 daemon。"
-        else:
-            problem = "这条记录缺任务或目录信息，系统没法自动重试。"
+        elif gate == "retry-limit":
+            problem = (
+                f"自动重试 {depth} 次都没成功，最后一次是：{recover.problem_text(run)}"
+                if depth
+                else plan["why"]
+            )
+            suggestion = ""
+        elif gate in ("same-signature", "budget", "cost-cap", "over-budget"):
+            problem = plan["why"]
+            suggestion = ""
+        elif gate in ("missing-context", "task-gone"):
+            problem = plan["why"]
             suggestion = "重新派一次这个任务；旧记录只作为历史。"
-        failed.append(_run_entry(run, facts, problem, suggestion, state=state))
+        else:
+            continue
+        failed.append(
+            _run_entry(
+                run,
+                facts,
+                problem,
+                suggestion,
+                state=state,
+                plan=plan,
+                gate=gate,
+                why=plan["why"] or problem,
+            )
+        )
     # A failed run with a red test is already in `failed`, with the test
     # evidence attached to it; listing it a second time here would
     # double-count one run.
