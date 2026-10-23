@@ -429,6 +429,78 @@ def _due_at(run: dict) -> float:
     return ended + BACKOFF[depth]
 
 
+
+#: A single automatic retry must not cost more than this without asking first.
+RETRY_COST_CAP = float(os.environ.get("NODUS_RETRY_COST_CAP", "0.5"))
+
+
+def _signature(run: dict) -> str:
+    """What kind of failure this was, coarse enough to compare two attempts."""
+    text = " ".join(str(run.get(key) or "") for key in ("error", "status", "note")).lower()
+    stage = ""
+    for marker in ("verify", "pytest", "test", "edit", "write", "timeout"):
+        if marker in text:
+            stage = marker
+            break
+    words = [w for w in str(run.get("error") or "").lower().split() if len(w) > 3][:6]
+    return f"{classify(run)}|{stage}|{' '.join(words)}"
+
+
+def _environmental(run: dict) -> bool:
+    """Failures the world caused, not the work.
+
+    Two orphaned attempts are still worth retrying; two identical assertion
+    failures are not.
+    """
+    text = str(run.get("error") or "").lower()
+    return any(
+        marker in text
+        for marker in ("orphaned", "timeout", "timed out", "network", "econn",
+                       "rate limit", "429", "502", "503")
+    )
+
+
+def _same_error_before(run: dict) -> bool:
+    if _environmental(run):
+        return False
+    try:
+        history = chain(run)
+    except Exception:  # noqa: BLE001 - a broken chain must not stop recovery
+        return False
+    mine = _signature(run)
+    previous = [row for row in history if row.get("id") != run.get("id")]
+    return bool(previous) and _signature(previous[-1]) == mine
+
+
+def _estimated_cost(run: dict) -> float:
+    """What one more attempt will probably cost, from this task history."""
+    try:
+        rows = db.list_runs(run.get("task_id") or "", limit=20)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    costs = []
+    for row in rows:
+        try:
+            usage = json.loads(row.get("usage_json") or "{}")
+        except ValueError:
+            continue
+        cost = usage.get("cost")
+        if isinstance(cost, (int, float)) and cost > 0:
+            costs.append(float(cost))
+    return sum(costs) / len(costs) if costs else 0.0
+
+
+def _budget_headroom(run: dict) -> str:
+    from . import budget as budget_mod
+
+    info = budget_mod.check()
+    if not info.get("limit"):
+        return ""
+    estimate = _estimated_cost(run)
+    if estimate and info.get("remaining") is not None and info["remaining"] < estimate:
+        return "budget-headroom"
+    return ""
+
 def block_reason(
     run: dict,
     limit: int | None = None,
@@ -469,6 +541,17 @@ def block_reason(
         return "too-old"
     if now < _due_at(run):
         return "backoff"
+    # ---- is another attempt worth its price? -----------------------------
+    # Retrying is not free. Three checks separate "the daemon is helping" from
+    # "the daemon is burning quota on the same failure".
+    if _same_error_before(run):
+        return "same-error"
+    headroom = _budget_headroom(run)
+    if headroom:
+        return headroom
+    estimate = _estimated_cost(run)
+    if estimate and estimate > RETRY_COST_CAP:
+        return "cost-cap"
     return ""
 
 
