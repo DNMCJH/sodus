@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -276,6 +277,468 @@ def _change_summary(run: dict) -> str | None:
     return f"改了 {len(files)} 个文件：{shown}" + (" …" if len(files) > 3 else "")
 
 
+# ---- evidence for a decision -------------------------------------------
+#
+# A decision row that says "执行失败" has not told the operator anything. Each
+# of the four questions below is answered from a record that already exists;
+# nothing here re-runs a worker, and a missing record is reported as missing
+# instead of being guessed.
+
+#: Original output a person can actually read. The full log stays one click
+#: away; 300 characters is what fits on a card and what the requirement asks.
+ERROR_TAIL_CHARS = 300
+
+#: One board render asks the same question about the same run more than once
+#: (a decision row, the history row, the log endpoint). A per-thread cache
+#: cleared at the start of each request keeps that from being dozens of sqlite
+#: connections and one `git diff` per card.
+_REQUEST = threading.local()
+
+
+def _fresh_cache() -> None:
+    _REQUEST.data = {}
+
+
+def _memo(key, build):
+    data = getattr(_REQUEST, "data", None)
+    if data is None:
+        data = {}
+        _REQUEST.data = data
+    if key not in data:
+        data[key] = build()
+    return data[key]
+
+_FAILED_LINE = re.compile(r"^FAILED\s+(\S+?)(?:\s+-\s+(.*))?$", re.M)
+_TEST_HEAD = re.compile(r"^_{3,}\s+(.+?)\s+_{3,}$")
+
+
+def _tail(text: str, n: int = ERROR_TAIL_CHARS) -> str:
+    value = str(text or "").rstrip()
+    return value if len(value) <= n else "…" + value[-n:]
+
+
+def _repo_rel(path: str, cwd: str) -> str:
+    """A file path relative to the run's directory, for a card, not a log."""
+    value = str(path or "")
+    if not value:
+        return ""
+    try:
+        return str(Path(value).resolve().relative_to(Path(cwd).resolve())).replace("\\", "/")
+    except (OSError, ValueError):
+        return _project(value)
+
+
+def _events(run_id: str, prefixes: tuple[str, ...]) -> list[dict]:
+    def load() -> list[dict]:
+        try:
+            return db.events_filtered(run_id, prefixes=prefixes)
+        except (KeyError, TypeError, ValueError):
+            return []
+
+    return _memo(("events", run_id, prefixes), load)
+
+
+def _last_action(run: dict) -> dict:
+    """The worker's last tool call: which file it edited, which command it ran."""
+    rows = _events(str(run.get("id") or ""), ("tool_call",))
+    if not rows:
+        return {}
+    event = rows[-1]
+    payload = event.get("payload") or {}
+    name = str(payload.get("name") or "tool")
+    args = payload.get("input")
+    args = args if isinstance(args, dict) else {}
+    path = str(args.get("filePath") or args.get("file_path") or args.get("path") or "")
+    command = str(args.get("command") or "")
+    if path:
+        line = f"{name} {_repo_rel(path, str(run.get('cwd') or ''))}"
+    elif command:
+        line = f"{name}：{_clip(command, 100)}"
+    else:
+        query = str(args.get("pattern") or args.get("query") or "")
+        line = f"{name} {_clip(query, 70)}".strip()
+    started = float(run.get("started_at") or 0)
+    ts = float(event.get("ts") or 0)
+    at = f"（第 {max(0, int(ts - started))} 秒）" if started and ts else ""
+    return {"name": name, "line": line, "text": f"最后一次动作：{line}{at}"}
+
+
+def _error_evidence(run: dict) -> dict:
+    """The raw tail a person reads, newest and most specific record first."""
+    run_id = str(run.get("id") or "")
+    events = _events(run_id, ("error", "tool_result", "run.failed"))
+    for event in reversed(events):
+        payload = event.get("payload") or {}
+        if event.get("type") == "tool_result" and payload.get("ok") is False:
+            text = str(payload.get("text") or "")
+            if text.strip():
+                return {"tail": _tail(text), "source": "最后一次失败的工具输出"}
+    for event in reversed(events):
+        if event.get("type") == "error":
+            text = str((event.get("payload") or {}).get("message") or "")
+            if text.strip():
+                return {"tail": _tail(text), "source": "agent 报错事件"}
+    for event in reversed(events):
+        if event.get("type") == "run.failed":
+            text = str((event.get("payload") or {}).get("error") or "")
+            if text.strip():
+                return {"tail": _tail(text), "source": "run.failed 事件"}
+    text = str(run.get("error") or "")
+    if text.strip():
+        return {"tail": _tail(text), "source": "run.error"}
+    return {}
+
+
+def _failed_tests(text: str) -> list[dict]:
+    """Names and assertion summaries out of a pytest-style summary.
+
+    The short summary line is what pytest prints first and it can be truncated
+    to the terminal width. The traceback block right above it carries the real
+    assertion; this joins the two by test function name.
+    """
+    if not text:
+        return []
+    assertions: dict[str, str] = {}
+    current = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        head = _TEST_HEAD.match(line.strip())
+        if head:
+            current = head.group(1).strip()
+            continue
+        if current and line.startswith("E ") and current not in assertions:
+            assertions[current] = line[2:].strip()
+    out: list[dict] = []
+    for node, summary in _FAILED_LINE.findall(text)[:8]:
+        func = node.split("::")[-1].split("[")[0]
+        assertion = assertions.get(func) or (summary or "").strip()
+        out.append({"name": node, "test": func, "assertion": _clip(assertion, 160)})
+    return out
+
+
+def _verify_red(run_id: str) -> dict:
+    """The last red verification of this run, with its failed test names."""
+    for event in reversed(_events(run_id, ("verify",))):
+        if event.get("type") != "verify.red":
+            continue
+        payload = event.get("payload") or {}
+        body = str(payload.get("tail") or "")
+        path = str(payload.get("path") or "")
+        if path:
+            try:
+                body = Path(path).read_text(encoding="utf-8", errors="replace")[-60_000:]
+            except OSError:
+                pass
+        return {
+            "cmd": payload.get("cmd") or [],
+            "exit": payload.get("exit"),
+            "tests": _failed_tests(body),
+            "tail": _tail(body),
+        }
+    return {}
+
+
+def _git_numstat_all(cwd: str) -> dict[str, tuple[int, int]]:
+    """One `git diff --numstat` for the whole work tree, cached per request.
+
+    HEAD covers staged and unstaged changes; the fallback covers a repository
+    with no commit yet. Running it once per directory and filtering in Python
+    is the difference between one subprocess and one per decision row.
+    """
+    if not cwd:
+        return {}
+    for base in (["HEAD"], []):
+        args = ["git", "-C", cwd, "diff", "--numstat", *base]
+        try:
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                creationflags=config.NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if proc.returncode != 0:
+            continue
+        out: dict[str, tuple[int, int]] = {}
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            left, right, path = parts
+            if left == "-" or right == "-":
+                continue
+            try:
+                out[path.replace("\\", "/")] = (int(left), int(right))
+            except ValueError:
+                continue
+        return out
+    return {}
+
+
+def _git_numstat(cwd: str, files: list[str]) -> dict:
+    """Line counts for the files this run touched, from the cached diff."""
+    if not cwd or not files:
+        return {}
+    stats = _memo(("numstat", cwd), lambda: _git_numstat_all(cwd))
+    if not stats:
+        return {}
+    added = removed = 0
+    seen: list[str] = []
+    for path in files:
+        key = str(path or "").replace("\\", "/").lstrip("/")
+        while key.startswith("./"):
+            key = key[2:]
+        match = stats.get(key)
+        if match is None:
+            for candidate, value in stats.items():
+                if candidate.endswith("/" + key) or key.endswith("/" + candidate):
+                    match = value
+                    break
+        if match is None:
+            continue
+        added += match[0]
+        removed += match[1]
+        seen.append(key)
+    if not seen:
+        return {}
+    return {"files": seen, "added": added, "removed": removed}
+
+
+def _change_evidence(run: dict, deep: bool = True) -> dict:
+    """Which files this run changed, and — when git can still see them — lines."""
+    run_id = str(run.get("id") or "")
+
+    def load_artifacts() -> list[dict]:
+        try:
+            return db.artifacts_for(run_id)
+        except (KeyError, TypeError):
+            return []
+
+    files: list[str] = []
+    for artifact in _memo(("artifacts", run_id), load_artifacts):
+        if artifact.get("kind") != "file":
+            continue
+        path = str(artifact.get("rel_path") or "") or _repo_rel(
+            str(artifact.get("path") or ""), str(run.get("cwd") or "")
+        )
+        if path and path not in files:
+            files.append(path)
+
+    # A proposal is the one place the exact per-file line counts survive: the
+    # branch and its numstat are recorded when the run ends.
+    proposals = (
+        _memo(("proposals", run_id), lambda: db.proposals_for_run(run_id))
+        if run_id
+        else []
+    )
+    if proposals:
+        record = proposals[0]
+        rows = [f for f in (record.get("files") or []) if isinstance(f, dict)]
+        added = sum(int(f.get("added") or 0) for f in rows)
+        removed = sum(int(f.get("removed") or 0) for f in rows)
+        return {
+            "files": [str(f.get("path") or "") for f in rows if f.get("path")],
+            "added": added,
+            "removed": removed,
+            "stat": str(record.get("stat") or ""),
+            "basis": "git diff --numstat（提案分支）",
+        }
+    if not files:
+        return {"files": [], "basis": "", "missing": "这次 run 没有记录改动文件（artifact 为空）"}
+    if deep:
+        counted = _git_numstat(str(run.get("cwd") or ""), files)
+        if counted:
+            return {
+                **counted,
+                "basis": "git diff --numstat（只统计这次 run 碰过的文件）",
+            }
+    return {
+        "files": files,
+        "basis": "",
+        "missing": "行数没有记录（不是 git 仓库、改动已提交，或是历史条目）",
+    }
+
+
+def _outcome(run: dict, verify: str) -> str:
+    """One token per attempt: the format the operator asked for."""
+    if verify == "red":
+        return "tests_red"
+    if verify == "ok":
+        return "ok"
+    cause = recover.cause(run)
+    if cause in {
+        "timeout", "orphaned", "network", "rate_limit", "upstream",
+        "auth", "param", "policy", "model",
+    }:
+        return cause
+    error = str(run.get("error") or "")
+    match = re.search(r"exit code (-?\d+)", error)
+    if match:
+        return f"exit {match.group(1)}"
+    if error.strip():
+        return _clip(_first_line(error), 28)
+    return str(run.get("status") or "failed")
+
+
+def _attempt_rows(run: dict) -> list[dict]:
+    """The automatic retries already spent in this chain, one row each."""
+    rows = recover.chain(run)
+    if not rows:
+        return []
+    ids = tuple(row["id"] for row in rows)
+    states = _memo(("verify", ids), lambda: db.verify_states(list(ids)))
+    out: list[dict] = []
+    for row in rows:
+        if not recover.is_retry(row):
+            continue
+        started = float(row.get("started_at") or 0)
+        ended = float(row.get("ended_at") or 0)
+        seconds = int(round(ended - started)) if started and ended >= started else None
+        out.append(
+            {
+                "n": recover.retry_number(row) or len(out) + 1,
+                "seconds": seconds,
+                "outcome": _outcome(row, states.get(row["id"], "none")),
+                "run": str(row.get("id") or ""),
+            }
+        )
+    out.sort(key=lambda item: item["n"])
+    return out
+
+
+def _evidence(run: dict, state: str = "none", deep: bool = True) -> dict:
+    """Everything a reader needs to judge this failure without opening a log."""
+    run_id = str(run.get("id") or "")
+    action = _last_action(run)
+    error = _error_evidence(run)
+    red = _verify_red(run_id) if state == "red" else {}
+    tests = red.get("tests") or []
+    change = _change_evidence(run, deep=deep)
+    attempts = _attempt_rows(run) if deep else []
+    missing: list[str] = []
+    if not action:
+        missing.append("没有工具调用记录（event 表里没有这个 run 的 tool_call）")
+    if not tests and not error.get("tail"):
+        missing.append("没有原始报错（run.error 也是空的）")
+    if change.get("missing"):
+        missing.append(change["missing"])
+    if state == "none" and str(run.get("status") or "") == "completed":
+        missing.append("没有测试证据（verify 事件里既没有 green 也没有 red）")
+    tail = error.get("tail") or ""
+    source = error.get("source") or ""
+    if not tail and red.get("tail"):
+        tail, source = red["tail"], "测试输出末尾"
+    return {
+        "action": action.get("text") or "",
+        "error_tail": tail,
+        "error_source": source,
+        "tests": tests,
+        "test_cmd": " ".join(str(part) for part in (red.get("cmd") or [])),
+        "test_exit": red.get("exit"),
+        "change": change,
+        "attempts": attempts,
+        "missing": missing,
+    }
+
+
+def _assertion_phrase(text: str) -> str:
+    value = str(text or "").strip()
+    value = re.sub(r"^(?:AssertionError|assertionerror)\s*:\s*", "", value)
+    value = re.sub(r"^assert\s+", "", value)
+    return _clip(value, 90)
+
+
+def _error_phrase(text: str) -> str:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        match = re.search(r"exit code (-?\d+)", line, re.I)
+        if match:
+            # An exit code is not a sentence; a card that says "exit code 1"
+            # makes the reader translate it.
+            return f"进程退出码 {match.group(1)}"
+        if re.search(
+            r"(?:Error|Exception|FAILED|failed|denied|not found|timed out|超时|失败)", line
+        ):
+            return _clip(line, 100)
+    return _clip(lines[-1], 100) if lines else ""
+
+
+def _headline(run: dict, evidence: dict, problem: str, state: str) -> str:
+    """The one-sentence conclusion on the second line of a decision row."""
+    attempts = len(evidence.get("attempts") or [])
+    tests = evidence.get("tests") or []
+    phrase = ""
+    if tests:
+        first = tests[0]
+        assertion = _assertion_phrase(str(first.get("assertion") or ""))
+        phrase = str(first.get("test") or first.get("name") or "测试")
+        if assertion:
+            phrase += f" 断言 {assertion}"
+        if len(tests) > 1:
+            phrase += f"，共 {len(tests)} 条失败"
+    elif evidence.get("error_tail"):
+        phrase = _error_phrase(evidence["error_tail"])
+    if not phrase:
+        match = re.search(r"exit code (-?\d+)", str(run.get("error") or ""))
+        if match:
+            phrase = f"进程退出码 {match.group(1)}"
+        else:
+            phrase = problem or recover.problem_text(run)
+    if state == "red":
+        return f"第 {attempts} 次重试后测试仍红：{phrase}" if attempts else f"测试红：{phrase}"
+    if recover.classify(run) == "deterministic":
+        if "重试不会好" in problem:
+            return problem
+        return f"重试不会好：{problem}"
+    if attempts:
+        return f"第 {attempts} 次重试仍失败：{phrase}"
+    return phrase
+
+
+def _change_line(change: dict) -> str | None:
+    files = [str(path) for path in (change.get("files") or []) if path]
+    if not files:
+        return None
+    shown = "、".join(_project(path) for path in files[:3]) + (" …" if len(files) > 3 else "")
+    if change.get("added") is not None and change.get("removed") is not None:
+        return f"{len(files)} 个文件 +{change['added']} −{change['removed']}：{shown}"
+    return f"改了 {len(files)} 个文件：{shown}"
+
+
+def _next_step(evidence: dict, fallback: str) -> str:
+    """The suggestion, built from what actually happened.
+
+    "由你决定" is not a suggestion. A failed test names the test and the
+    assertion; a failed tool call names the file or command. When the record
+    has none of that, the honest next step is to read the first error line.
+    """
+    tests = evidence.get("tests") or []
+    if tests:
+        first = tests[0]
+        assertion = _assertion_phrase(str(first.get("assertion") or ""))
+        name = str(first.get("test") or first.get("name") or "失败的测试")
+        suffix = f"（断言是 {assertion}）" if assertion else ""
+        return f"先修 {name}{suffix}，改完点「重跑」让它只再跑这一条任务。"
+    action = str(evidence.get("action") or "")
+    if action:
+        step = re.sub(r"^最后一次动作：", "", action)
+        step = re.sub(r"（第 \d+ 秒）$", "", step).strip()
+        return (
+            f"先手工复现「{step}」这一步，确认它卡在哪；"
+            "改好配置或代码后点「修好后重跑」。"
+        )
+    if evidence.get("error_tail"):
+        return (
+            "没有工具调用记录，先看日志里第一条报错确认失败发生在启动阶段，"
+            "再决定换 route/model 还是自己接手。"
+        )
+    return fallback
+
+
 def _task_label(task: dict, run: dict) -> str:
     return (
         str(task.get("title") or "").strip()
@@ -290,19 +753,31 @@ def _run_entry(
     facts: dict[str, dict],
     problem: str = "",
     suggestion: str = "",
+    *,
+    state: str = "none",
+    headline: str = "",
+    evidence: bool = True,
+    deep: bool = True,
+    kind: str = "failed",
 ) -> dict:
     """One decision row: which project, which task, what broke, what it cost.
 
-    `title`/`detail`/`note` are the pre-recovery shape kept for API consumers;
-    the fields after them are what the first screen actually renders.
+    `problem` stays a one-sentence judgement (used by the log view and the old
+    API consumers); `headline` is the conclusion the card leads with, built
+    from evidence. Both are always present, even when the evidence is missing —
+    "这类证据没有记录" is a fact, "执行失败" is not.
     """
     tid = str(run.get("task_id") or "")
     task = facts.get(tid) or {}
     cwd = str(run.get("cwd") or "")
     issue = problem or recover.problem_text(run)
+    facts_ev = _evidence(run, state, deep=deep) if evidence else {}
     advice = suggestion or recover.suggestion_text(run)
+    if not suggestion and facts_ev and str(run.get("status") or "") == "failed":
+        advice = _next_step(facts_ev, advice)
+    change = _change_line(facts_ev.get("change") or {}) if facts_ev else _change_summary(run)
     return {
-        "kind": "failed",
+        "kind": kind,
         "id": str(run.get("id") or ""),
         "run": str(run.get("id") or ""),
         "at": run.get("ended_at") or run.get("started_at"),
@@ -311,9 +786,13 @@ def _run_entry(
         "task_id": tid,
         "task_title": _task_label(task, run),
         "goal": _clip(task.get("goal") or ""),
+        "cause": recover.cause(run),
         "problem": issue,
-        "change": _change_summary(run),
+        "headline": headline or _headline(run, facts_ev, issue, state),
+        "change": change,
         "suggestion": advice,
+        "why": recover.why_not_retried(run) if recover.classify(run) == "deterministic" else "",
+        "evidence": facts_ev,
         "title": issue,
         "detail": str(run.get("error") or "")[:160],
         "note": "",
@@ -338,6 +817,8 @@ def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
         "task_title": _task_label(task, run),
         "goal": _clip(task.get("goal") or ""),
         "problem": "改动做完了，但在独立分支上，主工作区没动，等你决定合不合。",
+        "headline": f"改动在分支 {proposal.get('branch') or '?'} 上等你合入"
+        + (f"：{stat}" if stat else ""),
         "change": stat or (f"改了 {len(files)} 个文件" if files else None),
         "suggestion": "先看改动摘要；测试红着或没验证就先重跑，没问题再点「合并」。",
         "title": "提案在分支上，等你合入或丢弃",
@@ -367,6 +848,7 @@ def _unverified_entry(
             f"最近 {count} 个 run 跑完了但没有测试证据；"
             "进程退出码 0 只说明它退出了，不说明改对了。"
         ),
+        "headline": f"最近 {count} 个 run 跑完却没有测试证据，不能算通过",
         "change": _change_summary(full) if full else None,
         "suggestion": "展开看是哪几次，对最近一次点「重跑」让它跑测试。",
         "title": f"{count} 个 run 跑完但没有测试证据（状态只代表进程退出码）",
@@ -384,9 +866,15 @@ def _needs_you(
 ) -> tuple[list[dict], list[dict]]:
     """Only what a person must decide. Recovery decides the rest by itself.
 
-    A transient failure that still has retries left is *not* here: the board
-    shows it under "auto recovering" instead. The moment its budget is gone,
-    the same failure moves here — an exhausted retry is a decision again.
+    A transient failure that still has attempts left is *not* here: the board
+    shows it under "auto recovering" instead. The moment the chain is spent,
+    the same failure moves here — an exhausted retry is a decision again. A
+    deterministic failure is never here either: it has its own section, because
+    the decision is "change the key/parameters", not "run it again".
+
+    A failure nobody could classify is a decision from the first attempt. Its
+    row still carries the evidence (last tool call, error tail, files changed,
+    which retries happened), so the decision is answerable without a log.
     """
     items: list[dict] = []
     failed: list[dict] = []
@@ -394,65 +882,83 @@ def _needs_you(
     # happened. Dropping them from every list is how a board starts lying: the
     # count says five failures and a human can only find one of them.
     history: list[dict] = []
+    history_reasons = {
+        "already-retried": "已经自动重试过，不会再试了",
+        "task-running": "这个任务已经有新的一条在跑",
+        "too-old": "太旧了，不在自动恢复窗口内",
+    }
     for run in runs:
         if str(run.get("status") or "") != "failed":
             continue
-        cls = recover.classify(run)
-        if cls == "deterministic":
+        if recover.classify(run) == "deterministic":
             continue
-        if cls == "transient":
-            # With recovery switched off there is no machine to wait for, so a
-            # transient failure is a human decision again instead of silently
-            # disappearing from both lists.
-            reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
-            history_reasons = {
-                "already-retried": "已经自动重试过，不会再试了",
-                "task-running": "这个任务已经有新的一条在跑",
-                "too-old": "太旧了，不在自动恢复窗口内",
-            }
-            if reason in history_reasons:
-                history.append(
-                    _run_entry(run, facts, history_reasons[reason], "看日志确认它到底改到哪一步。")
+        state = states.get(str(run.get("id") or ""), "none")
+        # With recovery switched off there is no machine to wait for, so a
+        # retryable failure is a human decision instead of silently
+        # disappearing from both lists.
+        reason = "disabled" if not recover.enabled() else recover.block_reason(run, now=now)
+        if reason in history_reasons:
+            history.append(
+                _run_entry(
+                    run,
+                    facts,
+                    history_reasons[reason],
+                    "看日志确认它到底改到哪一步。",
+                    state=state,
+                    headline=history_reasons[reason],
+                    deep=False,
                 )
-                continue
-            if reason not in (
-                "retry-limit", "over-budget", "missing-context", "task-gone", "disabled",
-            ):
-                # "" / "backoff" are being recovered right now: visible under
-                # "auto recovering", so listing them twice would be noise.
-                continue
-            depth = recover.retry_depth(run)
-            if reason == "retry-limit":
-                problem = f"自动重试 {depth} 次都没成功。最后一次：{recover.problem_text(run)}"
-                suggestion = "看一眼日志：要么手动重跑，要么自己接手改。"
-            elif reason == "over-budget":
-                problem = "这个任务已经到预算上限，系统没有继续重试。"
-                suggestion = "确认值得继续就手动重跑，或调高 task 的 budget_json。"
-            elif reason == "disabled":
-                problem = "自动恢复已关闭，这个中途失败不会有人重试。"
-                suggestion = "手动点「重跑」，或去掉 NODUS_AUTO_RECOVER=0 再启动 daemon。"
+            )
+            continue
+        if reason not in (
+            "retry-limit", "over-budget", "missing-context", "task-gone", "disabled",
+        ):
+            # "" / "backoff" are being recovered right now: visible under
+            # "auto recovering", so listing them twice would be noise.
+            continue
+        depth = recover.retry_depth(run)
+        if reason == "retry-limit":
+            if depth:
+                problem = (
+                    f"自动重试 {depth} 次都没成功，最后一次是：{recover.problem_text(run)}"
+                )
             else:
-                problem = "这条记录缺任务或目录信息，系统没法自动重试。"
-                suggestion = "重新派一次这个任务；旧记录只作为历史。"
-            failed.append(_run_entry(run, facts, problem, suggestion))
+                problem = f"重试上限是 {recover.RETRY_LIMIT} 次，这条不会再自动重试了。"
+            suggestion = ""  # _run_entry builds the next step from the evidence
+        elif reason == "over-budget":
+            problem = "这个任务已经到预算上限，系统没有继续重试。"
+            suggestion = "确认值得继续就手动重跑，或调高 task 的 budget_json。"
+        elif reason == "disabled":
+            problem = "自动恢复已关闭，这个失败不会有人重试。"
+            suggestion = "手动点「重跑」，或去掉 NODUS_AUTO_RECOVER=0 再启动 daemon。"
         else:
-            failed.append(_run_entry(run, facts))
-    failed.sort(key=lambda item: item.get("at") or 0, reverse=True)
-    # Interruptions first: a failed run is the thing the operator did not ask
-    # for, a proposal is the expected output of work they did ask for.
-    items.extend(failed)
-
-    red = [r for r in runs if states.get(r["id"]) == "red"]
-    red.sort(key=_ended_at, reverse=True)
+            problem = "这条记录缺任务或目录信息，系统没法自动重试。"
+            suggestion = "重新派一次这个任务；旧记录只作为历史。"
+        failed.append(_run_entry(run, facts, problem, suggestion, state=state))
+    # A failed run with a red test is already in `failed`, with the test
+    # evidence attached to it; listing it a second time here would
+    # double-count one run.
+    red = [
+        r
+        for r in runs
+        if states.get(r["id"]) == "red" and str(r.get("status") or "") != "failed"
+    ]
     for run in red:
-        items.append(
+        failed.append(
             _run_entry(
                 run,
                 facts,
                 problem="跑完了，但项目的测试没通过。",
-                suggestion="点「看日志」定位失败的那条测试，再决定重跑还是自己改。",
+                suggestion="看失败的那条测试和断言；点「重跑」让它再改一次，或自己接手。",
+                state="red",
+                kind="red",
             )
         )
+    # Interruptions first, newest first within them: a failed run or a red
+    # test is the thing the operator did not ask for, a proposal is the
+    # expected output of work they did ask for.
+    failed.sort(key=lambda item: item.get("at") or 0, reverse=True)
+    items.extend(failed)
 
     for proposal in db.list_proposals("open"):
         items.append(_proposal_entry(proposal, facts))
@@ -469,14 +975,33 @@ def _needs_you(
     return items, history
 
 
-def _deterministic(runs: list[dict], facts: dict[str, dict]) -> list[dict]:
-    """Failures retrying cannot fix. Shown, but never under "needs you"."""
-    rows = [
-        _run_entry(run, facts)
-        for run in runs
-        if str(run.get("status") or "") == "failed"
-        and recover.classify(run) == "deterministic"
-    ]
+def _deterministic(
+    runs: list[dict], facts: dict[str, dict], states: dict[str, str] | None = None
+) -> list[dict]:
+    """Failures retrying cannot fix, with the reason a retry would not help.
+
+    This is a separate section on purpose: the action here is "fix the key or
+    the parameters, then rerun", not "rerun". Calling both of them a failure
+    would send the operator to the wrong button.
+    """
+    states = states or {}
+    rows: list[dict] = []
+    for run in runs:
+        if str(run.get("status") or "") != "failed":
+            continue
+        if recover.classify(run) != "deterministic":
+            continue
+        problem = recover.problem_text(run)
+        rows.append(
+            _run_entry(
+                run,
+                facts,
+                problem,
+                recover.suggestion_text(run),
+                state=states.get(str(run.get("id") or ""), "none"),
+                headline=problem if "重试不会好" in problem else f"重试不会好：{problem}",
+            )
+        )
     rows.sort(key=lambda item: item.get("at") or 0, reverse=True)
     return rows[:5]
 
@@ -606,6 +1131,7 @@ def board_state(now: float | None = None) -> dict:
     `needs_you` (a human decision), `auto_recovering` (the machine is already
     on it) and `deterministic` (retrying cannot help; fix the cause).
     """
+    _fresh_cache()
     now = time.time() if now is None else now
     start, day = _day_start(now)
     runs = db.list_runs(limit=50)
@@ -615,7 +1141,7 @@ def board_state(now: float | None = None) -> dict:
     unverified_runs = _unverified_rows(runs, states, titles)
     facts = _task_facts([r.get("task_id") or "" for r in runs])
     needs_you, history_failures = _needs_you(runs, states, facts, unverified_runs, now)
-    deterministic = _deterministic(runs, facts)
+    deterministic = _deterministic(runs, facts, states)
     auto_recovering = recover.recovering(now)
     counts["needs_you"] = len(needs_you)
     counts["auto_recovering"] = len(auto_recovering)
@@ -895,11 +1421,15 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.split("/")
             rid = parts[2]
             if len(parts) == 3:
+                _fresh_cache()
                 run = db.get_run(rid)
                 if run.get("status") == "failed":
                     # The log view and the board must agree on why something
                     # failed; the wording lives in recover.py, not in the page.
                     run["problem"] = recover.problem_text(run)
+                    run["evidence"] = _evidence(run, db.verify_states([rid]).get(rid, "none"))
+                elif db.verify_states([rid]).get(rid) == "red":
+                    run["evidence"] = _evidence(run, "red")
                 return _json(self, 200, run)
             if parts[3] == "events":
                 after = int((qs.get("after") or [0])[0])

@@ -9,22 +9,19 @@ can read it, and any local process could read `~/.nodus/token` anyway.
 Cross-origin reads are blocked by the same-origin policy, and cross-origin
 writes cannot add the Authorization header.
 
-The first screen answers the three questions that decide whether the operator
-has to get up: what is running, what is waiting on a human, and what today has
-cost so far. Everything below that (recent runs, proposals, dispatch) is one
-click away, because a dashboard that needs scrolling before it says anything
-is a log viewer.
+The first screen answers one question: **is there anything I have to do, and
+if so, where exactly did it break?** A decision row is three lines — project ·
+task, a conclusion sentence ("第 3 次重试仍失败：test_token_refresh 断言 401 ==
+200"), then the actions — followed by the evidence the conclusion came from:
+the last tool call, the raw error tail, the files changed, and what each retry
+returned. Missing evidence is printed as missing; nothing is paraphrased into
+"执行失败".
 
-The first screen is also written for someone who has never seen Nodus: each
-row says what happened in one sentence, what it touched, and which button to
-press. Run ids and the agents' raw English errors live behind "详情", because
-they answer a debugging question, not the operator's "do I have to get up".
-
-It also splits the failures by who can resolve them. A failure the machine can
-retry appears under "自动重试中" with the attempt number and no button at all;
-"需要你决定" only holds what a retry cannot fix. A decision row leads with the
-project and task, then the problem in one sentence, the change, and the
-suggested action — enough to answer "what is this?" without opening anything.
+The board also splits failures by who can resolve them. A retryable failure
+with attempts left appears under "自动重试中" with dots instead of buttons;
+"需要你决定" only holds spent chains, red tests and proposals; a deterministic
+failure (401/403/400, model, content policy) gets its own section with the
+reason a rerun would return the same error.
 """
 
 from __future__ import annotations
@@ -36,153 +33,232 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nodus</title>
 <style>
-  :root { color-scheme: dark; --bg:#14161a; --panel:#1b1e24; --line:#2a2f38;
-          --dim:#8b93a1; --text:#e6e9ef; --ok:#5ac48a; --bad:#e06c75; --warn:#d9a441; --accent:#6aa9ff; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text);
-         font:14px/1.55 ui-sans-serif, "Segoe UI", "Microsoft YaHei", sans-serif; }
-  header { display:flex; gap:20px; align-items:baseline; padding:13px 20px;
-           border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:3; }
-  header h1 { font-size:15px; margin:0; letter-spacing:.1em; }
-  header .stat { color:var(--dim); font-variant-numeric:tabular-nums; }
-  header .stat b { color:var(--text); font-weight:600; }
-  header .rule { margin-left:auto; color:var(--warn); font-size:12.5px; }
-  main { padding:14px 20px 40px; max-width:1180px; }
-  section { margin-bottom:20px; }
-  h2 { font-size:12px; letter-spacing:.14em; color:var(--dim); text-transform:uppercase;
-       margin:0 0 6px; font-weight:600; }
-  h2 .hint { letter-spacing:0; text-transform:none; color:var(--text); font-weight:500;
-             margin-left:8px; font-variant-numeric:tabular-nums; }
-  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
-  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--dim); font-weight:500; font-size:12px; }
-  td.nowrap, th.nowrap { white-space:nowrap; }
-  tr:hover td { background:var(--panel); }
-  .mono { font-family:ui-monospace, Consolas, monospace; font-size:12.5px; }
-  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); } .dim { color:var(--dim); }
-  .pill { display:inline-block; padding:1px 7px; border:1px solid var(--line); border-radius:999px; font-size:11.5px; }
-  .pill.bad { border-color:var(--bad); }
-  .pill.warn { border-color:var(--warn); }
-  button { background:transparent; color:var(--accent); border:1px solid var(--line);
-           border-radius:5px; padding:3px 10px; font:inherit; font-size:12.5px; cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#0b0e12; font-weight:600; }
-  button.primary:hover { background:#8bbcff; border-color:#8bbcff; }
-  button.danger { color:var(--bad); } button.danger:hover { border-color:var(--bad); }
-  .empty { color:var(--dim); padding:8px 12px; }
-  .task { color:var(--dim); font-size:12.5px; }
-  .scroll { max-height:320px; overflow:auto; }
-  .total { padding:2px 12px 9px; font-size:13.5px; color:var(--dim); }
-  .total b { color:var(--text); font-size:19px; font-weight:600; margin:0 5px;
+  :root { color-scheme: dark;
+          --bg:#0a0c0f; --panel:#11151a; --panel-2:#151a20; --panel-3:#0d1116;
+          --line:#212730; --line-soft:#191e25;
+          --text:#e7eaf0; --text-2:#b8c0cb; --dim:#88919e; --faint:#5f6875;
+          --accent:#6f8cff; --accent-2:#8ba3ff; --accent-ink:#0a0d14;
+          --ok:#4ec38a; --bad:#ef6b6b; --warn:#e0a340;
+          --r:10px; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; }
+  body { background:var(--bg); color:var(--text); min-height:100vh;
+         font:14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         -webkit-font-smoothing:antialiased; }
+  body::before { content:""; position:fixed; inset:0 0 auto 0; height:340px; pointer-events:none;
+                 background:radial-gradient(900px 300px at 18% -60px, rgba(111,140,255,.07), transparent 70%); }
+  ::selection { background:rgba(111,140,255,.28); }
+  header { display:flex; align-items:center; gap:18px; padding:0 26px; height:58px;
+           border-bottom:1px solid var(--line); position:sticky; top:0; z-index:4;
+           background:rgba(10,12,15,.88); backdrop-filter:blur(8px); }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand .mark { width:17px; height:17px; border-radius:5px; background:linear-gradient(145deg,#8ba3ff,#5a74e8);
+                 box-shadow:0 0 0 1px rgba(139,163,255,.25) inset; }
+  h1 { font-size:13px; letter-spacing:.2em; margin:0; font-weight:650; color:var(--text); }
+  .hstats { display:flex; align-items:center; gap:18px; margin-left:6px; color:var(--dim);
+            font-size:12.5px; font-variant-numeric:tabular-nums; }
+  .hstats b { color:var(--text); font-weight:600; }
+  .hstats .chip { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  .status-dot { width:7px; height:7px; border-radius:99px; background:var(--faint); display:inline-block; }
+  .status-dot.ok { background:var(--ok); }
+  .status-dot.bad { background:var(--bad); }
+  .status-dot.warn { background:var(--warn); }
+  .rule { margin-left:auto; color:var(--faint); font-size:12px; white-space:nowrap; }
+  main { max-width:1080px; margin:0 auto; padding:30px 26px 72px; }
+  section { margin-bottom:32px; }
+  .sec-head { display:flex; align-items:center; gap:10px; margin:0 0 12px; }
+  h2 { font-size:13px; font-weight:650; color:var(--text-2); margin:0; letter-spacing:.02em; }
+  .sec-note { color:var(--faint); font-size:12px; }
+  .count { margin-left:auto; color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums;
+           border:1px solid var(--line); border-radius:999px; padding:1px 9px; }
+  .count.bad { color:#f3a2a2; border-color:rgba(239,107,107,.32); background:rgba(239,107,107,.07); }
+  .stack { display:flex; flex-direction:column; gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); }
+  .empty { color:var(--dim); padding:12px 2px; font-size:13px; }
+  .empty-card { display:flex; gap:13px; align-items:flex-start; background:var(--panel);
+                border:1px solid var(--line); border-radius:var(--r); padding:18px 18px 17px; }
+  .empty-icon { width:22px; height:22px; border-radius:99px; border:1px solid rgba(78,195,138,.35);
+                background:rgba(78,195,138,.08); color:var(--ok); display:flex; align-items:center;
+                justify-content:center; font-size:12px; flex:none; margin-top:1px; }
+  .empty-title { color:var(--text); font-size:14px; font-weight:600; }
+  .empty-sub { color:var(--dim); font-size:12.5px; margin-top:3px; line-height:1.6; }
+  button { appearance:none; background:transparent; color:var(--text-2); border:1px solid var(--line);
+           border-radius:7px; height:30px; padding:0 12px; font:inherit; font-size:12.5px;
+           cursor:pointer; white-space:nowrap; transition:background .12s, border-color .12s, color .12s; }
+  button:hover { color:var(--text); border-color:#333c49; background:#171d24; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink);
+                   font-weight:600; }
+  button.primary:hover { background:var(--accent-2); border-color:var(--accent-2); }
+  button.danger { color:var(--bad); }
+  button.danger:hover { border-color:rgba(239,107,107,.4); background:rgba(239,107,107,.07); }
+  button:focus-visible { outline:2px solid rgba(111,140,255,.5); outline-offset:1px; }
+  .decision { padding:15px 17px 14px; }
+  .d-head { display:flex; align-items:baseline; gap:10px; min-width:0; }
+  .d-where { display:flex; align-items:baseline; gap:7px; min-width:0;
+             color:var(--dim); font-size:12.5px; }
+  .d-where .proj { color:var(--text-2); font-weight:600; }
+  .d-where .sep { color:var(--faint); }
+  .d-where .taskname { color:var(--text); font-weight:600; font-size:13.5px;
+                       overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .d-when { margin-left:auto; color:var(--faint); font-size:12px; white-space:nowrap;
+            font-variant-numeric:tabular-nums; }
+  .d-summary { margin-top:7px; font-size:15px; line-height:1.45; font-weight:500; color:var(--text);
+               letter-spacing:.002em; }
+  .d-summary.warn-text { color:#e8c07a; }
+  .d-act { display:flex; align-items:center; gap:8px; margin-top:11px; flex-wrap:wrap; }
+  .d-act .hint { color:var(--faint); font-size:12px; margin-left:2px; }
+  .evidence { margin-top:13px; border-top:1px solid var(--line-soft); padding-top:11px;
+              display:grid; gap:8px; }
+  .ev-row { display:grid; grid-template-columns:52px minmax(0,1fr); gap:12px;
+            font-size:12.5px; line-height:1.55; }
+  .ev-k { color:var(--faint); font-size:12px; padding-top:1px; }
+  .ev-v { color:var(--text-2); min-width:0; }
+  .ev-v.na { color:var(--warn); opacity:.9; }
+  .ev-src { color:var(--faint); font-size:11.5px; margin-top:2px; }
+  .tests { display:grid; gap:3px; }
+  .test { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .test-name { color:#f0b4b4; font-family:ui-monospace, Consolas, monospace; font-size:12px; }
+  .test-assert { color:var(--text-2); font-family:ui-monospace, Consolas, monospace; font-size:11.5px; }
+  pre.tail { margin:5px 0 0; padding:8px 10px; background:var(--panel-3); border:1px solid var(--line-soft);
+             border-radius:6px; color:#c6cdd8; white-space:pre-wrap; word-break:break-word;
+             font:11.5px/1.5 ui-monospace, Consolas, monospace; max-height:128px; overflow:auto; }
+  .attempts { display:flex; gap:6px; flex-wrap:wrap; }
+  .attempt { display:inline-flex; align-items:baseline; gap:5px; padding:2px 8px; border:1px solid var(--line);
+             border-radius:999px; font-size:11.5px; color:var(--text-2); white-space:nowrap;
              font-variant-numeric:tabular-nums; }
-  .total.zero { font-size:13px; }
-  .money-row { display:flex; justify-content:space-between; align-items:baseline;
-               max-width:430px; padding:5px 12px; border-bottom:1px solid var(--line);
-               font-variant-numeric:tabular-nums; }
-  .money-row .amt { color:var(--text); }
-  .foot { color:var(--dim); font-size:11.5px; padding:7px 12px 0; }
-  .live-row, .ask { display:grid; grid-template-columns:1fr auto; gap:4px 16px;
-                    align-items:start; padding:9px 12px; border-bottom:1px solid var(--line); }
-  .live-row:hover, .ask:hover { background:var(--panel); }
-  .live-what, .ask-what { font-size:14.5px; color:var(--text); }
+  .attempt b { font-weight:600; color:var(--text); }
+  .attempt.red { border-color:rgba(239,107,107,.3); color:#eda2a2; }
+  .attempt.warn { border-color:rgba(224,163,64,.3); color:#e2b877; }
+  .attempt.ok { border-color:rgba(78,195,138,.3); color:#8ed7b4; }
+  .retry-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:12px;
+               align-items:center; background:var(--panel); border:1px solid var(--line);
+               border-radius:9px; padding:11px 14px; }
+  .retry-who { min-width:0; color:var(--text-2); font-size:13px; }
+  .retry-who b { color:var(--text); font-weight:600; }
+  .retry-who .sep { color:var(--faint); margin:0 6px; }
+  .retry-last { color:var(--faint); font-size:11.5px; margin-top:2px; }
+  .retry-progress { color:var(--dim); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .dots { display:inline-flex; gap:4px; margin-right:6px; vertical-align:1px; }
+  .dots i { width:5px; height:5px; border-radius:99px; background:#2b323c; display:inline-block; }
+  .dots i.on { background:var(--warn); }
+  .when { color:var(--warn); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .blocked .why { color:var(--dim); font-size:12.5px; line-height:1.6; margin-top:7px; }
+  .blocked .why-k { display:inline-block; color:var(--faint); font-size:11.5px; margin-right:8px;
+                    border:1px solid var(--line); border-radius:4px; padding:0 6px; }
+  .live-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center;
+              background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:11px 14px; }
+  .live-what { color:var(--text); font-size:13.5px; }
   .live-what b { font-weight:600; }
-  .ask-what .proj { font-weight:600; }
-  .live-sub, .ask-about { color:var(--dim); font-size:12.5px; margin-top:1px; }
-  .ask-about .when { white-space:nowrap; }
-  .ask-problem, .ask-change, .ask-suggest { font-size:13px; margin-top:3px; line-height:1.45; }
-  .ask-problem { color:var(--text); }
-  .ask-change { color:var(--dim); }
-  .ask-suggest { color:var(--accent); }
-  .ask .lbl { display:inline-block; min-width:30px; color:var(--dim);
-              font-size:11.5px; margin-right:4px; }
-  .live-row > .act, .ask > .act { display:flex; gap:6px; align-items:center; padding-top:1px; }
-  .ask > .act { flex-wrap:wrap; justify-content:flex-end; }
-  .recover-row, .blocked-row { padding:8px 12px; border-bottom:1px solid var(--line); font-size:13px; }
-  .recover-row { display:flex; gap:10px; align-items:baseline; }
-  .recover-row .who, .blocked-row .who { color:var(--text); font-weight:600; }
-  .recover-row .when { margin-left:auto; color:var(--warn); white-space:nowrap;
-                       font-variant-numeric:tabular-nums; }
-  .blocked-row .why { color:var(--text); margin-top:2px; }
-  .blocked-row .do { color:var(--dim); font-size:12.5px; margin-top:2px;
-                     display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .blocked-row .do .grow { flex:1; }
-  .ask details.meta { border:0; margin:4px 0 0; padding:0; }
-  .ask details.meta summary { font-size:11.5px; }
-  .ask details.meta div { font-family:ui-monospace, Consolas, monospace; font-size:11.5px;
-                          color:var(--dim); margin-top:2px; word-break:break-all; }
-  .more-inline { color:var(--dim); font-size:12.5px; padding:8px 12px;
-                 border-bottom:1px solid var(--line); }
-  .more-inline button { margin-left:4px; }
-  .unv-list { border-bottom:1px solid var(--line); background:#171a1f;
-              padding:2px 12px 8px 26px; max-height:340px; overflow:auto; }
-  .unv-row { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:12.5px;
-             border-top:1px solid rgba(42,47,56,.6); }
-  .unv-row:first-child { border-top:0; }
-  .unv-row .unv-title { color:var(--text); overflow:hidden; text-overflow:ellipsis;
-                        white-space:nowrap; }
+  .live-sub { color:var(--faint); font-size:11.5px; margin-top:2px; }
+  .live-sub .sep { margin:0 6px; color:#3a424e; }
+  .money-total { color:var(--dim); font-size:13px; padding:2px 2px 10px; font-variant-numeric:tabular-nums; }
+  .money-total b { color:var(--text); font-size:18px; font-weight:650; margin:0 4px; }
+  .money-row { display:flex; justify-content:space-between; align-items:baseline; max-width:420px;
+               padding:6px 2px; border-bottom:1px solid var(--line-soft); color:var(--text-2);
+               font-size:13px; font-variant-numeric:tabular-nums; }
+  .money-row:last-of-type { border-bottom:0; }
+  .money-row .amt { color:var(--text); }
+  .foot { color:var(--faint); font-size:11.5px; padding-top:8px; }
+  .mono { font-family:ui-monospace, Consolas, monospace; font-size:12px; }
+  .dim { color:var(--dim); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--faint); font-weight:500; font-size:11.5px; }
+  td.nowrap, th.nowrap { white-space:nowrap; }
+  tr:hover td { background:rgba(255,255,255,.018); }
+  .unv-list { margin-top:10px; border-top:1px solid var(--line-soft); padding-top:8px;
+              max-height:320px; overflow:auto; }
+  .unv-row { display:flex; gap:10px; align-items:center; padding:5px 0; font-size:12.5px;
+             border-bottom:1px solid var(--line-soft); }
+  .unv-row:last-child { border-bottom:0; }
+  .unv-title { color:var(--text-2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .unv-row button { margin-left:auto; flex:none; }
-  #evidence { background:var(--panel); border:1px solid var(--line); border-radius:7px;
-              padding:12px 14px; margin-top:10px; display:none; }
+  .more-inline { color:var(--dim); font-size:12.5px; padding:10px 2px 0; }
+  .more-inline button { margin-left:6px; height:26px; }
+  #evidence { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+              padding:14px 16px; margin-top:12px; display:none; }
   #evidence h3 { margin:0 0 8px; font-size:13px; font-weight:600; }
-  #evidence pre { white-space:pre-wrap; word-break:break-all; max-height:320px; overflow:auto;
-                  background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:10px; font-size:12px; }
-  details { border-top:1px solid var(--line); margin-top:6px; padding-top:10px; }
-  details summary { color:var(--dim); cursor:pointer; font-size:12.5px; letter-spacing:.04em; }
+  #evidence pre { white-space:pre-wrap; word-break:break-word; max-height:320px; overflow:auto;
+                  background:var(--panel-3); border:1px solid var(--line-soft); border-radius:6px;
+                  padding:10px; font-size:11.5px; color:#c6cdd8; }
+  .evidence details.raw { border-top:1px dashed var(--line-soft); margin-top:7px; padding-top:6px; }
+  .evidence details.raw summary { font-size:11.5px; color:var(--faint); }
+  .evidence details.raw summary::before { content:"+"; display:inline-block; width:10px; }
+  .evidence details.raw[open] summary::before { content:"–"; }
+  .evidence details.raw pre { margin-top:5px; }
+  details { border-top:1px solid var(--line); margin-top:4px; padding-top:14px; }
+  details summary { color:var(--dim); cursor:pointer; font-size:12.5px; letter-spacing:.02em;
+                    list-style:none; }
+  details summary::-webkit-details-marker { display:none; }
   details summary:hover { color:var(--text); }
-  details section { margin-top:18px; }
-  form { display:grid; gap:9px; max-width:760px; }
-  label { display:grid; gap:4px; font-size:12.5px; color:var(--dim); }
-  input, select, textarea { background:var(--bg); color:var(--text); border:1px solid var(--line);
-                            border-radius:5px; padding:7px 9px; font:inherit; }
-  textarea { min-height:70px; resize:vertical; }
-  .row { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
-  .check { display:flex; gap:8px; align-items:center; color:var(--text); font-size:13px; }
-  #flash { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
-           background:var(--panel); border:1px solid var(--line); border-radius:6px;
-           padding:8px 14px; display:none; max-width:80vw; z-index:5; }
+  details section { margin-top:22px; }
+  form { display:grid; gap:10px; max-width:760px; }
+  label { display:grid; gap:5px; font-size:12.5px; color:var(--dim); }
+  input, select, textarea { background:var(--panel-3); color:var(--text); border:1px solid var(--line);
+                            border-radius:6px; padding:7px 9px; font:inherit; font-size:13px; }
+  textarea { min-height:68px; resize:vertical; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .check { display:flex; gap:8px; align-items:center; color:var(--text-2); font-size:12.5px; }
+  #flash { position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+           background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+           padding:9px 15px; display:none; max-width:80vw; z-index:6; font-size:13px;
+           box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  @media (max-width:720px) {
+    header { padding:0 16px; gap:12px; }
+    .rule { display:none; }
+    main { padding:20px 16px 60px; }
+    .ev-row { grid-template-columns:44px minmax(0,1fr); gap:8px; }
+    .retry-row { grid-template-columns:auto minmax(0,1fr); }
+    .retry-progress, .when { grid-column:2; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>NODUS</h1>
-  <span class="stat" id="s-cost">—</span>
-  <span class="stat" id="s-live">—</span>
-  <span class="rule">结束 ≠ 通过：只有测试证据变绿才算验收</span>
+  <div class="brand"><span class="mark"></span><h1>NODUS</h1></div>
+  <div class="hstats">
+    <span class="chip"><span class="status-dot" id="s-wait-dot"></span><span id="s-wait">读状态…</span></span>
+    <span class="chip" id="s-live">—</span>
+    <span class="chip" id="s-cost">—</span>
+    <span class="chip" id="s-retry" hidden></span>
+  </div>
+  <div class="rule">结束 ≠ 通过 · 只有测试证据变绿才算验收</div>
 </header>
 <main>
   <section>
-    <h2>正在跑 <span class="hint" id="live-n"></span></h2>
-    <div id="live"><div class="empty">现在没有任务在跑</div></div>
+    <div class="sec-head"><h2>正在跑</h2><span class="sec-note" id="live-n"></span></div>
+    <div id="live" class="stack"><div class="empty">现在没有任务在跑</div></div>
   </section>
   <section>
-    <h2>需要你决定 <span class="hint" id="todo-n"></span></h2>
-    <div id="todo"><div class="empty">正在读…</div></div>
+    <div class="sec-head"><h2>需要你决定</h2><span class="sec-note">重试也解决不了的，才在这里</span><span class="count" id="todo-n"></span></div>
+    <div id="todo" class="stack"><div class="empty">正在读…</div></div>
   </section>
   <section id="recover-sec" hidden>
-    <h2>自动重试中 <span class="hint" id="recover-n"></span></h2>
-    <div id="recover"></div>
+    <div class="sec-head"><h2>自动重试中</h2><span class="sec-note">系统自己重跑，不用你点任何东西</span><span class="count" id="recover-n"></span></div>
+    <div id="recover" class="stack"></div>
   </section>
   <section id="blocked-sec" hidden>
-    <h2>不会自动重试 <span class="hint" id="blocked-n"></span></h2>
-    <div id="blocked"></div>
+    <div class="sec-head"><h2>不会自动重试</h2><span class="sec-note">这些错误改参数、换密钥或换模型之后才能继续</span><span class="count" id="blocked-n"></span></div>
+    <div id="blocked" class="stack"></div>
   </section>
   <section>
-    <h2>今天的钱</h2>
+    <div class="sec-head"><h2>今天的钱</h2><span class="sec-note">账单原值，不换算汇率</span></div>
     <div id="money"></div>
   </section>
   <details id="more">
     <summary>更多：最近执行 · 提案 · 派活</summary>
     <section>
-      <h2>最近执行 <span class="dim" style="text-transform:none;letter-spacing:0">（点「证据」看测试命令、退出码和改了哪些文件）</span></h2>
+      <div class="sec-head"><h2>最近执行</h2><span class="sec-note">点「证据」看测试命令、退出码和改了哪些文件</span></div>
       <div id="runs"></div>
       <div id="evidence"></div>
     </section>
     <section>
-      <h2>提案（在分支上，主工作区没动）</h2>
+      <div class="sec-head"><h2>提案（在分支上，主工作区没动）</h2></div>
       <div id="proposals"></div>
     </section>
     <section>
-      <h2>派活</h2>
+      <div class="sec-head"><h2>派活</h2></div>
       <form id="dispatch">
         <label>目标（要做什么，一句话说清）
           <textarea id="f-goal" required placeholder="例：修好 calc.py 里的 add 函数，让 test_calc.py 通过"></textarea>
@@ -207,7 +283,7 @@ PAGE = """<!doctype html>
           结束时自动跑测试（改过文件才跑，检测不到测试命令就不跑）
         </label>
         <div><button type="submit">派活</button>
-          <span class="task" id="f-hint"></span></div>
+          <span class="dim" id="f-hint"></span></div>
       </form>
     </section>
   </details>
@@ -307,16 +383,31 @@ function table(headers, rows, empty) {
     <tbody>${rows.join("")}</tbody></table>`;
 }
 
+function outcomeTone(text) {
+  const t = String(text || "").toLowerCase();
+  if (t.includes("tests_red") || t.includes("exit") || t.includes("auth") ||
+      t.includes("param") || t.includes("orphan") || t.includes("failed")) return "red";
+  if (t.includes("timeout") || t.includes("network") || t.includes("rate") || t.includes("upstream")) return "warn";
+  if (t.includes("ok") || t.includes("completed")) return "ok";
+  return "";
+}
+
 function renderHeader() {
   const b = state.board || {};
   const t = b.today || {};
   const pipes = state.pipelines.filter(p => p.status === "running").length;
-  const n = (b.running || []).length + pipes;
+  const live = (b.running || []).length + pipes;
   const runs = t.runs || 0;
   const cost = Object.keys(t.totals || {}).length ? moneyParts(t.totals)
     : (runs ? "待计价" : money("CNY", 0));
-  $("s-live").innerHTML = "<b>" + n + "</b> 个任务在跑";
-  $("s-cost").innerHTML = "今天 <b>" + cost + "</b>（" + runs + " 单）";
+  const waiting = (b.needs_you || []).length;
+  const retrying = (b.auto_recovering || []).length;
+  $("s-live").innerHTML = `<b>${live}</b> 个在跑`;
+  $("s-cost").innerHTML = `今天 <b>${cost}</b><span class="dim"> · ${runs} 单</span>`;
+  $("s-wait").textContent = waiting ? waiting + " 件待决定" : "没有待决定";
+  $("s-wait-dot").className = "status-dot " + (waiting ? "bad" : "ok");
+  $("s-retry").innerHTML = `<span class="status-dot warn"></span><b>${retrying}</b> 个自动重试中`;
+  $("s-retry").hidden = !retrying;
 }
 
 function renderLive() {
@@ -333,8 +424,8 @@ function renderLive() {
     else sub.push("约 " + money(r.partial_currency || "USD", r.partial_cost) + "（还没结算）");
     return `<div class="live-row">
       <div>
-        <div class="live-what">${liveWhat(r)} <span class="dim">· 已跑 <span data-start="${r.started_at || 0}">${span(now - (r.started_at || now))}</span></span></div>
-        <div class="live-sub">${sub.join(" · ")}</div>
+        <div class="live-what"><span class="status-dot ok"></span> ${liveWhat(r)} <span class="dim">· 已跑 <span data-start="${r.started_at || 0}">${span(now - (r.started_at || now))}</span></span></div>
+        <div class="live-sub">${sub.join('<span class="sep">·</span>')}</div>
       </div>
       <div class="act"><button class="danger" onclick="stopRun('${r.id}')">停止</button></div>
     </div>`;
@@ -343,8 +434,8 @@ function renderLive() {
     const start = p.started_at || p.created_at || 0;
     rows.push(`<div class="live-row">
       <div>
-        <div class="live-what"><b>流水线</b> ${esc(p.kind)} 正在跑 <span class="dim">· 已跑 <span data-start="${start}">${span(now - (start || now))}</span></span></div>
-        <div class="live-sub">${esc(p.label || "后台批次")} · 不计入花费</div>
+        <div class="live-what"><span class="status-dot ok"></span> <b>流水线</b> ${esc(p.kind)} 正在跑 <span class="dim">· 已跑 <span data-start="${start}">${span(now - (start || now))}</span></span></div>
+        <div class="live-sub">${esc(p.label || "后台批次")}<span class="sep">·</span>不计入花费</div>
       </div>
       <div class="act"><button class="danger" onclick="stopPipe('${p.id}')">停止</button></div>
     </div>`);
@@ -353,55 +444,84 @@ function renderLive() {
 }
 
 function decisionRow(d) {
+  const ev = d.evidence || {};
   const when = d.at ? ago(d.at) : "";
-  const head = `<span class="proj">项目 ${esc(d.project || "未记录")}</span>` +
-    `<span class="dim"> · </span>${esc(d.task_title || d.title || "（任务没写标题）")}`;
-  const goal = clip(d.goal || "", 120);
-  // Hoisted out of the "unverified" branch on purpose: the same list is needed
-  // again when the row renders the per-run lines below. Declaring it inside the
-  // branch made the tail throw `ReferenceError: list is not defined`, which
-  // killed the whole row — the expand button did nothing.
+  const kind = d.kind || "failed";
+  const head = `<span class="proj">${esc(d.project || "未记录项目")}</span>` +
+    `<span class="sep">·</span><span class="taskname">${esc(d.task_title || "（任务没写标题）")}</span>`;
+  const summary = d.headline || d.problem || d.title || "";
   const unvList = ((state.board || {}).unverified_runs || []).slice(0, 50);
-  let act = "", meta = [];
+  let act = "", evidence = "";
 
-  if (d.kind === "proposal") {
+  if (kind === "proposal") {
     act = `<button class="primary" onclick="merge('${d.id}')">合并</button>
            <button class="danger" onclick="reject('${d.id}')">丢弃</button>`;
-    const p = state.proposals.find(p => p.id === d.id) || {};
-    meta.push("提案 " + d.id + (p.branch ? " · 分支 " + p.branch : ""));
-    if (d.run) meta.push("来源 run " + d.run);
-  } else if (d.kind === "failed") {
-    act = `<button class="primary" onclick="rerun('${d.run}')">重跑</button>
-           <button onclick="showLog('${d.run}')">看日志</button>`;
-    meta.push("run " + d.run);
-    meta.push("原始报错：" + (d.detail || "（没有记录）"));
-  } else if (d.kind === "red") {
-    act = `<button class="primary" onclick="showEvidence('${d.run}')">看日志</button>
-           <button onclick="rerun('${d.run}')">重跑</button>`;
-    meta.push("run " + d.run);
-    meta.push("验证结果：测试红");
-  } else if (d.kind === "unverified") {
+  } else if (kind === "unverified") {
     const n = count("unverified") || unvList.length || "";
     act = `<button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + n + " 次"}</button>` +
       (unvList[0] ? `<button class="primary" onclick="rerunOne('${unvList[0].id}')">重跑最近一次</button>` : "");
-    meta.push("「重跑最近一次」只重跑最近那一条，不是全部。");
+  } else if (kind === "red" || kind === "failed") {
+    const label = d.why ? "修好后重跑" : "重跑";
+    act = `<button class="primary" onclick="rerun('${d.run}')">${label}</button>` +
+      `<button onclick="showLog('${d.run}')">看日志</button>` +
+      (d.why ? `<span class="hint">现在重跑只会换回同一个错误</span>` : "");
+
+    const rows = [];
+    if (ev.action) {
+      rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v">${esc(ev.action)}</span></div>`);
+    } else {
+      rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v na">这类证据没有记录：event 表里没有 tool_call</span></div>`);
+    }
+    const tests = ev.tests || [];
+    if (tests.length) {
+      const list = tests.map(t => `<div class="test">
+          <span class="test-name">${esc(t.name || t.test || "")}</span>
+          ${t.assertion ? `<span class="test-assert">${esc(t.assertion)}</span>` : ""}</div>`).join("");
+      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
+        <div class="tests">${list}</div>
+        ${ev.error_tail ? `<details class="raw"><summary>原始输出（末尾 ${ev.error_tail.length} 字）</summary><pre class="tail">${esc(ev.error_tail)}</pre></details>` : ""}
+        </div></div>`);
+    } else if (ev.error_tail) {
+      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
+        <pre class="tail">${esc(ev.error_tail)}</pre>
+        <div class="ev-src">${esc(ev.error_source || "原始输出")} · 末尾 ${ev.error_tail.length} 字</div></div></div>`);
+    } else {
+      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><span class="ev-v na">这类证据没有记录：run.error 和事件流里都没有报错原文</span></div>`);
+    }
+    if (d.change) {
+      rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><div class="ev-v">${esc(d.change)}
+        ${ev.change && ev.change.basis ? `<div class="ev-src">${esc(ev.change.basis)}</div>` : ""}</div></div>`);
+    } else {
+      rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><span class="ev-v na">这类证据没有记录：artifact 是空的</span></div>`);
+    }
+    const attempts = ev.attempts || [];
+    if (attempts.length) {
+      const chips = attempts.map(a => `<span class="attempt ${outcomeTone(a.outcome)}"><b>第 ${a.n} 次</b>${a.seconds == null ? "" : ` · ${a.seconds}s`}${a.outcome ? ` · ${esc(a.outcome)}` : ""}</span>`).join("");
+      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><div class="ev-v"><div class="attempts">${chips}</div>
+        ${d.why ? `<div class="ev-src">${esc(d.why)}</div>` : ""}</div></div>`);
+    } else if (d.why) {
+      rows.push(`<div class="ev-row"><span class="ev-k">为什么</span><span class="ev-v">${esc(d.why)}</span></div>`);
+    } else if (kind === "red") {
+      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v">没有自动重试：这个 run 跑完了，问题出在验收结果</span></div>`);
+    } else {
+      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v na">还没有自动重试过</span></div>`);
+    }
+    if ((ev.missing || []).length) {
+      rows.push(`<div class="ev-row"><span class="ev-k">缺什么</span><span class="ev-v na">${ev.missing.map(esc).join("；")}</span></div>`);
+    }
+    rows.push(`<div class="ev-row"><span class="ev-k">下一步</span><span class="ev-v">${esc(d.suggestion || "")}</span></div>`);
+    evidence = `<div class="evidence">${rows.join("")}</div>`;
   } else {
     act = d.run ? `<button onclick="showLog('${d.run}')">看日志</button>` : "";
   }
-  if (d.cwd) meta.push("目录 " + d.cwd);
-  if (goal) meta.push("任务目标：" + goal);
 
-  const ask = `<div class="ask">
-    <div>
-      <div class="ask-what">${head}${when ? ` <span class="dim when">· ${esc(when)}</span>` : ""}</div>
-      <div class="ask-problem"><span class="lbl">问题</span>${esc(d.problem || d.title || "")}</div>
-      ${d.change ? `<div class="ask-change"><span class="lbl">改动</span>${esc(d.change)}</div>` : ""}
-      ${d.suggestion ? `<div class="ask-suggest"><span class="lbl">建议</span>${esc(d.suggestion)}</div>` : ""}
-      <details class="meta"><summary>详情</summary>${meta.map(m => `<div>${esc(m)}</div>`).join("")}</details>
-    </div>
-    <div class="act">${act}</div>
-  </div>`;
-  if (d.kind !== "unverified" || !unvOpen) return ask;
+  const html = `<article class="card decision ${kind}">
+    <div class="d-head"><div class="d-where">${head}</div><span class="d-when">${esc(when)}</span></div>
+    <div class="d-summary" title="${esc(d.problem || "")}">${esc(summary)}</div>
+    <div class="d-act">${act}</div>
+    ${evidence}
+  </article>`;
+  if (kind !== "unverified" || !unvOpen) return html;
 
   // one line per run: when, who, what, and a button that reruns exactly that
   // run. No single button stands in for all of them.
@@ -411,13 +531,13 @@ function decisionRow(d) {
       <span class="unv-title" title="${esc(u.title || "")}">${esc(u.title || "（任务没写标题）")}</span>
       <button onclick="rerunOne('${u.id}')">重跑</button>
     </div>`).join("");
-  return ask + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
+  return html + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
 }
 
 function retryWait(ts) {
   if (!ts) return "正在跑";
   const left = ts - Date.now() / 1000;
-  return left <= 0 ? "马上开始" : span(left) + "后";
+  return left <= 0 ? "马上开始" : "约 " + span(left) + "后";
 }
 
 function renderRecover(rows) {
@@ -425,12 +545,17 @@ function renderRecover(rows) {
   if (!rows.length) { sec.hidden = true; return; }
   sec.hidden = false;
   $("recover-n").textContent = rows.length + " 件";
-  $("recover").innerHTML = rows.map(r =>
-    `<div class="recover-row">
-       <span class="who">项目 ${esc(r.project || "未记录")} · ${esc(r.task_title || "（任务没写标题）")}</span>
-       <span class="dim">第 ${r.attempt}/${r.limit || 2} 次</span>
-       <span class="when">${esc(retryWait(r.next_retry_at))}</span>
-     </div>`).join("");
+  $("recover").innerHTML = rows.map(r => {
+    const limit = r.limit || 3;
+    const dots = Array.from({ length: limit }, (_, i) => `<i class="${i < (r.attempt || 0) ? "on" : ""}"></i>`).join("");
+    return `<div class="retry-row">
+       <span class="status-dot warn"></span>
+       <div class="retry-who"><b>${esc(r.project || "未记录项目")}</b><span class="sep">·</span>${esc(r.task_title || "（任务没写标题）")}
+         <div class="retry-last">上次：${esc(r.problem || "执行失败")}</div></div>
+       <div class="retry-progress"><span class="dots">${dots}</span>第 ${r.attempt}/${limit} 次重试</div>
+       <div class="when">${esc(retryWait(r.next_retry_at))}</div>
+     </div>`;
+  }).join("");
 }
 
 function renderBlocked(rows) {
@@ -438,14 +563,18 @@ function renderBlocked(rows) {
   if (!rows.length) { sec.hidden = true; return; }
   sec.hidden = false;
   $("blocked-n").textContent = rows.length + " 件";
-  $("blocked").innerHTML = rows.map(r =>
-    `<div class="blocked-row">
-       <div><span class="who">项目 ${esc(r.project || "未记录")} · ${esc(r.task_title || "（任务没写标题）")}</span></div>
-       <div class="why">${esc(r.problem || "")}</div>
-       <div class="do"><span class="grow">${esc(r.suggestion || "")}</span>
+  $("blocked").innerHTML = rows.map(r => {
+    const ev = r.evidence || {};
+    return `<article class="card blocked decision">
+       <div class="d-head"><div class="d-where"><span class="proj">${esc(r.project || "未记录项目")}</span><span class="sep">·</span><span class="taskname">${esc(r.task_title || "（任务没写标题）")}</span></div><span class="d-when">${esc(r.at ? ago(r.at) : "")}</span></div>
+       <div class="d-summary warn-text">${esc(r.headline || r.problem || "")}</div>
+       <div class="why"><span class="why-k">为什么不能靠重试</span>${esc(r.why || "")}</div>
+       ${ev.error_tail ? `<pre class="tail">${esc(ev.error_tail)}</pre>` : ""}
+       <div class="d-act"><button class="primary" onclick="rerun('${r.run}')">修好后重跑</button>
          <button onclick="showLog('${r.run}')">看日志</button>
-         <button onclick="rerun('${r.run}')">修好后重跑</button></div>
-     </div>`).join("");
+         <span class="hint">${esc(r.suggestion || "")}</span></div>
+     </article>`;
+  }).join("");
 }
 
 function renderTodo() {
@@ -455,9 +584,17 @@ function renderTodo() {
   const blocked = b.deterministic || [];
   const history = b.history_failures || [];
   $("todo-n").textContent = needs.length ? needs.length + " 件" : "";
+  $("todo-n").className = "count" + (needs.length ? " bad" : "");
   if (!needs.length) {
-    $("todo").innerHTML = `<div class="empty">没有需要你决定的事${
-      recovering.length ? "；" + recovering.length + " 件失败正在自动重试，不用你管。" : "。"}</div>`;
+    const retryLine = recovering.length
+      ? `${recovering.length} 件失败正在自动重试（上限 ${recovering[0].limit || 3} 次），按退避时间自己跑，不用你管。`
+      : "系统没有正在重试的失败。";
+    const fixLine = blocked.length ? `另有 ${blocked.length} 件要先改配置才能继续，见下面「不会自动重试」。` : "";
+    $("todo").innerHTML = `<div class="empty-card">
+      <span class="empty-icon">✓</span>
+      <div><div class="empty-title">没有需要你决定的事</div>
+        <div class="empty-sub">${esc(retryLine)}${fixLine ? " " + esc(fixLine) : ""}</div></div>
+    </div>`;
   } else {
     const shown = needs.slice(0, 5), rest = needs.slice(5);
     const blocks = shown.map(decisionRow);
@@ -487,17 +624,16 @@ function renderMoney(t) {
   const agents = t.by_agent || [];
   let html = "";
   if (!runs) {
-    html = `<div class="total zero">今天还没有花钱</div>`;
+    html = `<div class="money-total">今天还没有花钱</div>`;
   } else if (!Object.keys(t.totals || {}).length) {
-    html = `<div class="total">今天 ${runs} 单，还没有记到金额</div>`;
+    html = `<div class="money-total">今天 ${runs} 单，还没有记到金额</div>`;
   } else {
-    html = `<div class="total">今天 ${runs} 单，共 <b>${moneyParts(t.totals)}</b></div>` +
+    html = `<div class="money-total">今天 ${runs} 单，共 <b>${moneyParts(t.totals)}</b></div>` +
       agents.map(a => {
         const amount = Object.keys(a.costs || {}).length ? moneyParts(a.costs) : "还没计价";
         return `<div class="money-row"><span>${esc(a.agent)}</span>
           <span class="amt">${esc(amount)}<span class="dim">（${a.runs} 单）</span></span></div>`;
-      }).join("") +
-      `<div class="foot">金额取自账单原值，不换算汇率</div>`;
+      }).join("");
   }
   $("money").innerHTML = html;
 }
@@ -508,14 +644,14 @@ function renderRuns() {
     const [label, cls] = VERIFY[r.verify] || ["-", "dim"];
     const status = r.status === "completed" ? '<span class="ok">完成</span>'
       : r.status === "failed" ? '<span class="bad">失败</span>'
-      : r.status === "running" ? '<span class="pill">在跑</span>' : esc(r.status);
+      : r.status === "running" ? '<span class="dim">在跑</span>' : esc(r.status);
     return `<tr>
       <td class="mono dim">${esc((r.id || "").slice(4, 14))}</td>
       <td class="nowrap">${status}</td>
       <td class="nowrap"><span class="${cls}">${label}</span></td>
       <td class="nowrap">${esc(r.route || r.agent)}<span class="dim"> → ${esc(r.provider || "-")}</span></td>
       <td class="nowrap">${runMoney(u)}</td>
-      <td class="task">${esc((r.title || r.note || r.task_id || "").slice(0, 50))}</td>
+      <td class="dim">${esc((r.title || r.note || r.task_id || "").slice(0, 50))}</td>
       <td class="dim nowrap">${ago(r.ended_at || r.started_at)}</td>
       <td class="nowrap"><button onclick="showEvidence('${r.id}')">证据</button></td>
     </tr>`;
@@ -527,9 +663,9 @@ function renderProposals() {
   const PSTATE = { open: "等你决定", merged: "已合并", rejected: "已丢弃" };
   const rows = state.proposals.map(p => `<tr>
       <td class="mono">${esc(p.id)}</td>
-      <td><span class="pill">${esc(PSTATE[p.status] || p.status)}</span></td>
+      <td><span class="dim">${esc(PSTATE[p.status] || p.status)}</span></td>
       <td>${esc(String(p.stat || "").replace(/(\\d+) file\\(s\\)/, "$1 个文件"))}</td>
-      <td class="task mono">${esc((p.branch || "").slice(0, 36))}</td></tr>`);
+      <td class="dim mono">${esc((p.branch || "").slice(0, 36))}</td></tr>`);
   $("proposals").innerHTML = table(["提案", "状态", "改动", "分支"], rows, "没有提案。");
 }
 
@@ -559,8 +695,8 @@ async function showEvidence(rid) {
         if (p.tail) html += `<pre>${esc(p.tail)}</pre>`;
       }
     }
-    html += `<div class="task">改动文件：${files.length ? files.map(esc).join(" · ") : "（无）"}</div>
-      <div class="task">原始记录：${esc("/runs/" + rid + "/handoff")}</div>`;
+    html += `<div class="dim" style="margin-top:8px">改动文件：${files.length ? files.map(esc).join(" · ") : "（无）"}</div>
+      <div class="dim">原始记录：${esc("/runs/" + rid + "/handoff")}</div>`;
     box.innerHTML = html;
   } catch (e) {
     box.innerHTML = `<h3>${esc(rid)}</h3><div class="bad">读取失败：${esc(e.message)}</div>`;
@@ -574,15 +710,26 @@ async function showLog(rid) {
   box.innerHTML = `<h3>日志 <span class="mono dim">${esc(rid)}</span></h3><div class="dim">读取中…</div>`;
   try {
     const [run, events] = await Promise.all([api("/runs/" + rid), api("/runs/" + rid + "/events")]);
+    const ev = run.evidence || {};
     const lines = events.slice(-18).map(e =>
       clock(e.ts) + "  " + e.type + "  " + JSON.stringify(e.payload || {}));
+    let extra = "";
+    if (ev.action) extra += `<div class="dim">${esc(ev.action)}</div>`;
+    if ((ev.tests || []).length) extra += `<div class="bad mono">${ev.tests.map(t => esc(t.name + (t.assertion ? " — " + t.assertion : ""))).join("<br>")}</div>`;
+    if (ev.error_tail) extra += `<pre>${esc(ev.error_tail)}</pre>`;
+    if (ev.change && (ev.change.files || []).length) {
+      extra += `<div class="dim">改动：${ev.change.files.map(esc).join(" · ")}${ev.change.added != null ? `（+${ev.change.added} −${ev.change.removed}）` : ""}</div>`;
+    }
+    if ((ev.attempts || []).length) {
+      extra += `<div class="dim">重试：${ev.attempts.map(a => `第${a.n}次 ${a.seconds || "?"}s ${a.outcome}`).map(esc).join(" / ")}</div>`;
+    }
     box.innerHTML = `<h3>日志 <span class="mono dim">${esc(rid)}</span></h3>
       <div class="bad">${esc(run.problem || "这个 run 失败了。")}</div>
-      <div class="task">原始报错：<span class="mono">${esc(run.error || "（没有记录）")}</span></div>
-      <div class="task">谁干：${esc(run.agent || "-")} · 目录：<span class="mono">${esc(run.cwd || "-")}</span>
+      ${extra}
+      <div class="dim">谁干：${esc(run.agent || "-")} · 目录：<span class="mono">${esc(run.cwd || "-")}</span>
         · 开始：${esc(clock(run.started_at))}</div>
       ${lines.length ? `<pre>${esc(lines.join("\\n"))}</pre>` : ""}
-      <div class="task">共 ${events.length} 条事件，这里显示最后 ${lines.length} 条。</div>`;
+      <div class="dim">共 ${events.length} 条事件，这里显示最后 ${lines.length} 条。</div>`;
   } catch (e) {
     box.innerHTML = `<h3>日志</h3><div class="bad">读不到日志：${esc(e.message)}</div>`;
   }

@@ -1,21 +1,32 @@
-"""Automatic recovery: retry only what a retry can actually fix.
+"""Automatic recovery: a failed run is retried by default.
 
-A failure is one of three things, and only the first one is ours to handle:
+Retrying is the normal response to a failure, not an exception that needs a
+human. A failure therefore has exactly two classes:
 
-    transient      the attempt never got a fair chance — the owner process
-                   died, the network dropped, the endpoint was rate limiting
-                   or returned 5xx. Running the same work again is the fix.
+    retryable      everything else — a dead owner process, a dropped network,
+                   a timeout, a non-zero exit, a red test, or an error nobody
+                   has classified. Running the same work again is the first
+                   answer, and the only cost of being wrong is one more attempt.
     deterministic  the request itself is wrong — bad key, bad model name, bad
                    parameters, content policy. Running it again produces the
-                   same error and one more invoice line.
-    human          nothing proves either way. Guessing here is how an
-                   automatic retry corrupts a tree somebody half-edited.
+                   same error and one more invoice line, so it is listed with
+                   the reason a human has to change something first.
+
+There used to be a third class, `human`, for "nothing proves either way". It
+was the reason the board asked for decisions nobody could make: an `exit code 1`
+is not a decision, it is a run to try again. Unclassified failures now take the
+normal retry path and only reach the board after the chain is exhausted.
 
 The retry is a *child* run, not a resurrection of the failed row: the failed
 attempt keeps its own record, and the child points back with `parent_run_id`.
-A chain gets `RETRY_LIMIT` retries, each after a backoff long enough for a
-provider blip to pass. The old task, directory, route, model and session are
-kept, so a resumed conversation continues instead of starting over.
+A chain gets `RETRY_LIMIT` retries (3 by default, `NODUS_RETRY_LIMIT`), each
+after a backoff long enough for a provider blip to pass. The old task,
+directory, route, model and session are kept, so a resumed conversation
+continues instead of starting over.
+
+The board does not retell a failure as "执行失败": `cause()` names the matched
+signal, `why_not_retried()` explains what has to be fixed first, `chain()` and
+`retry_number()` let one decision row list every attempt that led to it.
 
 The daemon calls `auto_retry()` once after reaping orphans (the case the
 operator actually complained about: a restart should not require them to press
@@ -34,12 +45,15 @@ import time
 
 from . import db, routes
 
-#: How many retries a single run chain gets. The first retry is attempt 1 of 2.
-RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "2"))
+#: How many retries a single run chain gets. Three is the operator's line:
+#: "rerun is normal, unless two or three reruns still produce nothing". The
+#: first retry is attempt 1 of 3; `NODUS_RETRY_LIMIT=0` turns retrying off
+#: without turning recovery off (the failure then lands on the board at once).
+RETRY_LIMIT = int(os.environ.get("NODUS_RETRY_LIMIT", "3"))
 
-#: Seconds to wait before attempt 1, then attempt 2. Orphaned runs skip this:
-#: the process that would have been racing us is already gone.
-BACKOFF = (60.0, 300.0)
+#: Seconds to wait before attempt 1, 2, 3. Orphaned runs skip this: the process
+#: that would have been racing us is already gone.
+BACKOFF = (60.0, 300.0, 900.0)
 
 #: A failure older than this is history, not an interruption. Without a floor,
 #: the first daemon start would resume every failure ever recorded.
@@ -98,7 +112,6 @@ _UPSTREAM = re.compile(
     re.I,
 )
 
-_TRANSIENT = {"orphaned", "timeout", "network", "rate_limit", "upstream"}
 _DETERMINISTIC = {"auth", "param", "policy", "model"}
 
 _PROBLEM = {
@@ -111,7 +124,7 @@ _PROBLEM = {
     "param": "请求参数被拒绝（400），重试不会好，需要改配置或这次指令。",
     "policy": "内容被上游安全策略拦了，重试不会好。",
     "model": "模型名不存在或没有权限，重试不会好，需要换模型。",
-    "unknown": "执行失败，从报错里看不出是环境问题还是任务本身的问题。",
+    "unknown": "执行失败，报错里只有退出码，没有能归因的文案。",
 }
 
 _SUGGESTION = {
@@ -124,8 +137,28 @@ _SUGGESTION = {
     "param": "检查这次指令/模型/参数，改完再重跑。",
     "policy": "换个说法或换个模型再派。",
     "model": "换一个可用模型再重跑。",
-    "unknown": "点「看日志」看一眼，再决定重跑还是自己接手。",
+    "unknown": "系统会照常自动重试；重试次数用完了才需要你看一眼。",
 }
+
+#: Why a retry cannot help, in the operator's terms. Shown on the one section
+#: that exists for deterministic failures, so "fix the cause first" is a reason
+#: and not a rule the reader has to trust.
+_WHY_NOT_RETRIED = {
+    "auth": "上游判定这次请求无权（401/403）。密钥和权限不变，再发一次还是同一个结果。",
+    "param": "请求本身不合法（400）。参数不改，重发只会得到同一个 400。",
+    "policy": "输入被上游安全策略拦下。同样的内容再发一次还是被拦。",
+    "model": "模型名不存在或这个密钥没有该模型权限。换模型之前，重试没有意义。",
+}
+
+
+def cause(run: dict) -> str:
+    """The failure reason this module matched, for callers that render it."""
+    return _cause(run)
+
+
+def why_not_retried(run: dict) -> str:
+    """Why this deterministic failure must be fixed before it can run again."""
+    return _WHY_NOT_RETRIED.get(_cause(run), "")
 
 
 def enabled() -> bool:
@@ -155,13 +188,15 @@ def _cause(run: dict) -> str:
 
 
 def classify(run: dict) -> str:
-    """Transient, deterministic, or human. Unknown is human on purpose."""
-    cause = _cause(run)
-    if cause in _TRANSIENT:
-        return "transient"
-    if cause in _DETERMINISTIC:
+    """Retryable or deterministic. There is no third class any more.
+
+    An unclassified failure is retryable: `exit code 1` is an answer the
+    machine can act on (run it again), not a question a human must answer.
+    Only after `RETRY_LIMIT` attempts does the chain become a decision.
+    """
+    if _cause(run) in _DETERMINISTIC:
         return "deterministic"
-    return "human"
+    return "retryable"
 
 
 def problem_text(run: dict) -> str:
@@ -257,6 +292,38 @@ def attempts(run: dict) -> int:
         if label
     ]
     return max(len(labels), max(labels, default=0))
+
+
+def is_retry(run: dict) -> bool:
+    """Did this run get started by recovery rather than by a person?"""
+    return _is_retry(run)
+
+
+def retry_number(run: dict) -> int:
+    """The attempt number in this run's `auto-retry N/M` note (0 otherwise)."""
+    return _retry_label(run.get("note"))
+
+
+def chain(run: dict) -> list[dict]:
+    """The whole retry chain this run belongs to, oldest first.
+
+    Bounded by `MAX_CHAIN`: a corrupt `parent_run_id` must not turn one board
+    request into an infinite walk. The list is what the board's "试过什么"
+    line reads: the original failure plus each retry that followed it.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+    current: dict | None = run
+    while current:
+        rid = str(current.get("id") or "")
+        if not rid or rid in seen or len(rows) >= MAX_CHAIN:
+            break
+        seen.add(rid)
+        rows.append(current)
+        parent = str(current.get("parent_run_id") or "")
+        current = db.get_run(parent) if parent else None
+    rows.reverse()
+    return rows
 
 
 def _ended(run: dict) -> float:
@@ -364,20 +431,22 @@ def _due_at(run: dict) -> float:
 
 def block_reason(
     run: dict,
-    limit: int = RETRY_LIMIT,
+    limit: int | None = None,
     now: float | None = None,
     task: dict | None = None,
 ) -> str:
     """Why this run must not be retried right now; empty string means retry.
 
     Public because the board asks the same question: a transient failure with
-    retries left belongs to "auto recovering", the same failure without them
-    is a human decision again.
+    attempts left belongs to "auto recovering", the same failure without them
+    is a human decision again. `limit=None` reads `RETRY_LIMIT` now instead of
+    at import, so an env change or a test override is not silently ignored.
     """
+    limit = RETRY_LIMIT if limit is None else int(limit)
     if str(run.get("status") or "") != "failed":
         return "not-failed"
     cls = classify(run)
-    if cls != "transient":
+    if cls != "retryable":
         return cls
     if not run.get("task_id") or not run.get("cwd"):
         return "missing-context"
@@ -404,14 +473,14 @@ def block_reason(
 
 
 def should_retry(
-    run: dict, limit: int = RETRY_LIMIT, now: float | None = None
+    run: dict, limit: int | None = None, now: float | None = None
 ) -> bool:
     """Will the next sweep retry this run? Kept pure enough to unit-test."""
     return block_reason(run, limit, now) == ""
 
 
 def next_retry_at(
-    run: dict, limit: int = RETRY_LIMIT, now: float | None = None
+    run: dict, limit: int | None = None, now: float | None = None
 ) -> float | None:
     """When the next attempt may start, or None when no retry is coming.
 
@@ -435,11 +504,22 @@ def _session_id(run: dict) -> str:
 
 
 def _note(run: dict, attempt: int, limit: int) -> str:
-    """First line is the label; the rest is the only instruction a resume gets."""
+    """First line is the label; the rest is the only instruction a resume gets.
+
+    The previous failure's own last 300 characters go in with it: a retry that
+    only says "it failed" asks the worker to rediscover the same wall. The
+    label still comes first because `_retry_label` and the live row parse it.
+    """
+    previous = "原始执行" if attempt <= 1 else f"第 {attempt - 1} 次重试"
+    tail = str(run.get("error") or "").strip()
+    if len(tail) > 300:
+        tail = "…" + tail[-300:]
+    detail = f"上一次（{previous}）失败：{tail}\n" if tail else ""
     return (
         f"{NOTE_PREFIX} {attempt}/{limit}\n"
-        f"上次执行中断了：{problem_text(run)}"
+        f"{detail}"
         "请继续完成原任务：先看工作目录里已有的改动，不要重复已经做过的步骤。"
+        "如果上次是测试红，先修失败的那条测试；看不出原因就先复现一次，再改。"
     )
 
 
@@ -474,9 +554,9 @@ def _start_retry(run: dict, attempt: int, limit: int) -> dict:
 
 
 def auto_retry(
-    limit: int = RETRY_LIMIT, dry_run: bool = False, now: float | None = None
+    limit: int | None = None, dry_run: bool = False, now: float | None = None
 ) -> dict:
-    """Scan failures and start a child run for each retryable one.
+    """Scan failures and start a child run for each transient one.
 
     Returns what was done, not just a count: the caller (daemon log, a human
     checking the board, a test) needs to see which run was retried and which
@@ -486,6 +566,7 @@ def auto_retry(
     `dry_run=True` makes the same decisions and writes nothing — no run row, no
     event, no session copy. Its `child_run_id` values are empty.
     """
+    limit = RETRY_LIMIT if limit is None else int(limit)
     now = time.time() if now is None else now
     runs = db.list_runs(limit=500)
     failed = [r for r in runs if str(r.get("status") or "") == "failed"]
@@ -502,6 +583,7 @@ def auto_retry(
                     "task_id": tid,
                     "task_title": title,
                     "class": classify(run),
+                    "cause": cause(run),
                     "reason": reason,
                 }
             )
@@ -516,6 +598,7 @@ def auto_retry(
                     "task_title": title,
                     "attempt": attempt,
                     "limit": limit,
+                    "cause": cause(run),
                 }
             )
             continue
@@ -553,6 +636,7 @@ def auto_retry(
                 "task_title": title,
                 "attempt": attempt,
                 "limit": limit,
+                "cause": cause(run),
             }
         )
     return out
@@ -581,6 +665,9 @@ def recovering(now: float | None = None) -> list[dict]:
             "task_title": title,
             "project": _project(run.get("cwd")),
             "limit": RETRY_LIMIT,
+            # What failed the last time: one sentence, so the row can say
+            # "waiting to retry the timeout" instead of just an attempt count.
+            "problem": problem_text(run),
         }
         if status in ("queued", "running") and _is_retry(run):
             out.append(
