@@ -170,7 +170,8 @@ def _listening_ports() -> list[int]:
         out = subprocess.run(
             ["netstat", "-ano", "-p", "TCP"],
             capture_output=True, text=True, timeout=5, check=False,
-        ).stdout
+            creationflags=config.NO_WINDOW,
+).stdout
     except (OSError, subprocess.SubprocessError):
         return []
     ports: set[int] = set()

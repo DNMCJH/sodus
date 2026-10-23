@@ -19,6 +19,12 @@ LEGACY_AGENTS_DIR = HOME / "agents"
 VERSION = "0.4.0"
 
 
+#: Pass to every subprocess so a console-less daemon does not flash a black
+#: window on the desktop each time it shells out. `netstat` runs on every pet
+#: lookup, so without this the desktop blinks every couple of minutes.
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
 def home_id() -> str:
     """A short, stable fingerprint of this state directory.
 
