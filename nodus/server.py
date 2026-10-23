@@ -29,6 +29,7 @@ from . import (
     routes,
     runner,
     ui,
+    usage as usage_stats,
 )
 
 MAX_BODY = 1_000_000
@@ -1222,6 +1223,51 @@ def _today(conn, start: float) -> dict:
     }
 
 
+def _usage_rows(conn, start: float) -> list[dict]:
+    """Runs that started on/after `start`, in the shape `usage.summarize` wants."""
+    rows = conn.execute(
+        "SELECT agent, route, provider, model, status, usage_json, started_at FROM run"
+        " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
+        (config.workspace_id(), start),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:
+    """Today's tokens and the calendar month's total, on the same definitions
+    the CLI uses. Cache hit rate is `cache_read / (prompt + cache_read +
+    cache_write)` and is null when nothing was recorded -- the page says
+    "no usage yet" rather than printing a 0% that would look measured.
+    """
+    day = usage_stats.summarize(_usage_rows(conn, day_start), group_by="route")
+    month = usage_stats.summarize(_usage_rows(conn, month_start), group_by="route")
+    return {
+        "tokens": day["totals"]["tokens"],
+        "cache_hit_rate": day["totals"]["cache_hit_rate"],
+        "by_route": [
+            {
+                "route": group["key"],
+                "runs": group["runs"],
+                "tokens": group["tokens"]["total"],
+                "cache_hit_rate": group["cache_hit_rate"],
+                "cost": {
+                    currency: bucket["total"] for currency, bucket in group["cost"].items()
+                },
+            }
+            for group in day["groups"][:3]
+        ],
+        "month": {
+            "runs": month["totals"]["runs"],
+            "tokens": month["totals"]["tokens"],
+            "cache_hit_rate": month["totals"]["cache_hit_rate"],
+            "cost": {
+                currency: bucket["total"]
+                for currency, bucket in month["totals"]["cost"].items()
+            },
+        },
+    }
+
+
 def board_state(now: float | None = None) -> dict:
     """The first screen: what is running, what waits on a human, today's money.
 
@@ -1233,6 +1279,7 @@ def board_state(now: float | None = None) -> dict:
     _fresh_cache()
     now = time.time() if now is None else now
     start, day = _day_start(now)
+    month_start, _, _ = usage_stats.bounds("month", now)
     runs = db.list_runs(limit=50)
     states = db.verify_states([r["id"] for r in runs])
     decisions, counts = _decisions(runs, states)
@@ -1250,6 +1297,7 @@ def board_state(now: float | None = None) -> dict:
     try:
         live = _live_rows(conn, now)
         today = _today(conn, start)
+        today.update(_usage_snapshot(conn, start, month_start))
     finally:
         conn.close()
     return {

@@ -246,6 +246,10 @@ PAGE = """<!doctype html>
     <div class="sec-head"><h2>今天的钱</h2><span class="sec-note">账单原值，不换算汇率</span></div>
     <div id="money"></div>
   </section>
+  <section>
+    <div class="sec-head"><h2>用量</h2><span class="sec-note">token 与缓存命中，按路由</span></div>
+    <div id="usage"></div>
+  </section>
   <details id="more">
     <summary>更多：最近执行 · 提案 · 派活</summary>
     <section>
@@ -354,9 +358,18 @@ function span(seconds) {
 
 const SYMBOL = { CNY: "¥", USD: "$" };
 const money = (currency, value) =>
-  (SYMBOL[currency] || currency + " ") + Number(value).toFixed(currency === "CNY" ? 2 : 4);
+  currency === "-" ? "币种未记录 " + Number(value).toFixed(2)
+  : (SYMBOL[currency] || currency + " ") + Number(value).toFixed(currency === "CNY" ? 2 : 4);
 const moneyParts = costs =>
   Object.entries(costs || {}).sort().map(([c, v]) => money(c, v)).join(" + ") || "—";
+const humanTokens = n => {
+  n = Number(n) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(Math.round(n));
+};
+const pct = r => (r == null ? "—" : Math.round(r * 100) + "%");
 const runMoney = u => (u && typeof u.cost === "number" ? money(u.currency || "USD", u.cost) : "-");
 const VERIFY = { ok: ["通过", "ok"], red: ["测试红", "bad"], none: ["没验证", "warn"] };
 
@@ -649,6 +662,26 @@ function renderMoney(t) {
   $("money").innerHTML = html;
 }
 
+function renderUsage(t) {
+  t = t || {};
+  const total = (t.tokens || {}).total || 0;
+  const rows = t.by_route || [];
+  const month = t.month || {};
+  if (!total && !rows.length) {
+    $("usage").innerHTML = `<div class="money-total">今天还没有用量记录</div>`;
+    return;
+  }
+  let html = `<div class="money-total">今天 <b>${humanTokens(total)}</b> token` +
+    `<span class="dim"> · 缓存命中 ${pct(t.cache_hit_rate)}</span></div>`;
+  html += rows.map(r => `<div class="money-row"><span>${esc(r.route === "-" ? "未记录" : r.route)}</span>
+    <span class="amt">${humanTokens(r.tokens)} token<span class="dim"> · ${r.runs} 次 · 缓存 ${pct(r.cache_hit_rate)} · ${moneyParts(r.cost)}</span></span></div>`).join("");
+  if (month.runs) {
+    html += `<div class="foot">本月累计 ${humanTokens((month.tokens || {}).total)} token · ` +
+      `${moneyParts(month.cost)} · 缓存命中 ${pct(month.cache_hit_rate)}</div>`;
+  }
+  $("usage").innerHTML = html;
+}
+
 function renderRuns() {
   const rows = state.runs.slice(0, 12).map(r => {
     const u = r.usage || {};
@@ -874,11 +907,13 @@ async function refresh() {
     state.pipelines = pipelines;
     state.tasks = tasks;
     renderHeader(); renderLive(); renderTodo(); renderMoney(board.today);
+    renderUsage(board.today);
     renderRuns(); renderProposals();
   } catch (e) {
     $("todo").innerHTML = '<div class="empty bad">连不上 daemon：' + esc(e.message) + "</div>";
     $("live").innerHTML = "";
     $("money").innerHTML = "";
+    $("usage").innerHTML = "";
   } finally {
     inflight = false;
   }

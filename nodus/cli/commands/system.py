@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import time
+import unicodedata
 from pathlib import Path
 
 from ... import (
@@ -21,6 +22,7 @@ from ... import (
     runner,
     server,
     telemetry,
+    usage as usage_stats,
 )
 from ..client import call
 
@@ -56,9 +58,30 @@ def add(sub) -> None:
     p = sub.add_parser("balance", help="relay billing balance")
     p.set_defaults(func=balance)
 
-    p = sub.add_parser("usage", help="token usage per agent")
-    p.add_argument("--days", type=float, default=7)
-    p.set_defaults(func=usage)
+    p = sub.add_parser(
+        "usage",
+        help="token 用量与成本：按日/月/全部，按 route、model、provider、agent 汇总",
+    )
+    p.add_argument(
+        "--period",
+        choices=usage_stats.PERIODS,
+        default=None,
+        help="day|month|all；默认 month（本月）",
+    )
+    p.add_argument(
+        "--by",
+        choices=usage_stats.GROUP_BYS,
+        default=None,
+        help="route|model|provider|agent；默认 route",
+    )
+    p.add_argument("--json", action="store_true", dest="as_json", help="机器可读的完整数据")
+    p.add_argument(
+        "--days",
+        type=float,
+        default=None,
+        help="旧模式：最近 N 天按 route 汇总（输出与旧版一致）",
+    )
+    p.set_defaults(func=usage, needs_daemon=False)
 
     p = sub.add_parser("decisions", help="recent Jev decisions")
     p.add_argument("--last", type=int, default=10)
@@ -373,6 +396,101 @@ def balance(args) -> int:
 
 
 def usage(args) -> int:
+    """Two modes: the old --days window, or the new period/dimension report.
+
+    `--days` is kept bit-for-bit so anything that already parses this output
+    keeps working; everything else uses `usage.summary`.
+    """
+    if args.days is not None:
+        return _legacy_usage(args)
+    data = usage_stats.summary(args.period or "month", args.by or "route")
+    if args.as_json:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return 0
+    _print_usage(data)
+    return 0
+
+
+def _display_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * max(0, width - _display_width(text))
+
+
+def _human_tokens(count: int) -> str:
+    count = int(count or 0)
+    for unit, size in (("B", 1_000_000_000), ("M", 1_000_000), ("K", 1_000)):
+        if count >= size:
+            return f"{count / size:.1f}{unit}"
+    return str(count)
+
+
+def _money_text(cost: dict) -> str:
+    parts = []
+    for currency, bucket in sorted(cost.items()):
+        total = bucket["total"]
+        if currency == "CNY":
+            parts.append(f"¥{total:.2f}")
+        elif currency == usage_stats.UNKNOWN_CURRENCY:
+            parts.append(f"币种未记录 {total:.4f}")
+        else:
+            parts.append(f"{currency} {total:.4f}")
+    return " + ".join(parts) or "还没计价"
+
+
+def _mean_text(cost: dict) -> str:
+    parts = []
+    for currency, bucket in sorted(cost.items()):
+        mean = bucket.get("mean")
+        if mean is None:
+            continue
+        if currency == "CNY":
+            parts.append(f"¥{mean:.4f}/次")
+        elif currency == usage_stats.UNKNOWN_CURRENCY:
+            parts.append(f"币种未记录 {mean:.4f}/次")
+        else:
+            parts.append(f"{currency} {mean:.4f}/次")
+    return " · ".join(parts)
+
+
+def _rate_text(rate: float | None) -> str:
+    return "—" if rate is None else f"{rate * 100:.0f}%"
+
+
+def _usage_row(name: str, bucket: dict) -> str:
+    name = "（未记录）" if name == "-" else name
+    return (
+        f"{_pad(name, 26)}{bucket['runs']:>3} 次  "
+        f"{_pad(_money_text(bucket['cost']), 20)} token "
+        f"{_pad(_human_tokens(bucket['tokens']['total']), 8)}"
+        f"（缓存命中 {_rate_text(bucket['cache_hit_rate'])}）"
+    )
+
+
+def _print_usage(data: dict) -> None:
+    label = (data.get("window") or {}).get("label") or ""
+    group_by = data.get("group_by") or "route"
+    print(f"用量 · {label} · 按 {group_by}")
+    for group in data["groups"]:
+        print(_usage_row(group["key"], group))
+    totals = data["totals"]
+    print(_usage_row("合计", totals))
+    if totals["unrecorded"]:
+        print(
+            f"{totals['unrecorded']} 个 run 没有 usage 记录：算次数，不算 0 元，也不进均值。"
+        )
+    unpriced = totals["runs"] - totals["unrecorded"] - totals["priced"]
+    if unpriced:
+        print(f"{unpriced} 个 run 有 usage 但没有金额记录。")
+    means = _mean_text(totals["cost"])
+    if means:
+        print(f"均价（按已计价的 {totals['priced']} 次）：{means}")
+    print("缓存命中 = cache_read / (prompt + cache_read + cache_write)，分母为 0 时显示 —。")
+
+
+def _legacy_usage(args) -> int:
     data = telemetry.usage_summary(args.days)
     if not data:
         print("(no runs in window)")
