@@ -445,7 +445,6 @@ function liveWhat(r) {
 let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [], tasks: [] };
 let inflight = false;
 let unvOpen = false, moreNeedsOpen = false;
-const count = k => ((state.board || {}).decision_counts || {})[k] || 0;
 
 function table(headers, rows, empty) {
   if (!rows.length) return `<div class="empty">${empty}</div>`;
@@ -548,20 +547,30 @@ function projectLine(d, when) {
 function retryWait(ts) {
   if (!ts) return "正在跑";
   const left = ts - Date.now() / 1000;
-  return left <= 0 ? "马上开始" : "约 " + span(left) + "后";
+  return left <= 0 ? "马上" : "约 " + span(left) + "后";
 }
 
 function answerLines(d, when, voice) {
   const labels = LINES[voice];
-  const kind = d.failure_kind || "";
-  const tone = d.evidence_missing ? "na" : KIND_TONE.has(kind) ? "bad" : "";
+  // The two failure voices answer the same five questions in different order:
+  // a row in flight has a retry history worth a line, a stopped row has the
+  // reason it stopped. Both name the failure class on the cause line.
   return `<div class="questions">
     ${projectLine(d, when)}
     <div class="q-line"><span class="q-k">${labels[1]}</span><span class="q-v">${doingText(d, voice)}</span></div>
-    <div class="q-line"><span class="q-k">${labels[2]}</span><span class="q-v">${esc(d.retry_line || "没有重试记录")}</span></div>
-    <div class="q-line"><span class="q-k">${labels[3]}</span><span class="q-v">${kind ? `<span class="q-tag ${tone}">${esc(kind)}</span>` : ""}${esc(d.cause_line || d.likely_cause || "推断不了：这条记录里没有能归因的报错原文")}</span></div>
+    <div class="q-line"><span class="q-k">${labels[2]}</span><span class="q-v">${voice === "handling" ? esc(d.retry_line || "没有重试记录") : tagLine(d)}</span></div>
+    <div class="q-line"><span class="q-k">${labels[3]}</span><span class="q-v">${voice === "handling" ? tagLine(d) : esc(d.why || "没留下停下来的原因")}</span></div>
     <div class="q-line q-advice"><span class="q-k">${labels[4]}</span><span class="q-v">${esc(d.plan || d.suggestion || "")}</span></div>
   </div>`;
+}
+
+// The failure class as a tag plus the rule-based cause, which quotes the line
+// it matched and says what would have to change.
+function tagLine(d) {
+  const kind = d.failure_kind || "";
+  const tone = d.evidence_missing ? "na" : KIND_TONE.has(kind) ? "bad" : "";
+  const tag = kind ? `<span class="q-tag ${tone}">${esc(kind)}</span>` : "";
+  return `${tag}${esc(d.cause_line || d.likely_cause || "推断不了：这条记录里没有能归因的报错原文")}`;
 }
 
 // "第 1/3 次重试" + when it starts. The server keeps the sentence free of a

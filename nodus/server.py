@@ -1682,7 +1682,15 @@ def _stopped(
     ]
     for run in red:
         entry = _run_entry(
-            run, facts, "跑完了，但项目的测试没通过。", state="red", kind="red"
+            run,
+            facts,
+            "跑完了，但项目的测试没通过。",
+            state="red",
+            kind="red",
+            # Every stopped row answers "why I stopped". For a red test the
+            # answer is that recovery only owns failed runs: nobody is
+            # retrying a completed one, so the report has to say so.
+            why="自动重试只处理失败的 run；这条跑完了但验收没过，我没有接着跑。",
         )
         stopped.append(_stop_entry(entry, "tests_red", settled=False))
     # Fresh stops first, then the settled tail; newest first inside both.
@@ -1695,9 +1703,9 @@ def _deterministic(
 ) -> list[dict]:
     """Failures retrying cannot fix, with the reason a retry would not help.
 
-    This is a separate section on purpose: the action here is "fix the key or
-    the parameters, then rerun", not "rerun". Calling both of them a failure
-    would send the operator to the wrong button.
+    Kept as its own list because MCP and the pet still read the key; the page
+    folds these rows into 已停止, where the action ("change the key, then
+    retry") is one line on a report instead of a section of its own.
     """
     states = states or {}
     rows: list[dict] = []

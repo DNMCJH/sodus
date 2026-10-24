@@ -79,12 +79,14 @@ def test_a_failure_row_is_five_answers_in_the_order_they_are_asked():
     end = ui.PAGE.index("function retryChips")
     body = ui.PAGE[start:end]
     order = ["projectLine(d, when)", "doingText(d, voice)", "d.retry_line",
-             "d.cause_line", "d.plan"]
+             "tagLine(d)", "d.why", "d.plan"]
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
     project = ui.PAGE[ui.PAGE.index("function projectLine"):start]
     for token in ("d.project", "d.project_path", "d.task_title"):
         assert token in project
+    tag = ui.PAGE[ui.PAGE.index("function tagLine"):ui.PAGE.index("function doingText")]
+    assert "d.cause_line" in tag and "d.failure_kind" in tag
     doing = ui.PAGE[ui.PAGE.index("function doingText"):end]
     assert "d.statement" in doing and "next_retry_at" in doing
     assert 'handling: ["项目", "我在做", "已试过", "原因推测", "计划"]' in ui.PAGE
