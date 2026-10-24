@@ -7,16 +7,23 @@ agent appends to those files while it works. The problem is not storage, it is
 meanings, and nobody has reviewed the result.
 
 So there is no second store here. `harvest` reads those files, `conflicts` finds
-the candidates that disagree, and `adopt` appends the reviewed ones to the
-project's `AGENTS.md` under `## 已验证事实`. Claude Code picks that file up
-through a single `@AGENTS.md` line in its own `CLAUDE.md`, which is why one file
-can serve three harnesses.
+the candidates that disagree, and `adopt` appends the reviewed ones under
+`## 已验证事实`. A fact the project itself wrote goes into the project's
+`AGENTS.md`; a fact that came from `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+`$DSH_HOME/AGENTS.md` or `~/.nodus/AGENTS.md` goes into `~/.nodus/AGENTS.md`,
+because a global preference written into one project would follow that project
+into every other one. Claude Code picks the project file up through a single
+`@AGENTS.md` line in its own `CLAUDE.md`, which is why one file can serve three
+harnesses.
 
 Extraction is rule-based on purpose. A model call here would invent facts nobody
 wrote and could not be diffed; a rule that is too stupid misses facts, which is
 visible, while a model that is too clever fabricates them, which is not. The
-rules are: markdown list items, `##` headings, and sentences that carry an
-imperative cue. That is crude, and `conflicts()` below is cruder still.
+rules are: list items that read like an instruction, and sentences that carry an
+imperative cue. A heading is a label, a `port: 30874` line is a value and a
+"Class reflection:" paragraph is a story about last week; none of them is
+something a person can adopt. Each source contributes at most 20 rows and the
+board at most 30, best first — a queue nobody scrolls is the same as no queue.
 """
 
 from __future__ import annotations
@@ -40,6 +47,13 @@ NEAR_DUPLICATE = 0.85
 
 #: A brief, a board row, an AGENTS.md line: none of them wants a paragraph.
 MAX_TEXT = 240
+
+#: A review queue, not an archive. The real machine has 200+ list items across
+#: three files, and a board that long is why nothing got adopted: the per-source
+#: budget spends sight on the twenty best rows of each file, the board budget
+#: caps the whole thing. Both are spent best-first, so the weakest rows fall off.
+MAX_PER_SOURCE = 20
+MAX_BOARD = 30
 
 #: Sub-directories that never carry a project's instructions, only debris.
 SKIP_DIRS = {
@@ -128,6 +142,67 @@ _FAMILY_OF = {
 }
 #: `- 2026-10-24（来源 AGENTS.md）构建用 pnpm`, the line `adopt` writes.
 _FACT_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}\s*（来源[^）]*）\s*(.+)$")
+
+#: "Is this something you could follow?" is judged by its opening: an English
+#: imperative, a Chinese one, or a conditional that leads into one. The list is
+#: long because a rule is short: "Run local verification." is three words and
+#: has to outrank a 200-character reflection.
+_DIRECTIVE_EN = re.compile(
+    r"^(use|run|do not|don't|never|always|prefer|avoid|keep|preserve|append|sync|"
+    r"check|verify|create|put|move|rename|update|delete|install|write|read|open|"
+    r"close|ask|report|explain|follow|set|add|remove|ensure|make|treat|"
+    r"distinguish|prioritize|persist|save|compare|match|stop|start|commit|review|"
+    r"test|choose|list|provide|summarize|record|inspect|audit|apply|replace|"
+    r"restore|shutdown|shut|honor|respect|disclose|claim|complete|finish|repeat|"
+    r"suggest|be|confirm|decide|clean|drop|kill|fetch|render|export|upload|embed|"
+    r"fill|name|route|hold|label|mark|quote|send|split|trace|wrap|store|serve|"
+    r"deploy|backup)\b",
+    re.I,
+)
+#: 别 is deliberately absent: as a bare prefix it would also swallow 特别 / 类别,
+#: which are descriptions, not orders.
+_DIRECTIVE_CJK = re.compile(
+    r"^(不要|别|必须|禁止|务必|记得|避免|统一|优先|先|用|把|写|放|读|跑|执行|安装|"
+    r"保留|删除|检查|确认|报告|只|不|改|删|加|给|让|按|从|对|每|所有|主动|分清楚|"
+    r"说|做|算|停|开|装|查|拿|翻|扔|留|逐项|一律|凡是|任何)"
+)
+_CONDITIONAL = re.compile(r"^(if|when|before|after|once|unless|only when|for)\b", re.I)
+_RULE = re.compile(
+    r"\b(must|never|always|do not|don't|should|only|avoid|prefer|required|"
+    r"requires)\b",
+    re.I,
+)
+_RULE_CJK = re.compile(r"必须|禁止|不要|统一|务必|记得|避免|只|优先|默认|一律|逐项|按时")
+_ACTION = re.compile(
+    r"\b(use|run|keep|check|verify|write|read|create|put|add|remove|update|sync|"
+    r"report|inspect|finish|provide|list|record|disclose|preserve|avoid|follow|"
+    r"prefer|set|stop|match|treat|audit|review|send|save|open|close)\b",
+    re.I,
+)
+#: A path, a command or a known file type: the concrete half of an instruction.
+_CONCRETE = re.compile(
+    r"[A-Za-z]:\\|(?:^|[\s（(])~/|\b[\w.-]+/[\w.*<>{}-]+|%[A-Za-z_]+%|\*\.\w+|"
+    r"\.(?:md|py|ps1|mjs|ya?ml|json|toml|pth|log|sh)\b"
+)
+#: `notes/<主题>.md：…` — a bullet whose subject is a path, which the rules in
+#: this repo use to say where a thing goes. A headingless list of paths is noise;
+#: a path followed by a colon is a convention.
+_PATH_CONVENTION = re.compile(r"^[^：:\s]{0,40}/[^：:\s]*\s*[：:]")
+#: Openers that mark prose rather than an order. "这里只回答一个问题…" is the
+#: sentence this list exists for: it is about the document, not an action.
+_DESCRIPTIVE = re.compile(
+    r"^(incident reflection|class reflection|governing principle|baseline|"
+    r"last known|current .*?(documented|workflow)|examples? of|active |"
+    r"required sequence|path format|review file naming|data cleaning scripts|"
+    r"ssh server|authoritative baseline|specific .*?reference|user is |"
+    r"这里|这是|本文|本节|本文件|该文件|以下是)",
+    re.I,
+)
+_REFLECTION = re.compile(r"incident reflection|class reflection|governing principle", re.I)
+#: `Main workspace: A:\…`, `port: 30874`: a label and one value, not a rule.
+#: The value must be a single token, so "注意：提交前跑 pytest" (a real order
+#: behind a colon) is not mistaken for a setting.
+_KEY_VALUE = re.compile(r"^[^：:\n]{1,40}[：:]\s*\S+$")
 #: `_harness` is asked twice per candidate and resolves the path each time.
 _HARNESS_CACHE: dict[str, str] = {}
 
@@ -293,6 +368,55 @@ def _imperative(text: str) -> bool:
     return bool(_CUE_WORDS.search(text)) or any(cue in text for cue in _CUE_CJK)
 
 
+def _directive_score(text: str) -> int:
+    """How much this reads like something a person could follow.
+
+    Ranking only — `_directive` decides whether it is a candidate at all. The
+    score is spent twice: the per-source budget keeps the best rows of each
+    file, and the board keeps the best rows overall, so the number has to order
+    "Run local verification." above "Use the current owner-authorized resource
+    policy: do not interrupt productive tasks; …".
+    """
+    score = 0
+    if _DIRECTIVE_EN.match(text) or _DIRECTIVE_CJK.match(text):
+        score += 4
+    if _CONDITIONAL.match(text) and _ACTION.search(text[:140]):
+        score += 3
+    if _RULE.search(text[:90]) or _RULE_CJK.search(text[:70]):
+        score += 1
+    if _PATH_CONVENTION.match(text):
+        score += 2
+    elif _CONCRETE.search(text):
+        score += 1
+    if _DESCRIPTIVE.match(text):
+        score -= 3
+    if text.endswith(("：", ":", ",")):
+        score -= 2
+    if len(text) > 170:
+        score -= 1
+    return score
+
+
+def _directive(text: str) -> bool:
+    """A fact worth reviewing: an order, a convention, or a rule.
+
+    Not a heading (a label), not a `key: value` line (a value), not a
+    reflection and not a paragraph about the document itself. The inverse is
+    what filled the board with 200 rows nobody could act on.
+    """
+    if _DESCRIPTIVE.match(text) or _REFLECTION.search(text):
+        return False
+    if text.endswith(("：", ":")) and len(text) < 60:
+        return False
+    if _KEY_VALUE.match(text) and not _PATH_CONVENTION.match(text):
+        return False
+    # A bare path or project name is a pointer, not a rule; a CJK line without
+    # spaces ("说人话。") is a sentence, so the CJK half is what saves it.
+    if " " not in text and not any("\u4e00" <= char <= "\u9fff" for char in text):
+        return False
+    return _directive_score(text) >= 0
+
+
 def _candidate(text: str, kind: str, path: Path, scope: str) -> dict:
     text = text[:MAX_TEXT]
     digest = _hash(_norm(text))
@@ -308,6 +432,7 @@ def _candidate(text: str, kind: str, path: Path, scope: str) -> dict:
         "conflict": False,
         "conflict_with": [],
         "adopted": False,
+        "score": _directive_score(text),
     }
 
 
@@ -325,30 +450,24 @@ def _extract(text: str, path: Path, scope: str) -> list[dict]:
         stripped = line.strip()
         if not stripped:
             continue
-        heading = _HEADING.match(stripped)
-        if heading:
-            # The section `adopt` writes is bookkeeping, not a fact to review.
-            if stripped == SECTION:
-                continue
-            body = _clean(heading.group(2))
-            if _usable(body, 2, "heading"):
-                out.append(_candidate(body, "heading", path, scope))
+        if _HEADING.match(stripped):
+            # A heading is a label, not a fact: "开工顺序" tells nobody what to
+            # do, and adopting it into 已验证事实 would only copy the outline.
             continue
         bullet = _BULLET.match(stripped)
         if bullet:
             body = _clean(bullet.group(1))
-            # A line `adopt` wrote carries its own date and source. Read the
-            # fact out of the bookkeeping, or the line comes back as a brand
-            # new candidate the moment it is written.
-            written = _FACT_PREFIX.match(body)
-            if written:
-                body = written.group(1).strip()
-            if _usable(body, 4, "bullet"):
+            # `- 2026-10-24（来源 …）…` is a line `adopt` wrote. Reading it back
+            # would turn every adopted fact into a fresh candidate the moment it
+            # lands, which is how the board grew to 200 rows.
+            if _FACT_PREFIX.match(body):
+                continue
+            if _usable(body, 4, "bullet") and _directive(body):
                 out.append(_candidate(body, "bullet", path, scope))
             continue
         for sentence in _sentences(stripped):
             body = _clean(sentence)
-            if _usable(body, 6, "sentence") and _imperative(body):
+            if _usable(body, 6, "sentence") and _imperative(body) and _directive(body):
                 out.append(_candidate(body, "sentence", path, scope))
     return out
 
@@ -634,25 +753,60 @@ def harvest(project_dir: str | os.PathLike[str] | None = None) -> list[dict]:
             continue
         raw.extend(_extract(text, path, scope))
     merged = _merge(raw)
-    seen = _fact_hashes(_read(root / "AGENTS.md"))
+    project_seen = _fact_hashes(_read(root / "AGENTS.md"))
+    global_seen = _fact_hashes(_read(_global_target()))
     labels: dict[str, str] = {}
     for cand in merged:
-        cand["adopted"] = cand["hash"] in seen
+        # "Already adopted" means already in the file this fact would be
+        # written to. Checking only the project file would offer every adopted
+        # global fact again, forever.
+        cand["adopted"] = cand["hash"] in (
+            project_seen if _is_project(cand) else global_seen
+        )
         for source in cand["sources"]:
             if source["path"] not in labels:
                 labels[source["path"]] = short_path(source["path"], root)
             source["label"] = labels[source["path"]]
     conflicts(merged)
-    # Rules first, headings last, the project's own files before the global
-    # ones: the reviewer's eye should land on what this project decided.
+    # Best-first: conflicts, then the rows that read most like an instruction,
+    # then the project's own files. `_capped` spends the board on the top.
     merged.sort(key=_review_order)
-    return merged
+    return _capped(merged)
 
 
 def _review_order(cand: dict) -> tuple:
-    rank = {"bullet": 0, "sentence": 1, "heading": 2}.get(cand["kind"], 3)
-    scope = 0 if cand["sources"][0]["scope"] == "project" else 1
-    return (not cand["conflict"], rank, scope, cand["id"])
+    return (
+        not cand["conflict"],
+        cand["adopted"],
+        -cand["score"],
+        0 if _is_project(cand) else 1,
+        cand["id"],
+    )
+
+
+def _capped(rows: list[dict]) -> list[dict]:
+    """Spend the board budget on pending rows, best first.
+
+    An adopted row is kept whatever the budget says: its id is what a second
+    click sends, and dropping it would turn "already adopted" into
+    "unknown candidate".
+    """
+    kept: list[dict] = []
+    per_source: dict[str, int] = {}
+    board = 0
+    for cand in rows:
+        if cand["adopted"]:
+            kept.append(cand)
+            continue
+        if board >= MAX_BOARD:
+            continue
+        source = cand["sources"][0]["path"]
+        if per_source.get(source, 0) >= MAX_PER_SOURCE:
+            continue
+        per_source[source] = per_source.get(source, 0) + 1
+        board += 1
+        kept.append(cand)
+    return kept
 
 
 # ---- adopt -------------------------------------------------------------
@@ -725,13 +879,26 @@ def _source_label(cand: dict, root: Path) -> str:
     return "、".join(labels) if labels else "unknown"
 
 
-def _append(root: Path, items: list[tuple[str, str]]) -> dict:
+def _global_target() -> Path:
+    """Where a global preference goes: the machine's own memory, not a project."""
+    return _user_home() / ".nodus" / "AGENTS.md"
+
+
+def _is_project(cand: dict) -> bool:
+    """One project source is enough: the fact belongs where it was used."""
+    return any(source["scope"] == "project" for source in cand["sources"])
+
+
+def _target(cand: dict, root: Path) -> Path:
+    return root / "AGENTS.md" if _is_project(cand) else _global_target()
+
+
+def _append(path: Path, items: list[tuple[str, str]]) -> dict:
     """Write the facts that are not there yet. Never rewrites other lines.
 
     The section is appended to, not rebuilt: a human's edits above it, the date
     format, the trailing newline — all of it stays exactly as it was.
     """
-    path = root / "AGENTS.md"
     text = _read(path)
     known = _fact_hashes(text)
     fresh: list[str] = []
@@ -763,29 +930,65 @@ def adopt(
     candidate_ids: list[str] | str,
     project_dir: str | os.PathLike[str] | None = None,
 ) -> dict:
-    """Append reviewed candidates to the project's `AGENTS.md`.
+    """Append reviewed candidates to the file that owns them.
 
-    Idempotent: a fact already in the section is skipped, not duplicated. An
-    unknown id is an error rather than a silent no-op, because the usual cause
-    is a stale board whose source file has since changed.
+    A project fact goes into the project's `AGENTS.md`; a global one goes into
+    `~/.nodus/AGENTS.md`, because a preference read out of `~/.codex/AGENTS.md`
+    belongs to the machine, not to whichever project happened to be open.
+
+    Idempotent: a fact already in the target section is counted as `already`,
+    not duplicated and not an error — clicking 采纳 twice is a normal thing to
+    do. An unknown id is still an error, because the usual cause is a stale
+    board whose source file has since changed.
     """
     root = _project(project_dir)
     ids = [candidate_ids] if isinstance(candidate_ids, str) else list(candidate_ids)
     ids = [str(item).strip() for item in ids if str(item).strip()]
+    ids = list(dict.fromkeys(ids))
     if not ids:
         raise ValueError("adopt needs at least one candidate id")
     known = {cand["id"]: cand for cand in harvest(root)}
     missing = [cid for cid in ids if cid not in known]
     if missing:
         raise ValueError("unknown candidate id: " + ", ".join(missing[:5]))
-    chosen = [known[cid] for cid in ids if not known[cid]["adopted"]]
-    result = _append(root, [(cand["text"], _source_label(cand, root)) for cand in chosen])
+
+    targets: list[str] = []
+    groups: dict[str, list[dict]] = {}
+    already: list[str] = []
+    for cid in ids:
+        cand = known[cid]
+        target = str(_target(cand, root))
+        if target not in targets:
+            targets.append(target)
+        if cand["adopted"]:
+            already.append(cid)
+        else:
+            groups.setdefault(target, []).append(cand)
+
+    added: list[str] = []
+    for target, items in groups.items():
+        path = Path(target)
+        # The board may have been rendered before the section was written, so
+        # check the file again: a duplicate here is not an error either.
+        known_hashes = _fact_hashes(_read(path))
+        fresh: list[tuple[str, str]] = []
+        fresh_ids: list[str] = []
+        for cand in items:
+            if cand["hash"] in known_hashes:
+                already.append(cand["id"])
+                continue
+            known_hashes.add(cand["hash"])
+            fresh.append((cand["text"], _source_label(cand, root)))
+            fresh_ids.append(cand["id"])
+        _append(path, fresh)
+        added.extend(fresh_ids)
+
     return {
         "ok": True,
-        "adopted": [cand["id"] for cand in chosen],
-        "path": result["path"],
-        "added": result["added"],
-        "already": result["already"],
+        "adopted": added,
+        "path": "、".join(targets),
+        "added": len(added),
+        "already": len(already),
     }
 
 
@@ -794,7 +997,7 @@ def remember(
     project_dir: str | os.PathLike[str] | None = None,
     source: str = "agent",
 ) -> dict:
-    """One fact, written straight into `AGENTS.md`.
+    """One fact, written straight into the project's `AGENTS.md`.
 
     This is the write path an agent gets through MCP. It is deliberately the
     same file a human edits: nothing lands anywhere else, and `git diff` is the
@@ -804,7 +1007,7 @@ def remember(
     if not body:
         raise ValueError("memory text is empty")
     root = _project(project_dir)
-    result = _append(root, [(body[:MAX_TEXT], source)])
+    result = _append(root / "AGENTS.md", [(body[:MAX_TEXT], source)])
     return {
         "ok": True,
         "text": body[:MAX_TEXT],

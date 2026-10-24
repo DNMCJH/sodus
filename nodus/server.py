@@ -1272,6 +1272,9 @@ def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:
 def _memory_board(limit: int = 300) -> list[dict]:
     """Facts the harnesses wrote down, waiting for a human.
 
+    Only pending rows: an adopted fact is not a decision waiting on anyone, and
+    offering it again is what made a second click look like a failure.
+
     Never fatal: a project with no AGENTS.md, a locked file or a file that is
     not UTF-8 must not take the whole board down for a review widget. An empty
     list is the honest answer there.
@@ -1288,8 +1291,9 @@ def _memory_board(limit: int = 300) -> list[dict]:
             "conflict": row["conflict"],
             "adopted": row["adopted"],
         }
-        for row in rows[:limit]
-    ]
+        for row in rows
+        if not row["adopted"]
+    ][:limit]
 
 
 def board_state(now: float | None = None) -> dict:
@@ -1708,10 +1712,22 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return _json(self, 400, {"error": str(exc)})
             except OSError as exc:
+                _log(f"memory: write failed: {exc}")
                 return _json(self, 409, {"error": f"could not write AGENTS.md: {exc}"})
-            _log(
-                f"memory: adopted {result['added']} fact(s) into {result['path']}"
-            )
+            except Exception as exc:  # noqa: BLE001 - the reply carries the cause
+                # "采纳失败：internal error" is unanswerable. Whatever broke, the
+                # person clicking the button gets the actual message.
+                _log(f"memory: adopt crashed: {type(exc).__name__}: {exc}")
+                return _json(self, 500, {"error": f"{type(exc).__name__}: {exc}"})
+            if result["added"]:
+                _log(f"memory: adopted {result['added']} fact(s) into {result['path']}")
+            elif result["already"]:
+                _log(
+                    f"memory: {result['already']} candidate(s) already adopted in "
+                    f"{result['path']}"
+                )
+            else:
+                _log("memory: nothing to adopt")
             return _json(self, 200, result)
 
         if path.startswith("/runs/") and path.endswith("/stop"):

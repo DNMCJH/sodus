@@ -104,7 +104,7 @@ def test_dsh_home_is_a_source_when_it_is_set(env, monkeypatch):
 # ---- extraction --------------------------------------------------------
 
 
-def test_harvest_reads_bullets_headings_and_imperatives(env):
+def test_harvest_reads_instructions_not_headings(env):
     write(
         env.project / "AGENTS.md",
         "# 标题不算\n\n## 开工顺序\n\n- 读 `INDEX.md` 拿路径\n1. 先跑 pytest\n"
@@ -112,7 +112,8 @@ def test_harvest_reads_bullets_headings_and_imperatives(env):
     )
     rows = memory.harvest(env.project)
     kinds = {row["text"]: row["kind"] for row in rows}
-    assert kinds["开工顺序"] == "heading"
+    # a heading is an outline label; adopting it would copy the outline
+    assert "开工顺序" not in kinds
     assert kinds["读 INDEX.md 拿路径"] == "bullet"
     assert kinds["先跑 pytest"] == "bullet"
     # the sentence is split on 。 and only the imperative half is kept
@@ -120,6 +121,17 @@ def test_harvest_reads_bullets_headings_and_imperatives(env):
     assert "这句是普通描述，抽不出来" not in kinds
     # a level-1 heading is a document title, not a fact
     assert "标题不算" not in kinds
+
+
+def test_descriptions_values_and_headings_are_not_candidates(env):
+    # "这里只回答一个问题…" is what the board was full of: prose about the
+    # document itself, which nobody can adopt. `port: 30874` is a value.
+    write(
+        env.project / "AGENTS.md",
+        "# P\n\n## 边界\n\n这里只回答一个问题：下次开工该知道什么。\n"
+        "- 端口：30874\n- Main workspace: A:\\VScode\\Code\\Projects\n- 先跑 pytest\n",
+    )
+    assert [row["text"] for row in memory.harvest(env.project)] == ["先跑 pytest"]
 
 
 def test_harvest_skips_checkbox_templates_and_placeholders(env):
@@ -207,7 +219,7 @@ def test_a_negation_elsewhere_in_the_line_is_not_a_conflict(env):
     # reader's conclusion rather than about using grep.
     write(
         env.project / "AGENTS.md",
-        "- 这里没有挂载外部目录，grep 只扫工作区，别误判成文件不存在\n"
+        "- 没有挂载外部目录，grep 只扫工作区，别误判成文件不存在\n"
         "- After sync, run remote grep key logic.\n",
     )
     rows = memory.harvest(env.project)
@@ -227,11 +239,26 @@ def test_adopt_appends_the_fact_with_date_and_source(env):
     result = memory.adopt([_only(env.project, "构建用 pnpm")["id"]], env.project)
 
     assert result["added"] == 1
-    text = (env.project / "AGENTS.md").read_text(encoding="utf-8")
+    target = env.home / ".nodus" / "AGENTS.md"
+    assert result["path"] == str(target)
+    text = target.read_text(encoding="utf-8")
     assert "## 已验证事实" in text
     assert f"- {TODAY}（来源 ~/.codex/AGENTS.md）构建用 pnpm" in text
+    # a global preference never lands in a project's file
+    project_text = (env.project / "AGENTS.md").read_text(encoding="utf-8")
+    assert project_text == "# 项目\n\n## 边界\n\n- 不复制源码进来\n"
     # the human's own section is untouched
-    assert "## 边界\n\n- 不复制源码进来" in text
+    assert "## 边界\n\n- 不复制源码进来" in project_text
+
+
+def test_a_project_fact_goes_to_the_project_file_only(env):
+    write(env.project / "sub" / "AGENTS.md", "- 提交信息用中文\n")
+    result = memory.adopt([_only(env.project, "提交信息用中文")["id"]], env.project)
+
+    assert result["path"] == str(env.project / "AGENTS.md")
+    text = (env.project / "AGENTS.md").read_text(encoding="utf-8")
+    assert f"- {TODAY}（来源 sub/AGENTS.md）提交信息用中文" in text
+    assert not (env.home / ".nodus" / "AGENTS.md").exists()
 
 
 def test_adopt_names_every_source_of_a_merged_fact(env):
@@ -250,15 +277,17 @@ def test_adopting_twice_does_not_write_twice(env):
 
     second = memory.adopt([cand["id"]], env.project)
     assert second["added"] == 0
+    assert second["already"] == 1
     assert (env.project / "AGENTS.md").read_text(encoding="utf-8") == after_first
 
 
-def test_adopt_creates_agents_md_and_the_section(env):
+def test_adopt_creates_the_global_file_for_a_global_fact(env):
     write(env.home / ".codex" / "AGENTS.md", "- 提交信息用中文\n")
     memory.adopt([_only(env.project, "提交信息用中文")["id"]], env.project)
-    text = (env.project / "AGENTS.md").read_text(encoding="utf-8")
+    text = (env.home / ".nodus" / "AGENTS.md").read_text(encoding="utf-8")
     assert text.startswith("## 已验证事实")
     assert "提交信息用中文" in text
+    assert not (env.project / "AGENTS.md").exists()
 
 
 def test_adopt_refuses_an_unknown_id(env):
@@ -280,7 +309,46 @@ def test_the_line_adopt_wrote_does_not_come_back_as_a_new_candidate(env):
     rows = memory.harvest(env.project)
     assert [row["text"] for row in rows] == ["构建用 pnpm"]
     assert rows[0]["adopted"] is True
-    assert len(rows[0]["sources"]) == 2
+    # the written line is skipped, not re-read as a second source
+    assert len(rows[0]["sources"]) == 1
+    assert not (env.project / "AGENTS.md").exists()
+
+
+def test_a_fact_line_is_skipped_even_without_its_source(env):
+    # The marker alone is enough: `（来源 …）` is what `adopt` writes, and
+    # reading it back is how an adopted fact became a candidate again.
+    write(
+        env.project / "AGENTS.md",
+        f"## 已验证事实\n\n- {TODAY}（来源 AGENTS.md）构建用 pnpm\n\n"
+        "## 边界\n\n- 先跑 pytest\n",
+    )
+    assert [row["text"] for row in memory.harvest(env.project)] == ["先跑 pytest"]
+
+
+def test_a_second_click_on_an_adopted_id_says_already(env):
+    write(env.project / "AGENTS.md", "- 构建用 pnpm\n")
+    cand = _only(env.project, "构建用 pnpm")
+    first = memory.adopt([cand["id"]], env.project)
+    second = memory.adopt([cand["id"]], env.project)
+    assert (first["added"], first["already"]) == (1, 0)
+    assert (second["added"], second["already"], second["ok"]) == (0, 1, True)
+
+
+# ---- the board budget ---------------------------------------------------
+
+
+def test_the_source_budget_keeps_the_rows_that_read_like_orders(env, monkeypatch):
+    monkeypatch.setattr(memory, "MAX_PER_SOURCE", 1)
+    monkeypatch.setattr(memory, "MAX_BOARD", 10)
+    write(env.project / "AGENTS.md", "- 构建用 pnpm\n- 先跑 pytest\n")
+    assert [row["text"] for row in memory.harvest(env.project)] == ["先跑 pytest"]
+
+
+def test_the_board_budget_spans_every_source(env, monkeypatch):
+    monkeypatch.setattr(memory, "MAX_BOARD", 2)
+    write(env.project / "AGENTS.md", "- 先跑 pytest\n- 提交前跑 pytest -q\n")
+    write(env.home / ".codex" / "AGENTS.md", "- 构建用 pnpm\n- 发布前打 tag\n")
+    assert len(memory.harvest(env.project)) == 2
 
 
 # ---- verified_facts / remember ----------------------------------------
@@ -352,6 +420,16 @@ def board_server(env, monkeypatch):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read() or b"{}")
 
+    def get(path: str, token: str = "") -> tuple[int, dict]:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        request = urllib.request.Request(base + path, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read() or b"{}")
+
+    post.get = get
     try:
         yield post
     finally:
@@ -375,11 +453,14 @@ def test_http_adopt_writes_the_fact_and_is_idempotent(env, board_server):
 
     status, body = board_server("/memory/adopt", {"ids": [cand["id"]]}, token=token)
     assert (status, body["added"]) == (200, 1)
-    assert body["path"] == str(env.project / "AGENTS.md")
-    assert "构建用 pnpm" in (env.project / "AGENTS.md").read_text(encoding="utf-8")
+    target = env.home / ".nodus" / "AGENTS.md"
+    assert body["path"] == str(target)
+    assert "构建用 pnpm" in target.read_text(encoding="utf-8")
+    # the project file is not created for a global fact
+    assert not (env.project / "AGENTS.md").exists()
 
     status, body = board_server("/memory/adopt", {"ids": [cand["id"]]}, token=token)
-    assert (status, body["added"]) == (200, 0)
+    assert (status, body["added"], body["already"]) == (200, 0, 1)
 
 
 def test_http_adopt_rejects_a_bad_request(env, board_server):
@@ -387,6 +468,48 @@ def test_http_adopt_rejects_a_bad_request(env, board_server):
     assert board_server("/memory/adopt", {"ids": []}, token=token)[0] == 400
     assert board_server("/memory/adopt", {"ids": ["nope"]}, token=token)[0] == 400
     assert board_server("/memory/adopt", {"ids": ["mem-0000000000"]}, token=token)[0] == 400
+
+
+def test_http_adopt_reports_the_actual_error(env, board_server, monkeypatch):
+    write(env.project / "AGENTS.md", "- 构建用 pnpm\n")
+    cand = _only(env.project, "构建用 pnpm")
+
+    def broken(ids, project_dir=None):
+        raise RuntimeError("disk is on fire")
+
+    monkeypatch.setattr(memory, "adopt", broken)
+    status, body = board_server(
+        "/memory/adopt", {"ids": [cand["id"]]}, token=config.token()
+    )
+    assert status == 500
+    assert "disk is on fire" in body["error"]
+
+
+def test_http_adopt_reports_a_write_failure(env, board_server, monkeypatch):
+    write(env.project / "AGENTS.md", "- 构建用 pnpm\n")
+    cand = _only(env.project, "构建用 pnpm")
+
+    def readonly(ids, project_dir=None):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(memory, "adopt", readonly)
+    status, body = board_server(
+        "/memory/adopt", {"ids": [cand["id"]]}, token=config.token()
+    )
+    assert status == 409
+    assert "read-only file system" in body["error"]
+
+
+def test_the_board_lists_only_pending_candidates(env, board_server):
+    write(env.project / "AGENTS.md", "- 构建用 pnpm\n- 先跑 pytest\n")
+    memory.adopt([_only(env.project, "构建用 pnpm")["id"]], env.project)
+
+    status, body = board_server.get("/board", config.token())
+    assert status == 200
+    texts = [row["text"] for row in body["memory_candidates"]]
+    assert "构建用 pnpm" not in texts
+    assert "先跑 pytest" in texts
+
 
 
 # ---- which project -----------------------------------------------------

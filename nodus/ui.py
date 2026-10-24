@@ -266,7 +266,7 @@ PAGE = """<!doctype html>
     <div id="blocked" class="stack"></div>
   </section>
   <section id="memory-sec" hidden>
-    <div class="sec-head"><h2>记忆待审</h2><span class="sec-note">从 CLAUDE.md / AGENTS.md 抽出来的事实，采纳才写进项目 AGENTS.md</span><span class="count" id="memory-n"></span></div>
+    <div class="sec-head"><h2>记忆待审</h2><span class="sec-note">从 CLAUDE.md / AGENTS.md 抽出来的指令，项目来源写进项目 AGENTS.md，全局来源写进 ~/.nodus/AGENTS.md</span><span class="count" id="memory-n"></span></div>
     <div id="memory"></div>
   </section>
   <section>
@@ -685,7 +685,7 @@ function renderMemory() {
   sec.hidden = false;
   const conflicts = rows.filter(c => c.conflict).length;
   $("memory-n").textContent = rows.length + " 条" + (conflicts ? " · " + conflicts + " 条冲突" : "");
-  const head = `<div class="mem-head"><span>这些已经写在 harness 自己的记忆文件里，采纳后追加到 AGENTS.md 的「已验证事实」，带日期和来源。</span>
+  const head = `<div class="mem-head"><span>这些是 harness 记忆文件里像指令的条目。项目来源采纳进项目 AGENTS.md，全局来源进 ~/.nodus/AGENTS.md，带日期和来源。</span>
     <button class="primary" onclick="adoptMemory(null)">全部采纳</button></div>`;
   const body = rows.map(c => `<div class="mem-row">
       <div><div class="mem-text">${esc(c.text)}</div>
@@ -700,11 +700,15 @@ async function adoptMemory(id) {
   const pending = ((state.board || {}).memory_candidates || []).filter(c => !c.adopted);
   const ids = id ? [id] : pending.map(c => c.id);
   if (!ids.length) return;
-  const what = id ? "把这一条写进项目 AGENTS.md？" : `把全部 ${ids.length} 条写进项目 AGENTS.md？`;
-  if (!confirm(what + "\\n\\n会修改 AGENTS.md 的「已验证事实」小节；重复的不会写第二遍。")) return;
+  const what = id ? "采纳这一条？" : `采纳全部 ${ids.length} 条？`;
+  if (!confirm(what + "\\n\\n项目来源写进项目 AGENTS.md，全局来源写进 ~/.nodus/AGENTS.md；重复的不会写第二遍。")) return;
   try {
     const r = await api("/memory/adopt", "POST", { ids });
-    flash(r.added ? "已采纳 " + r.added + " 条，写进 " + r.path : "这些已经在 AGENTS.md 里了");
+    // A second click is not a failure: the API answers `already` instead of
+    // erroring, and the person who clicked needs to see that nothing broke.
+    if (r.added) flash("已采纳 " + r.added + " 条 → " + r.path);
+    else if (r.already) flash("已采纳（这 " + r.already + " 条之前就写过了，没有重复写）");
+    else flash("没有可采纳的条目");
     refresh();
   } catch (e) { flash("采纳失败：" + e.message, true); }
 }
