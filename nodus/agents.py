@@ -57,6 +57,12 @@ class AgentSpec:
     fork_mode: str = ""
     #: a local gateway tails this CLI's session files and can price each call
     gateway_sessions: bool = False
+    #: does this CLI read the project's instruction files itself?
+    #: Claude Code reads CLAUDE.md, Codex/DSH/opencode read AGENTS.md, so the
+    #: brief does not need to repeat the project's confirmed facts — that is
+    #: paid prompt on every attempt. A harness that ignores those files sets
+    #: this to False and the runner injects `## 已验证事实` instead.
+    reads_memory_files: bool = True
 
     def accepts_protocol(self, protocol: str) -> bool:
         return protocol in self.accepts

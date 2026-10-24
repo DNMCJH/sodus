@@ -17,7 +17,7 @@ EXPECTED_TOOLS = {
     "nodus_proposals",
     "nodus_cost_today",
     "nodus_memory_remember",
-    "nodus_memory_recall",
+    "nodus_memory_candidates",
 }
 
 

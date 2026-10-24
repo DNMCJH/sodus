@@ -43,6 +43,7 @@ tags:
   - name: runs
   - name: pipelines
   - name: proposals
+  - name: memory
   - name: events
 paths:
   /:
@@ -737,6 +738,48 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /memory/adopt:
+    post:
+      tags: [memory]
+      operationId: adoptMemoryCandidates
+      summary: 采纳候选事实，追加进项目 AGENTS.md
+      description: |
+        把人审过的候选追加到项目根 `AGENTS.md` 的 `## 已验证事实` 小节，格式为
+        `- YYYY-MM-DD（来源 <文件>）<事实>`。重复采纳同一条不会写第二遍，
+        文件里已有的内容一行不动。候选来自 `nodus debug memory harvest`，
+        或 `/board` 的 `memory_candidates`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemoryAdoptRequest'
+      responses:
+        '200':
+          description: 采纳结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryAdoptResult'
+        '400':
+          description: id 列表为空、格式不对，或 id 已经不存在（源文件改过了）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: AGENTS.md 写不进去（只读、被占用）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /events:
     get:
       tags: [events]
@@ -863,6 +906,81 @@ components:
       type: object
       description: 资源不存在时接口返回的空对象
       maxProperties: 0
+
+    MemorySource:
+      type: object
+      additionalProperties: false
+      required: [path, scope, harness]
+      properties:
+        path:
+          type: string
+          description: 记忆文件绝对路径
+        scope:
+          type: string
+          enum: [project, global]
+        harness:
+          type: string
+          enum: [claude, codex, dsh, other]
+          description: 按文件名和所在目录猜的归属，`other` 表示猜不出来
+
+    MemoryCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, text, sources, conflict, adopted]
+      description: |
+        从 harness 自己的记忆文件里抽出来的一条事实。`id` 由归一化文本的哈希
+        得到，源文件不变时跨调用稳定，采纳时用它。`adopted` 表示这条已经出现在
+        项目 AGENTS.md 的「已验证事实」小节里。
+      properties:
+        id:
+          type: string
+          examples: ['mem-0123456789']
+        text:
+          type: string
+        sources:
+          type: array
+          description: 同一条事实出现在几个文件里就列几个
+          items:
+            $ref: '#/components/schemas/MemorySource'
+        conflict:
+          type: boolean
+          description: 同主题下有另一种相反说法；规则很粗，看之前先读两条原文
+        adopted:
+          type: boolean
+
+    MemoryAdoptRequest:
+      type: object
+      additionalProperties: false
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            pattern: '^mem-[0-9a-f]{6,40}$'
+
+    MemoryAdoptResult:
+      type: object
+      additionalProperties: false
+      required: [ok, adopted, path, added, already]
+      properties:
+        ok:
+          type: boolean
+        adopted:
+          type: array
+          description: 这次处理的 id；已经采纳过的不再出现
+          items:
+            type: string
+        path:
+          type: string
+          description: 写入的 AGENTS.md 绝对路径
+        added:
+          type: integer
+          description: 真正追加的行数
+        already:
+          type: integer
+          description: 因为已经存在而跳过的条数
 
     Health:
       type: object
@@ -1604,7 +1722,8 @@ components:
       type: object
       additionalProperties: false
       required: [now, day, profile, running, decisions, decision_counts, unverified_runs,
-                 needs_you, auto_recovering, deterministic, history_failures, today]
+                 needs_you, auto_recovering, deterministic, history_failures,
+                 memory_candidates, today]
       properties:
         now:
           type: number
@@ -1648,5 +1767,12 @@ components:
           description: 已经重试过 / 任务另有在跑 / 太旧，不再自动重试的失败；折叠展示
           items:
             $ref: '#/components/schemas/DecisionContext'
+        memory_candidates:
+          type: array
+          description: |
+            从各 harness 记忆文件抽出来的候选事实，等人采纳。只有人能采纳；
+            页面在全部采纳完（或本来就没有）时整块不显示。
+          items:
+            $ref: '#/components/schemas/MemoryCandidate'
         today:
           $ref: '#/components/schemas/Today'

@@ -21,6 +21,7 @@ from . import (
     config,
     db,
     jobs,
+    memory,
     pet,
     profiles,
     propose,
@@ -1268,6 +1269,29 @@ def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:
     }
 
 
+def _memory_board(limit: int = 300) -> list[dict]:
+    """Facts the harnesses wrote down, waiting for a human.
+
+    Never fatal: a project with no AGENTS.md, a locked file or a file that is
+    not UTF-8 must not take the whole board down for a review widget. An empty
+    list is the honest answer there.
+    """
+    try:
+        rows = memory.harvest(memory.saved_project())
+    except Exception:  # noqa: BLE001 - the board outranks this section
+        return []
+    return [
+        {
+            "id": row["id"],
+            "text": row["text"],
+            "sources": row["sources"],
+            "conflict": row["conflict"],
+            "adopted": row["adopted"],
+        }
+        for row in rows[:limit]
+    ]
+
+
 def board_state(now: float | None = None) -> dict:
     """The first screen: what is running, what waits on a human, today's money.
 
@@ -1275,6 +1299,9 @@ def board_state(now: float | None = None) -> dict:
     desktop pet read them. The recovery-era screen reads three newer fields:
     `needs_you` (a human decision), `auto_recovering` (the machine is already
     on it) and `deterministic` (retrying cannot help; fix the cause).
+
+    `memory_candidates` is the other kind of human decision: facts harvested
+    from the harnesses' own memory files, which only a person may adopt.
     """
     _fresh_cache()
     now = time.time() if now is None else now
@@ -1312,6 +1339,7 @@ def board_state(now: float | None = None) -> dict:
         "auto_recovering": auto_recovering,
         "deterministic": deterministic,
         "history_failures": history_failures,
+        "memory_candidates": _memory_board(),
         "today": {"window_start": start, "budget": budget_mod.check(now), **today},
     }
 
@@ -1665,6 +1693,26 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
             return _json(self, 201, run)
+
+        if path == "/memory/adopt":
+            ids = body.get("ids")
+            if isinstance(ids, str):
+                ids = [ids]
+            if not isinstance(ids, list) or not ids:
+                return _json(self, 400, {"error": "ids must be a non-empty list"})
+            ids = [str(item).strip() for item in ids if str(item).strip()]
+            if not all(re.fullmatch(r"mem-[0-9a-f]{6,40}", item) for item in ids):
+                return _json(self, 400, {"error": "invalid candidate id"})
+            try:
+                result = memory.adopt(ids, memory.saved_project())
+            except ValueError as exc:
+                return _json(self, 400, {"error": str(exc)})
+            except OSError as exc:
+                return _json(self, 409, {"error": f"could not write AGENTS.md: {exc}"})
+            _log(
+                f"memory: adopted {result['added']} fact(s) into {result['path']}"
+            )
+            return _json(self, 200, result)
 
         if path.startswith("/runs/") and path.endswith("/stop"):
             rid = path.split("/")[2]

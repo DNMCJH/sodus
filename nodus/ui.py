@@ -182,6 +182,22 @@ PAGE = """<!doctype html>
   .unv-row button { margin-left:auto; flex:none; }
   .more-inline { color:var(--dim); font-size:12.5px; padding:10px 2px 0; }
   .more-inline button { margin-left:6px; height:26px; }
+  /* memory review: one line per fact, the sources in small print, and nothing
+     but an adopt button. The section stays hidden when there is no candidate. */
+  .mem-list { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+              max-height:440px; overflow:auto; }
+  .mem-head { display:flex; align-items:center; gap:12px; padding:10px 14px;
+              border-bottom:1px solid var(--line-soft); font-size:12.5px; color:var(--dim); }
+  .mem-head button { margin-left:auto; height:26px; }
+  .mem-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:12px;
+             align-items:center; padding:9px 14px; border-bottom:1px solid var(--line-soft); }
+  .mem-row:last-child { border-bottom:0; }
+  .mem-text { color:var(--text-2); font-size:13px; line-height:1.45; }
+  .mem-src { color:var(--faint); font-size:11.5px; margin-top:2px; }
+  .mem-flag { color:#e8c07a; border:1px solid rgba(224,163,64,.32);
+              background:rgba(224,163,64,.08); border-radius:999px; padding:1px 8px;
+              font-size:11.5px; white-space:nowrap; }
+  .mem-row button { height:26px; }
   #evidence { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
               padding:14px 16px; margin-top:12px; display:none; }
   #evidence h3 { margin:0 0 8px; font-size:13px; font-weight:600; }
@@ -248,6 +264,10 @@ PAGE = """<!doctype html>
   <section id="blocked-sec" hidden>
     <div class="sec-head"><h2>不会自动重试</h2><span class="sec-note">这些错误改参数、换密钥或换模型之后才能继续</span><span class="count" id="blocked-n"></span></div>
     <div id="blocked" class="stack"></div>
+  </section>
+  <section id="memory-sec" hidden>
+    <div class="sec-head"><h2>记忆待审</h2><span class="sec-note">从 CLAUDE.md / AGENTS.md 抽出来的事实，采纳才写进项目 AGENTS.md</span><span class="count" id="memory-n"></span></div>
+    <div id="memory"></div>
   </section>
   <section>
     <div class="sec-head"><h2>今天的钱</h2><span class="sec-note">账单原值，不换算汇率</span></div>
@@ -649,8 +669,47 @@ function renderTodo() {
 let historyOpen = false;
 function toggleHistory() { historyOpen = !historyOpen; renderTodo(); }
 
-function renderMoney(t) {
-  t = t || {};
+// Facts are harvested from the harnesses' own files; adopting appends them to
+// the project's AGENTS.md. An empty list hides the whole section: "no pending
+// memory" is not a task, and a line saying so would just be furniture.
+function srcLabel(s) {
+  // The daemon already shortened the path against the project (`AGENTS.md`,
+  // `~/.codex/AGENTS.md`); the harness name is in the label or implied by it.
+  return s.label || tailPath(s.path || "");
+}
+
+function renderMemory() {
+  const rows = ((state.board || {}).memory_candidates || []).filter(c => !c.adopted);
+  const sec = $("memory-sec");
+  if (!rows.length) { sec.hidden = true; $("memory").innerHTML = ""; return; }
+  sec.hidden = false;
+  const conflicts = rows.filter(c => c.conflict).length;
+  $("memory-n").textContent = rows.length + " 条" + (conflicts ? " · " + conflicts + " 条冲突" : "");
+  const head = `<div class="mem-head"><span>这些已经写在 harness 自己的记忆文件里，采纳后追加到 AGENTS.md 的「已验证事实」，带日期和来源。</span>
+    <button class="primary" onclick="adoptMemory(null)">全部采纳</button></div>`;
+  const body = rows.map(c => `<div class="mem-row">
+      <div><div class="mem-text">${esc(c.text)}</div>
+        <div class="mem-src">${(c.sources || []).map(s => esc(srcLabel(s))).join(" · ")}</div></div>
+      <div>${c.conflict ? '<span class="mem-flag" title="同主题下另有一条相反的说法，采纳前先看两条">冲突</span>' : ""}</div>
+      <div><button onclick="adoptMemory('${esc(c.id)}')">采纳</button></div>
+    </div>`).join("");
+  $("memory").innerHTML = `<div class="mem-list">${head}${body}</div>`;
+}
+
+async function adoptMemory(id) {
+  const pending = ((state.board || {}).memory_candidates || []).filter(c => !c.adopted);
+  const ids = id ? [id] : pending.map(c => c.id);
+  if (!ids.length) return;
+  const what = id ? "把这一条写进项目 AGENTS.md？" : `把全部 ${ids.length} 条写进项目 AGENTS.md？`;
+  if (!confirm(what + "\\n\\n会修改 AGENTS.md 的「已验证事实」小节；重复的不会写第二遍。")) return;
+  try {
+    const r = await api("/memory/adopt", "POST", { ids });
+    flash(r.added ? "已采纳 " + r.added + " 条，写进 " + r.path : "这些已经在 AGENTS.md 里了");
+    refresh();
+  } catch (e) { flash("采纳失败：" + e.message, true); }
+}
+
+function renderMoney(t) {  t = t || {};
   const runs = t.runs || 0;
   const agents = t.by_agent || [];
   let html = "";
@@ -908,7 +967,7 @@ async function refresh() {
     state.proposals = proposals;
     state.pipelines = pipelines;
     state.tasks = tasks;
-    renderHeader(); renderLive(); renderTodo(); renderMoney(board.today);
+    renderHeader(); renderLive(); renderTodo(); renderMemory(); renderMoney(board.today);
     renderUsage(board.today);
     renderRuns(); renderProposals();
   } catch (e) {

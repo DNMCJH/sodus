@@ -543,17 +543,19 @@ class Runner:
         run_dir.mkdir(parents=True, exist_ok=True)
         record = db.get_run(rid)
         note = record.get("note") or ""
+        # Memory reaches the worker through the project's AGENTS.md, which every
+        # CLI here already reads. Repeating it in the prompt was paid on every
+        # attempt and duplicated what the file says. Only a harness that declares
+        # it does not read those files gets the facts inline.
         known = (
-            memory.context_for(
-                task.get("goal") or task.get("title") or "", agent=spec.name
-            )
-            if include_memory
+            memory.verified_facts(workdir)
+            if include_memory and not spec.reads_memory_files
             else ""
         )
         if session_id:
             # Resuming: the session already carries its own history, so send the
             # instruction verbatim instead of wrapping it in a fresh task brief.
-            # Remembered facts still go in — they are project state, not
+            # Injected facts still go in — they are project state, not
             # conversation state, and the resumed worker is as blind as a fresh
             # one to anything confirmed after its last turn.
             prompt = note

@@ -62,15 +62,15 @@ session ──resume──> session ──branch──> session
 
 ```
 1. assess(task)                 ← 难度与类型
-2. memory.context_for(task)     ← 项目/私有/公开 三层里相关的几条
+2. memory.harvest(project)      ← 各 harness 的 CLAUDE.md / AGENTS.md 里抽出来的候选事实
 3. recommend(assess)            ← 路由建议（有评测数据时用数据）
-4. dispatch（brief = 任务 + 记忆 + 约束）
+4. dispatch（brief = 任务 + 约束；会读文件的 harness 不再重复注入记忆）
 5. verify（测试 exit code + 文件 hash）  ← 唯一的判决
 6. record（判断、成本、结果、耗时）
-7. distill                      ← 把"这次学到的事实"写回记忆（需人工或规则确认）
+7. adopt                        ← 人看板审核后写进项目 AGENTS.md 的「已验证事实」
 ```
 
-第 7 步是现在还空着的一环。要小心：**自动把 agent 的自述写成记忆，等于把错误固化**。规则应该是——只有满足可验证条件的结论才自动写入（测试绿了、命令跑通了、路径确认存在），其余靠人确认。
+第 7 步是这版的重点，而且**采纳这一下必须是人**。要小心：自动把 agent 的自述写成记忆，等于把错误固化。所以 `remember` 只写人被要求写的那一条，`harvest` 抽出来的候选一律先上板，等人点。
 
 ## 五、当前进度（诚实版）
 
@@ -78,12 +78,18 @@ session ──resume──> session ──branch──> session
 |---|---|
 | 能力路由 | 在写（`policy.py`）——先规则+Jev 复核，评测数据后接 |
 | 评测集 | 在写（`eval/tasks` + `nodus bench`）——6 个带隐藏测试的任务 |
-| 记忆三层 | 在写（`memory.py` + 注入 + MCP 工具） |
+| 记忆汇总 | 在写（`memory.py`：sources / harvest / conflicts / adopt + 看板审核） |
 | 会话血缘 | **未开始**，只有设计 |
-| 自动蒸馏记忆 | **未开始**，且刻意保守（只写可验证结论） |
+| 自动蒸馏记忆 | **未开始**，且刻意保守：规则只负责"找出来"，写不写由人点 |
+
+> 记忆不再有 SQLite 表。事实写在项目 `AGENTS.md` 的「已验证事实」里，带日期和来源；
+> 旧的三档（private/project/public）、`context_for` 注入和 `nodus memory add/recall`
+> 随这次改动删掉了。会读文件的 harness（claude/codex/dsh/opencode）不再需要注入，
+> 只有 `AgentSpec.reads_memory_files=False` 的路由才把这一节塞进 brief。
 
 ## 六、边界
 
 - 记忆和血缘都是**基础设施**，没有评测数据支撑的路由策略就是感觉，别急着上
-- 记忆注入会拉长 brief、增加成本，要有上限（默认 5 条、总字符数封顶）
-- 三档隔离做错比不做更糟：`private` 泄漏等于把 A 的失败经验喂给 B 当事实
+- 汇总会抽出重复和噪音：规则只认得列表项、小节标题和祈使句，抽不到的事实就是抽不到，
+  别指望它代替人读一遍（冲突检测更粗，见 `memory.py` 的说明）
+- 全局文件里的规则一旦被采纳进项目 `AGENTS.md`，对三方同时生效；采纳前确认它真的适用于这个项目

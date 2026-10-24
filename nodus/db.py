@@ -133,24 +133,9 @@ CREATE TABLE IF NOT EXISTS pipeline (
   started_at REAL,
   ended_at REAL
 );
--- Memory is a confirmed fact, not a transcript. `scope` is the audience:
--- private = exactly one agent, project = this workspace, public = everyone.
--- `workspace_id` is only meaningful for project rows; private follows the agent.
-CREATE TABLE IF NOT EXISTS memory (
-  id TEXT PRIMARY KEY,
-  scope TEXT DEFAULT 'project',
-  key TEXT,
-  text TEXT,
-  tags TEXT,
-  agent TEXT,
-  created_at REAL,
-  updated_at REAL,
-  source_run TEXT,
-  source_session TEXT,
-  workspace_id TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory(scope, workspace_id, agent);
-CREATE INDEX IF NOT EXISTS idx_memory_key ON memory(scope, workspace_id, agent, key);
+-- Memory is not a table. Confirmed facts are appended to the project's
+-- AGENTS.md, where a human can read them, diff them and revert them
+-- (`memory.py`); `connect()` drops the old rows this table used to hold.
 """
 
 
@@ -219,12 +204,20 @@ def connect() -> sqlite3.Connection:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(artifact)")}
     if "rel_path" not in cols:
         conn.execute("ALTER TABLE artifact ADD COLUMN rel_path TEXT")
-    # Same incremental rule for memory: an early build of this table shipped
-    # without the ownership columns, and adding them is cheap next to a rebuild.
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(memory)")}
-    for column in ("agent", "tags", "source_session"):
-        if column not in cols:
-            conn.execute(f"ALTER TABLE memory ADD COLUMN {column} TEXT")
+    # The SQLite memory store is gone: a fact belongs in AGENTS.md now, where
+    # `memory.adopt` can date it and a human can revert it. Rows an older build
+    # wrote are copied out before the table is dropped, so an upgrade never
+    # silently deletes somebody's notes.
+    legacy = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory'"
+    ).fetchone()
+    if legacy:
+        rows = [dict(row) for row in conn.execute("SELECT * FROM memory").fetchall()]
+        if rows:
+            (config.HOME / "memory-legacy.json").write_text(
+                json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        conn.execute("DROP TABLE memory")
     conn.execute(
         "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', '1')"
     )

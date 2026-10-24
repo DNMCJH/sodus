@@ -123,9 +123,10 @@ TOOLS: list[dict] = [
     {
         "name": "nodus_memory_remember",
         "description": (
-            "记下一条本可以下次派活时直接说的话。scope：private 只属于一个 agent，"
-            "project 只属于当前 workspace，public 全局共享。同一个 key 再写会覆盖旧值"
-            "（updated_at 更新），所以 key 是「这条事实的名字」，不是正文。"
+            "把一条确认过的事实写进当前项目 AGENTS.md 的「已验证事实」小节，"
+            "带日期和来源。不是另开一个存储：写的就是人和其它 harness 都读的那个文件，"
+            "重复写同一条不会追加第二次。项目目录按 NODUS_PROJECT / config 的 "
+            "project_dir / 当前工作目录的顺序确定。"
         ),
         "inputSchema": _schema(
             {
@@ -133,46 +134,37 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "description": "一条自包含的事实，例如「构建脚本统一用 pnpm」",
                 },
-                "scope": {
+                "source": {
                     "type": "string",
-                    "enum": list(memory.SCOPES),
-                    "default": "project",
-                    "description": "可见范围，默认 project",
+                    "description": "来源标记，默认 agent；会写进括号里",
                 },
-                "key": {
-                    "type": "string",
-                    "description": "稳定名字；同 scope 同 owner 下覆盖旧值",
-                },
-                "tags": {"type": "string", "description": "逗号分隔，提高 recall 命中"},
-                "agent": {
-                    "type": "string",
-                    "description": "私有记忆的归属 agent；scope=private 时必填",
-                },
-                "run_id": {"type": "string", "description": "这条事实来自哪次执行"},
             },
             ("text",),
         ),
     },
     {
-        "name": "nodus_memory_recall",
+        "name": "nodus_memory_candidates",
         "description": (
-            "按关键词查记忆，命中词多的排前面。private 记忆只有同一个 agent 读得到，"
-            "换一个 agent 调用就看不到。query 为空时按更新时间倒序。"
+            "只读：列出各 harness 记忆文件（CLAUDE.md / AGENTS.md）里抽出来的候选事实，"
+            "带来源路径、是否与另一条冲突、是否已采纳。"
+            "采纳是人做的（看看板 / nodus debug memory adopt），agent 不能替人决定。"
         ),
         "inputSchema": _schema(
             {
-                "query": {"type": "string", "description": "关键词，空格分隔多个词"},
-                "scope": {
+                "project": {
                     "type": "string",
-                    "enum": list(memory.SCOPES),
-                    "description": "只看某一档；不传则含 project + public + 自己的 private",
+                    "description": "项目目录；不传则用 NODUS_PROJECT / project_dir / cwd",
                 },
-                "agent": {"type": "string", "description": "调用方 agent，决定私有记忆可见性"},
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 50,
-                    "default": 5,
+                    "maximum": 500,
+                    "default": 50,
+                },
+                "conflicts_only": {
+                    "type": "boolean",
+                    "description": "只看互相冲突的候选",
+                    "default": False,
                 },
             }
         ),
@@ -378,37 +370,41 @@ def _cost_today(args: dict) -> dict:
 
 def _memory_remember(args: dict) -> dict:
     text = _string(args, "text")
-    scope = _string(args, "scope", required=False, default="project") or "project"
-    key = _string(args, "key", required=False)
-    tags = _string(args, "tags", required=False)
-    agent = _string(args, "agent", required=False)
-    run_id = _string(args, "run_id", required=False)
+    source = _string(args, "source", required=False, default="agent") or "agent"
     _no_extra(args)
     try:
-        row = memory.remember(
-            text,
-            scope=scope,
-            key=key,
-            tags=tags,
-            agent=agent,
-            run_id=run_id,
-        )
-    except ValueError as exc:
+        return memory.remember(text, source=source)
+    except (ValueError, OSError) as exc:
         raise ToolError(str(exc)) from None
-    return row
 
 
-def _memory_recall(args: dict) -> dict:
-    query = _string(args, "query", required=False)
-    scope = _string(args, "scope", required=False)
-    agent = _string(args, "agent", required=False)
-    limit = _integer(args, "limit", default=5)
+def _memory_candidates(args: dict) -> dict:
+    project = _string(args, "project", required=False)
+    limit = _integer(args, "limit", default=50)
+    conflicts_only = _boolean(args, "conflicts_only", default=False)
     _no_extra(args)
     try:
-        rows = memory.recall(query, scope=scope or None, agent=agent, limit=limit)
-    except ValueError as exc:
+        rows = memory.harvest(project or None)
+    except OSError as exc:
         raise ToolError(str(exc)) from None
-    return {"count": len(rows), "memories": rows}
+    if conflicts_only:
+        rows = [row for row in rows if row["conflict"]]
+    rows = rows[: max(0, limit)]
+    return {
+        "count": len(rows),
+        "project": memory.project_root(project or None),
+        "candidates": [
+            {
+                "id": row["id"],
+                "text": row["text"],
+                "sources": row["sources"],
+                "conflict": row["conflict"],
+                "adopted": row["adopted"],
+            }
+            for row in rows
+        ],
+        "adopt_hint": "采纳由人做：看看板「记忆待审」或 nodus debug memory adopt <id>",
+    }
 
 
 _HANDLERS: dict[str, Callable[[dict], dict]] = {
@@ -418,7 +414,7 @@ _HANDLERS: dict[str, Callable[[dict], dict]] = {
     "nodus_proposals": _proposals,
     "nodus_cost_today": _cost_today,
     "nodus_memory_remember": _memory_remember,
-    "nodus_memory_recall": _memory_recall,
+    "nodus_memory_candidates": _memory_candidates,
 }
 
 

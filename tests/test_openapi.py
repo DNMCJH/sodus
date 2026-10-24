@@ -100,6 +100,7 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/proposals"),
         ("post", "/proposals/{id}/merge"),
         ("post", "/proposals/{id}/reject"),
+        ("post", "/memory/adopt"),
         ("get", "/events"),
     }
     actual = {
@@ -116,7 +117,7 @@ def test_board_contract_declares_the_recovery_fields(spec):
     # response invalid the moment the daemon added them without the contract.
     board = spec["components"]["schemas"]["Board"]
     added = {"unverified_runs", "needs_you", "auto_recovering", "deterministic",
-             "history_failures"}
+             "history_failures", "memory_candidates"}
     assert added <= set(board["properties"])
     assert added <= set(board["required"])
     counts = spec["components"]["schemas"]["DecisionCounts"]

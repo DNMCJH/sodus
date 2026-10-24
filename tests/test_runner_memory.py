@@ -1,15 +1,18 @@
-"""Resume briefs carry remembered facts too.
+"""Resume briefs carry the project's confirmed facts — when they have to.
 
 `Runner.start(session_id=...)` used to send the operator's note verbatim: the
-session had history, so the code assumed context was complete. Project facts
-confirmed after the last turn are not in that history, and the resumed worker
-was the only one who could not see them.
+session had history, so the code assumed context was complete. Facts confirmed
+after the last turn are not in that history. A harness that reads `AGENTS.md`
+sees them anyway; one that does not would be the only worker blind to them, so
+the runner injects `## 已验证事实` into the resumed brief for exactly those
+routes and for nobody else.
 """
 
 from __future__ import annotations
 
 import sys
 import time
+from datetime import date
 
 import pytest
 
@@ -24,8 +27,7 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture()
-def stub(monkeypatch):
+def _stub(monkeypatch, reads_memory_files: bool = False):
     """Route/agent plumbing plus the two calls that would spawn a CLI."""
     provider = providers.Provider(name="p0", protocol=providers.ANTHROPIC)
     spec = agents.AgentSpec(
@@ -33,6 +35,7 @@ def stub(monkeypatch):
         vendor="claude",
         command=(sys.executable, "-c", "pass"),
         accepts=(providers.ANTHROPIC,),
+        reads_memory_files=reads_memory_files,
     )
     monkeypatch.setattr(
         routes,
@@ -83,11 +86,15 @@ def stub(monkeypatch):
 def _resume_prompt(tmp_path, include_memory: bool = True) -> str:
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
+    (work / "AGENTS.md").write_text(
+        "# 项目\n\n## 已验证事实\n\n"
+        f"- {date.today().isoformat()}（来源 CLAUDE.md）构建脚本统一用 pnpm\n",
+        encoding="utf-8",
+    )
     task = db.create_task("把构建脚本迁到 pnpm", acceptance="pytest green")
-    memory.remember("构建脚本统一用 pnpm", scope="project", key="build")
     run = runner.RUNNER.start(
         task["id"],
-        "claude",
+        "fake",
         cwd=str(work),
         note="继续上次的迁移",
         session_id="ses-existing-0001",
@@ -98,16 +105,28 @@ def _resume_prompt(tmp_path, include_memory: bool = True) -> str:
     return (config.HOME / "runs" / run["id"] / "prompt.md").read_text(encoding="utf-8")
 
 
-def test_resume_brief_keeps_the_note_and_adds_memory(home, stub, tmp_path):
+def test_resume_brief_keeps_the_note_and_adds_the_facts(home, monkeypatch, tmp_path):
+    _stub(monkeypatch, reads_memory_files=False)
     prompt = _resume_prompt(tmp_path)
 
     assert prompt.startswith("继续上次的迁移")
-    assert "以下是这个项目已确认的事实：" in prompt
-    assert "- [project/build] 构建脚本统一用 pnpm" in prompt
+    assert "## 已验证事实" in prompt
+    assert "构建脚本统一用 pnpm" in prompt
 
 
-def test_resume_brief_can_switch_memory_off(home, stub, tmp_path):
+def test_resume_brief_can_switch_memory_off(home, monkeypatch, tmp_path):
+    _stub(monkeypatch, reads_memory_files=False)
     prompt = _resume_prompt(tmp_path, include_memory=False)
 
     assert prompt == "继续上次的迁移"
-    assert "以下是这个项目已确认的事实" not in prompt
+    assert "已验证事实" not in prompt
+
+
+def test_resume_brief_leaves_a_file_reading_harness_alone(home, monkeypatch, tmp_path):
+    # Claude Code / Codex / DSH open AGENTS.md themselves: the note is the whole
+    # brief, and the facts are not paid for a second time on every resume.
+    _stub(monkeypatch, reads_memory_files=True)
+    prompt = _resume_prompt(tmp_path)
+
+    assert prompt == "继续上次的迁移"
+    assert "已验证事实" not in prompt
