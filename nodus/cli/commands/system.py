@@ -1,4 +1,4 @@
-"""Machine and account commands: serve, agents, doctor, probe, status, usage."""
+"""Machine and account commands: serve, agents, doctor, probe, status, stats."""
 
 from __future__ import annotations
 
@@ -525,6 +525,36 @@ def _legacy_usage(args) -> int:
     print(
         f"{'jev':<14} calls={d['calls']:<2} in={d['in']:<9} out={d['out']:<8} "
         f"unavailable={d['unavailable']}"
+    )
+    return 0
+
+
+def stats_overview(args) -> int:
+    """Today in five lines: runs, tokens, money, cache hit rate.
+
+    Local database only. The relay balance is a network call that can take
+    fifteen seconds to fail, so it stays behind `nodus stats balance`; an
+    overview that hangs because a relay is down is not an overview.
+    """
+    data = usage_stats.summary("day", "route")
+    totals = data["totals"]
+    tokens = totals["tokens"]
+    print(f"今日 {data['window']['label']}")
+    print(
+        f"  runs      {totals['runs']}（完成 {totals['completed']}，"
+        f"没有 usage 记录 {totals['unrecorded']}）"
+    )
+    print(
+        f"  token     {_human_tokens(tokens['total'])}  "
+        f"输入 {_human_tokens(tokens['prompt'])} · 输出 {_human_tokens(tokens['completion'])} · "
+        f"缓存读 {_human_tokens(tokens['cache_read'])} · 缓存写 {_human_tokens(tokens['cache_write'])}"
+    )
+    print(f"  花费      {_money_text(totals['cost'])}（已计价 {totals['priced']} 个 run）")
+    print(f"  缓存命中  {_rate_text(totals['cache_hit_rate'])}")
+    print()
+    print(
+        "明细  nodus stats usage --period day|month|all --by route|model|provider|agent · "
+        "cost · bench · balance"
     )
     return 0
 
