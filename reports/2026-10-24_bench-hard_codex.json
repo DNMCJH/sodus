@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "route": "codex",
+  "repeat": 1,
+  "started_at": "2026-10-24T14:21:06",
+  "ended_at": "2026-10-24T14:29:45",
+  "base_dir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142106",
+  "totals": {
+    "attempts": 3,
+    "solved": 2,
+    "rate": 0.6667,
+    "seconds": 495.9,
+    "mean_s": 165.3,
+    "cost_cny": 0.9861
+  },
+  "attempts": [
+    {
+      "task": "budget-currency-admit",
+      "title": "在真实预算模块上加币种统计与准入判断，边界条件与既有测试保持全绿",
+      "verdict": "timeout",
+      "run_id": "run-c5e9f33fd71f",
+      "run_status": "failed",
+      "error": "exit code 1",
+      "duration_s": 364.4,
+      "cost": 0.886368,
+      "currency": "CNY",
+      "changed": false,
+      "tests_ok": false,
+      "pytest_exit": 1,
+      "pytest_tail": "00021E6AC1D220>\n\n    def test_admit_without_a_limit(now, monkeypatch):\n        monkeypatch.setenv(\"NODUS_DAILY_BUDGET\", \"0\")\n>       assert budget.admit(100.0, now) == {\n            \"allow\": True,\n            \"limit\": 0.0,\n            \"spent\": 3.5,\n            \"projected\": 103.5,\n            \"remaining\": None,\n            \"reason\": \"no-limit\",\n        }\nE       AttributeError: module 'nodus.budget' has no attribute 'admit'. Did you mean: 'limit'?\n\n_bench_checks\\test_hidden_budget.py:128: AttributeError\n=========================== short test summary info ===========================\nFAILED _bench_checks/test_hidden_budget.py::test_spent_breakdown_groups_by_currency_and_keeps_cny\nFAILED _bench_checks/test_hidden_budget.py::test_spent_breakdown_values - Att...\nFAILED _bench_checks/test_hidden_budget.py::test_admit_within - AttributeErro...\nFAILED _bench_checks/test_hidden_budget.py::test_admit_would_exceed - Attribu...\nFAILED _bench_checks/test_hidden_budget.py::test_admit_negative_estimate_is_zero\nFAILED _bench_checks/test_hidden_budget.py::test_admit_already_over - Attribu...\nFAILED _bench_checks/test_hidden_budget.py::test_admit_without_a_limit - Attr...\n7 failed, 3 passed in 4.76s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142106\\work\\budget-currency-admit-1",
+      "attempt": 1
+    },
+    {
+      "task": "debug-day-boundary",
+      "title": "追踪三层调用根因，修好日结且保证既有测试全绿",
+      "verdict": "solve",
+      "run_id": "run-5383eaf79b2d",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 60.6,
+      "cost": 0.04453,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "........                                                                 [100%]\n8 passed in 3.88s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142106\\work\\debug-day-boundary-1",
+      "attempt": 1
+    },
+    {
+      "task": "interface-first-rules",
+      "title": "多个文件设计规则引擎：先定接口再实现行为",
+      "verdict": "solve",
+      "run_id": "run-a634f5fc9feb",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 70.9,
+      "cost": 0.0552,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "...................                                                      [100%]\n19 passed in 0.17s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142106\\work\\interface-first-rules-1",
+      "attempt": 1
+    }
+  ],
+  "report": "task                   verdict  time    cost    detail\n---------------------  -------  ------  ------  -----------------------------\nbudget-currency-admit  timeout  364.4s  ¥0.886  run exceeded the task timeout\ndebug-day-boundary     solve    60.6s   ¥0.045\ninterface-first-rules  solve    70.9s   ¥0.055\n\nsolve 2/3 (67%) · 平均 165s · ¥0.99"
+}

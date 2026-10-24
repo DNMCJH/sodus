@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "route": "dsh",
+  "repeat": 1,
+  "started_at": "2026-10-24T14:29:46",
+  "ended_at": "2026-10-24T14:40:19",
+  "base_dir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142946",
+  "totals": {
+    "attempts": 3,
+    "solved": 3,
+    "rate": 1.0,
+    "seconds": 609.1,
+    "mean_s": 203.0,
+    "cost_cny": 0.62
+  },
+  "attempts": [
+    {
+      "task": "budget-currency-admit",
+      "title": "在真实预算模块上加币种统计与准入判断，边界条件与既有测试保持全绿",
+      "verdict": "solve",
+      "run_id": "run-d0af7daff3e0",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 290.4,
+      "cost": 0.34,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "..........                                                               [100%]\n10 passed in 5.13s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142946\\work\\budget-currency-admit-1",
+      "attempt": 1
+    },
+    {
+      "task": "debug-day-boundary",
+      "title": "追踪三层调用根因，修好日结且保证既有测试全绿",
+      "verdict": "solve",
+      "run_id": "run-4404f13c6ba2",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 171.4,
+      "cost": 0.18,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "........                                                                 [100%]\n8 passed in 4.26s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142946\\work\\debug-day-boundary-1",
+      "attempt": 1
+    },
+    {
+      "task": "interface-first-rules",
+      "title": "多个文件设计规则引擎：先定接口再实现行为",
+      "verdict": "solve",
+      "run_id": "run-bc73966e1f23",
+      "run_status": "completed",
+      "error": "",
+      "duration_s": 147.3,
+      "cost": 0.1,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "...................                                                      [100%]\n19 passed in 0.20s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261024-142946\\work\\interface-first-rules-1",
+      "attempt": 1
+    }
+  ],
+  "report": "task                   verdict  time    cost    detail\n---------------------  -------  ------  ------  ------\nbudget-currency-admit  solve    290.4s  ¥0.340\ndebug-day-boundary     solve    171.4s  ¥0.180\ninterface-first-rules  solve    147.3s  ¥0.100\n\nsolve 3/3 (100%) · 平均 203s · ¥0.62"
+}
