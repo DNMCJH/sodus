@@ -71,13 +71,33 @@ def test_the_first_screen_renders_needs_you_not_the_old_blob():
     assert "b.decisions" not in ui.PAGE
 
 
-def test_a_decision_row_is_ordered_project_task_problem_change_suggestion():
-    start = ui.PAGE.index("function decisionRow")
-    end = ui.PAGE.index("function retryWait")
+def test_a_decision_row_is_five_answers_in_the_order_they_are_asked():
+    # 哪个项目 → 什么样的失败 → 重试过几次 → 可能原因 → 建议. The evidence
+    # (action / diff / raw tail) hangs off `detailBlock`, folded behind 详情.
+    start = ui.PAGE.index("function questionLines")
+    end = ui.PAGE.index("function decisionRow")
     body = ui.PAGE[start:end]
-    order = ["d.project", "d.task_title", "d.problem", "d.change", "d.suggestion"]
+    order = ["d.project", "d.project_path", "d.headline", "d.retry_line",
+             "d.likely_cause", "d.suggestion"]
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
+    for label in ("项目", "失败", "重试", "原因", "建议"):
+        assert f'q-k">{label}' in body
+    assert "d.failure_kind" in body
+    assert "d.evidence_missing" in body
+
+    detail = ui.PAGE[ui.PAGE.index("function detailBlock"):end]
+    assert "详情" in detail
+    for label in ("哪一步", "什么错", "改了哪", "试过什么"):
+        assert label in detail
+
+
+def test_evidence_is_folded_not_printed_under_the_answer():
+    start = ui.PAGE.index("function detailBlock")
+    end = ui.PAGE.index("function decisionRow")
+    body = ui.PAGE[start:end]
+    assert '<details class="more">' in body
+    assert "ev.error_tail" in body
 
 
 def test_the_auto_retry_block_shows_progress_and_offers_nothing_to_click():
@@ -92,7 +112,10 @@ def test_the_auto_retry_block_shows_progress_and_offers_nothing_to_click():
 def test_remaining_decisions_expand_where_they_are_counted():
     assert "在下面「更多」里" not in ui.PAGE
     assert "toggleMoreNeeds" in ui.PAGE
-    assert "还有 ${rest.length} 件" in ui.PAGE
+    assert "还有 ${rest.length} 条" in ui.PAGE
+    # Eight is the fold, not three: the count and the rows must agree.
+    assert "const LIMIT = 8" in ui.PAGE
+    assert "needs.slice(0, 3)" not in ui.PAGE
 
 
 def test_failures_recovery_gave_up_on_stay_reachable():

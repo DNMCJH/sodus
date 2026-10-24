@@ -174,10 +174,17 @@ def test_the_same_error_twice_is_a_decision(home):
 
     assert entry["project"] == "shop"
     assert entry["task_title"] == "修复 token 刷新"
-    assert entry["headline"].startswith("连续两次同样的错：")
+    # Line 2 is the failure class, not the gate: the gate has its own line and
+    # its own field, and repeating it as the headline hid what actually broke.
+    assert entry["failure_kind"] == "证据缺失"
+    assert entry["headline"].startswith("证据缺失：")
+    assert entry["evidence_missing"].startswith("证据缺失：")
     assert "连续两次同样的错" in entry["why"]
     assert entry["gate"] == "same-signature"
     assert "只会一样" in entry["why"]
+    assert entry["retry_line"].startswith("自动重试 1 次：")
+    assert "第1次 40s orphaned" in entry["retry_line"]
+    assert entry["likely_cause"]
     assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
 
 
@@ -199,7 +206,9 @@ def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
     assert "剩余额度不够" in entry["problem"]
     assert "¥0.10" in entry["why"]
     assert "NODUS_DAILY_BUDGET" in entry["suggestion"]
-    assert entry["headline"].startswith("剩余额度不够")
+    # The money sentence explains why the machine stopped (why), not what broke.
+    assert "剩余额度不够" in entry["why"]
+    assert entry["failure_kind"] in server.FAILURE_KINDS
     assert all(item["run_id"] != run["id"] for item in board["auto_recovering"])
 
 
@@ -225,20 +234,28 @@ def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
     board = server.board_state()
     entry = find(board, "needs_you", children[2]["id"])
 
-    # Line 1: project · task; line 2: a conclusion, not "执行失败".
+    # Line 1: project · the last two directories · task; line 2: the class.
     assert entry["project"] == "shop"
+    assert entry["project_path"] == "work/shop"
     assert entry["task_title"] == "修复登录"
-    assert entry["headline"].startswith("第 3 次重试仍失败：")
-    assert "ModuleNotFoundError" in entry["headline"]
+    assert entry["failure_kind"] == "进程退出"
+    assert entry["headline"] == (
+        "进程退出：ModuleNotFoundError: No module named 'jwt'"
+    )
     assert entry["gate"] == "retry-limit"
     assert "上限" in entry["why"]
+    # Line 3 and 4: how many tries, and what it probably was.
+    assert entry["retry_line"].startswith("自动重试 3 次：")
+    assert "第1次 42s tests_red" in entry["retry_line"]
+    assert "第2次 38s timeout" in entry["retry_line"]
+    assert entry["likely_cause"].startswith("大概率是依赖没装")
 
     ev = entry["evidence"]
     # 哪一步
     assert "write" in ev["action"] and "app.py" in ev["action"]
-    # 什么错: the raw tail, not a paraphrase
+    # 什么错: the raw tail, not a paraphrase, capped at 200 characters
     assert "ModuleNotFoundError" in ev["error_tail"]
-    assert len(ev["error_tail"]) <= 301
+    assert len(ev["error_tail"]) <= 201
     # 改了哪
     assert entry["change"] == "改了 2 个文件：app.py、test_auth.py"
     assert ev["change"]["files"] == ["app.py", "tests/test_auth.py"]
@@ -304,6 +321,71 @@ def test_an_unclassified_failure_is_judged_not_hidden(home):
     assert "退出码" in entry["problem"]
 
 
+def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
+    """A legacy run: a status, a one-line error, and nothing else.
+
+    The card must not degrade into "执行失败". "证据缺失" is the answer to
+    "什么样的失败" when the record cannot answer it, and it has to be the
+    sentence on the card, not a footnote.
+    """
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
+    task, run = seed(home, error=ORPHAN, title="opencode smoke", folder="nodus-oc-smoke")
+    # A lifecycle event is not evidence: it says the run ended, not what it did.
+    add_event(run, "run.failed", {"error": ORPHAN})
+
+    entry = find(server.board_state(), "needs_you", run["id"])
+
+    missing = "证据缺失：这次运行没有记录 tool_call / 改动 / 测试输出"
+    assert entry["failure_kind"] == "证据缺失"
+    assert entry["headline"].startswith(missing)
+    assert entry["evidence_missing"] == missing
+    assert entry["evidence"]["attempts"] == []
+    assert entry["retry_line"].startswith("未重试（原因：")
+    # The cause still comes from the one line that survived, not from a shrug.
+    assert entry["likely_cause"].startswith("大概率是进程被外部杀掉")
+    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
+    # The one line that did survive is still shown, in brackets.
+    assert "orphaned" in entry["headline"]
+
+
+def test_every_cause_label_has_a_concrete_advice():
+    # The labels are the lookup keys: renaming one without renaming its advice
+    # silently downgrades 建议 to a generic sentence, which is the whole bug.
+    labels = [label for _pattern, label in server._CAUSE_RULES]
+    assert labels
+    assert [label for label in labels if label not in server._CAUSE_ADVICE] == []
+    for advice in server._CAUSE_ADVICE.values():
+        assert "由你决定" not in advice
+        assert "重跑" in advice or "接手" in advice or "重试" in advice
+
+
+@pytest.mark.parametrize(
+    ("error", "label"),
+    [
+        ("ModuleNotFoundError: No module named 'jwt'", "依赖没装"),
+        ("ImportError: cannot import name 'jwt' from 'jwt'", "依赖或导入路径不对"),
+        ("bash: pytest: command not found", "命令不在 PATH 里"),
+        ("FileNotFoundError: [Errno 2] No such file or directory: 'a.py'", "路径或环境不对"),
+        ("401 Unauthorized", "密钥无效或没有权限"),
+        ("429 Too Many Requests", "被上游限流或额度用尽"),
+        ("This model's maximum context length is 8192 tokens", "上下文太长"),
+        ("model_not_found: gpt-9", "模型名不对"),
+        ("Command timed out after 60s", "卡住超时"),
+        ("Connection refused", "目标服务没起"),
+        ("502 Bad Gateway", "上游服务出错"),
+        ("orphaned: the process that owned this run is gone", "进程被外部杀掉"),
+        ("exit code 1", "进程自己退出"),
+    ],
+)
+def test_the_likely_cause_and_the_advice_come_from_the_error_string(error, label):
+    cause = server._likely_cause({"error": error}, {}, "none")
+    assert cause.startswith(f"大概率是{label}")
+    # The raw line it matched is quoted, so a wrong guess is visibly a guess.
+    assert "报错是" in cause
+    advice = server._advice_for("进程退出", cause, {"error_tail": error})
+    assert advice and "由你决定" not in advice
+
+
 def test_a_red_test_names_the_failed_test_and_its_assertion(home):
     task, run = seed(home, error="", status="completed", title="修复登录")
     red_event(run)
@@ -357,7 +439,13 @@ def test_a_failure_the_chain_moved_past_is_kept_in_history(home):
     assert all(item.get("run") != original["id"] for item in board["needs_you"])
     entry = find(board, "history_failures", original["id"])
     assert "已经自动重试过" in entry["problem"]
-    assert entry["headline"] == "已经自动重试过，不会再试了"
+    # Being history does not excuse a row from the five questions.
+    assert entry["failure_kind"] == "证据缺失"
+    assert "证据缺失" in entry["headline"]
+    assert "不会为同一次失败开两张单" in entry["why"]
+    assert entry["retry_line"].startswith("未重试（原因：")
+    assert entry["likely_cause"]
+    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
     assert board["decision_counts"]["history_failed"] == 1
 
 
@@ -443,17 +531,19 @@ def test_failures_recovery_gave_up_on_are_still_visible(home):
 # ---- the page ----------------------------------------------------------
 
 
-def test_the_page_renders_the_three_line_decision():
-    start = ui.PAGE.index("function decisionRow")
-    end = ui.PAGE.index("function retryWait")
+def test_the_page_renders_the_five_answers():
+    start = ui.PAGE.index("function questionLines")
+    end = ui.PAGE.index("function detailBlock")
     body = ui.PAGE[start:end]
-    # project · task, the conclusion, then the buttons
-    order = ["d.project", "d.task_title", "d.headline", "d-act"]
+    # 项目 · 路径 · 任务; 失败类型; 重试历史; 可能原因; 建议
+    order = ["d.project", "d.project_path", "d.headline", "d.retry_line",
+             "d.likely_cause", "d.suggestion"]
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
-    for label in ("哪一步", "什么错", "改了哪", "试过什么", "为什么", "下一步"):
-        assert label in body
-    assert "diff" not in body.lower() or "change.stat" in body
+    detail = ui.PAGE[end:ui.PAGE.index("function decisionRow")]
+    for label in ("哪一步", "什么错", "改了哪", "试过什么", "为什么"):
+        assert label in detail
+    assert "diff" not in detail.lower() or "change.stat" in detail
 
 
 def test_the_empty_decision_state_names_what_is_running():
@@ -469,9 +559,10 @@ def test_the_page_has_no_cdn_and_no_framework():
 
 
 def test_the_page_renders_the_evidence_and_the_money_gates():
-    for label in ("哪一步", "什么错", "改了哪", "试过什么", "为什么", "下一步"):
+    for label in ("项目", "失败", "重试", "原因", "建议", "哪一步", "什么错", "改了哪"):
         assert label in ui.PAGE
     assert "这类证据没有记录" in ui.PAGE
+    assert "d.evidence_missing" in ui.PAGE
     assert "加额度后重跑" in ui.PAGE
     assert "花这笔钱重跑" in ui.PAGE
     assert "continuous" not in ui.PAGE

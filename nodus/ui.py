@@ -9,13 +9,16 @@ can read it, and any local process could read `~/.nodus/token` anyway.
 Cross-origin reads are blocked by the same-origin policy, and cross-origin
 writes cannot add the Authorization header.
 
-The first screen answers one question: **is there anything I have to do, and
-if so, where exactly did it break?** A decision row is three lines — project ·
-task, a conclusion sentence ("第 3 次重试仍失败：test_token_refresh 断言 401 ==
-200"), then the actions — followed by the evidence the conclusion came from:
-the last tool call, the raw error tail, the files changed, and what each retry
-returned. Missing evidence is printed as missing; nothing is paraphrased into
-"执行失败".
+The first screen answers five questions about every decision, one line each:
+**哪个项目 / 什么样的失败 / 自己重试过几次 / 可能原因 / 建议怎么做**. The project
+line carries the last two directories (`nodus-removal（…/2026-10-survey）`), the
+failure line names the class (进程退出 / 超时 / 测试红 / 模型报错 / 证据缺失 /
+无法归类), the retry line counts the attempts and what each returned, the cause
+line is a rule-based guess quoting the line it came from, and the advice line
+names one concrete action. The raw evidence — last tool call, failed tests,
+diff, error tail — is folded behind 详情 instead of pushing the answers down
+the card. Missing evidence is printed as "证据缺失：…"; nothing is paraphrased
+into "执行失败".
 
 The board also splits failures by who can resolve them. A retryable failure
 with attempts left appears under "自动重试中" with dots instead of buttons;
@@ -99,18 +102,24 @@ PAGE = """<!doctype html>
   #refresh { height:28px; padding:0 11px; font-size:12px; }
   #refresh[disabled] { opacity:.55; cursor:default; }
   .decision { padding:15px 17px 14px; }
-  .d-head { display:flex; align-items:baseline; gap:10px; min-width:0; }
-  .d-where { display:flex; align-items:baseline; gap:7px; min-width:0;
-             color:var(--dim); font-size:12.5px; }
-  .d-where .proj { color:var(--text-2); font-weight:600; }
-  .d-where .sep { color:var(--faint); }
-  .d-where .taskname { color:var(--text); font-weight:600; font-size:13.5px;
-                       overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .d-when { margin-left:auto; color:var(--faint); font-size:12px; white-space:nowrap;
             font-variant-numeric:tabular-nums; }
-  .d-summary { margin-top:7px; font-size:15px; line-height:1.45; font-weight:500; color:var(--text);
-               letter-spacing:.002em; }
-  .d-summary.warn-text { color:#e8c07a; }
+  /* The five questions every decision must answer, one line each. A reader
+     skims these left labels; the values are the answer. */
+  .questions { margin-top:9px; display:grid; gap:6px; }
+  .q-line { display:grid; grid-template-columns:40px minmax(0,1fr); gap:10px;
+            font-size:13px; line-height:1.5; }
+  .q-k { color:var(--faint); font-size:11.5px; padding-top:2px; letter-spacing:.04em; }
+  .q-v { color:var(--text-2); min-width:0; overflow-wrap:anywhere; }
+  .q-project .q-v { display:flex; align-items:baseline; flex-wrap:wrap; color:var(--text); }
+  .q-project .q-v b { font-weight:600; }
+  .q-project .d-when { margin-left:auto; }
+  .q-tag { display:inline-block; border:1px solid var(--line); border-radius:4px; padding:0 6px;
+           margin-right:6px; color:var(--dim); font-size:11.5px; white-space:nowrap; }
+  .q-tag.bad { border-color:rgba(239,107,107,.3); color:#eda2a2; }
+  .q-tag.na { border-color:rgba(224,163,64,.32); color:#e2b877; }
+  .q-advice .q-v { color:var(--text); }
+  .d-path { color:var(--faint); font-size:11.5px; }
   .d-act { display:flex; align-items:center; gap:8px; margin-top:11px; flex-wrap:wrap; }
   .d-act .hint { color:var(--faint); font-size:12px; margin-left:2px; }
   .evidence { margin-top:13px; border-top:1px solid var(--line-soft); padding-top:11px;
@@ -148,9 +157,6 @@ PAGE = """<!doctype html>
   .dots i { width:5px; height:5px; border-radius:99px; background:#2b323c; display:inline-block; }
   .dots i.on { background:var(--warn); }
   .when { color:var(--warn); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .blocked .why { color:var(--dim); font-size:12.5px; line-height:1.6; margin-top:7px; }
-  .blocked .why-k { display:inline-block; color:var(--faint); font-size:11.5px; margin-right:8px;
-                    border:1px solid var(--line); border-radius:4px; padding:0 6px; }
   .live-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center;
               background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:11px 14px; }
   .live-what { color:var(--text); font-size:13.5px; }
@@ -209,6 +215,13 @@ PAGE = """<!doctype html>
   .evidence details.raw summary::before { content:"+"; display:inline-block; width:10px; }
   .evidence details.raw[open] summary::before { content:"–"; }
   .evidence details.raw pre { margin-top:5px; }
+  /* Evidence is folded: the five answers stay scannable, the raw output is
+     one click down instead of pushing the answer off the card. */
+  details.more { border-top:1px solid var(--line-soft); margin-top:11px; padding-top:9px; }
+  details.more summary { font-size:12px; color:var(--faint); }
+  details.more summary::before { content:"▸ "; }
+  details.more[open] summary::before { content:"▾ "; }
+  details.more .evidence { margin-top:9px; border-top:0; padding-top:0; }
   details { border-top:1px solid var(--line); margin-top:4px; padding-top:14px; }
   details summary { color:var(--dim); cursor:pointer; font-size:12.5px; letter-spacing:.02em;
                     list-style:none; }
@@ -483,15 +496,109 @@ function renderLive() {
   $("live").innerHTML = rows.length ? rows.join("") : `<div class="empty">现在没有任务在跑</div>`;
 }
 
-function decisionRow(d) {
+// The five questions a decision row has to answer, one line each, in the
+// order a person asks them: which project, what kind of failure, how many
+// retries already happened, what probably caused it, and what to do now.
+// Labels are on the left so the answers can be skimmed without reading prose.
+const KIND_TONE = new Set(["测试红", "模型报错", "进程退出"]);
+// The server sends `cwd` next to the project name so two same-named checkouts
+// stay apart. The project's own directory is already on the line as `project`,
+// so the locator only needs the parent: nodus-removal（…/2026-10-survey）.
+function parentPath(path, project) {
+  const tail = project ? "/" + project : "";
+  const parent = tail && path.endsWith(tail) ? path.slice(0, -tail.length) : path;
+  return parent && parent !== project ? parent : "";
+}
+function questionLines(d, when) {
+  const kind = d.failure_kind || "";
+  const project = d.project || "未记录项目";
+  const path = d.project_path || "";
+  const parent = parentPath(path, project);
+  const tone = d.evidence_missing ? "na" : KIND_TONE.has(kind) ? "bad" : "";
+  // The tag already names the class; repeating it inside the sentence reads
+  // as a stutter ("证据缺失证据缺失：…").
+  let summary = d.headline || d.problem || d.title || "";
+  if (kind && summary.startsWith(kind + "：")) summary = summary.slice(kind.length + 1);
+  return `<div class="questions">
+    <div class="q-line q-project"><span class="q-k">项目</span><span class="q-v">
+      <b>${esc(project)}</b>
+      ${parent ? `<span class="d-path" title="${esc(d.cwd || "")}">（…/${esc(parent)}）</span>` : ""}
+      <span class="sep" style="color:var(--faint);margin:0 5px">·</span>${esc(d.task_title || "（任务没写标题）")}
+      ${when ? `<span class="d-when">${esc(when)}</span>` : ""}
+    </span></div>
+    <div class="q-line"><span class="q-k">失败</span><span class="q-v">
+      ${kind ? `<span class="q-tag ${tone}">${esc(kind)}</span>` : ""} <span>${esc(summary)}</span>
+    </span></div>
+    <div class="q-line"><span class="q-k">重试</span><span class="q-v">${esc(d.retry_line || "未重试（原因：这条记录里没有重试历史）")}</span></div>
+    <div class="q-line"><span class="q-k">原因</span><span class="q-v">${esc(d.likely_cause || "推断不了：这条记录里没有能归因的报错原文")}</span></div>
+    <div class="q-line q-advice"><span class="q-k">建议</span><span class="q-v">${esc(d.suggestion || "看日志确认卡在哪一步，再决定重跑还是自己接手")}</span></div>
+  </div>`;
+}
+
+function retryChips(ev, d) {
+  const attempts = ev.attempts || [];
+  if (!attempts.length) return "";
+  const chips = attempts.map(a => `<span class="attempt ${outcomeTone(a.outcome)}"><b>第 ${a.n} 次</b>${a.seconds == null ? "" : ` · ${a.seconds}s`}${a.outcome ? ` · ${esc(a.outcome)}` : ""}</span>`).join("");
+  const how = d.retry && d.retry.mode ? (d.retry.mode === "resume" ? "续会话" : "从头跑") : "";
+  return `<div class="ev-row"><span class="ev-k">试过什么</span><div class="ev-v"><div class="attempts">${chips}</div>
+    ${how ? `<div class="ev-src">重试方式：${esc(how)}</div>` : ""}</div></div>`;
+}
+
+// Everything raw lives behind 详情: the five answers stay readable, and the
+// tool_call / diff / error tail are one click down instead of pushing them off
+// the card.
+function detailBlock(d) {
   const ev = d.evidence || {};
+  const rows = [];
+  if (ev.action) {
+    rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v">${esc(ev.action)}</span></div>`);
+  } else {
+    rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v na">这类证据没有记录：event 表里没有 tool_call</span></div>`);
+  }
+  const tests = ev.tests || [];
+  if (tests.length) {
+    const list = tests.map(t => `<div class="test">
+        <span class="test-name">${esc(t.name || t.test || "")}</span>
+        ${t.assertion ? `<span class="test-assert">${esc(t.assertion)}</span>` : ""}</div>`).join("");
+    rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
+      <div class="tests">${list}</div>
+      ${ev.error_tail ? `<details class="raw"><summary>原始输出（末尾 ${ev.error_tail.length} 字）</summary><pre class="tail">${esc(ev.error_tail)}</pre></details>` : ""}
+      </div></div>`);
+  } else if (ev.error_tail) {
+    rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
+      <pre class="tail">${esc(ev.error_tail)}</pre>
+      <div class="ev-src">${esc(ev.error_source || "原始输出")} · 末尾 ${ev.error_tail.length} 字</div></div></div>`);
+  } else {
+    rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><span class="ev-v na">这类证据没有记录：run.error 和事件流里都没有报错原文</span></div>`);
+  }
+  if (d.change) {
+    rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><div class="ev-v">${esc(d.change)}
+      ${ev.change && ev.change.stat ? `<div class="ev-src mono">${esc(ev.change.stat)}</div>` : ""}
+      ${ev.change && ev.change.basis ? `<div class="ev-src">${esc(ev.change.basis)}</div>` : ""}</div></div>`);
+  } else {
+    rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><span class="ev-v na">这类证据没有记录：artifact 是空的</span></div>`);
+  }
+  const chips = retryChips(ev, d);
+  if (chips) {
+    rows.push(chips);
+  } else {
+    rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v na">${esc(d.retry_line || "还没有自动重试过")}</span></div>`);
+  }
+  if (d.why) {
+    rows.push(`<div class="ev-row"><span class="ev-k">为什么</span><span class="ev-v">${esc(d.why)}</span></div>`);
+  }
+  if ((ev.missing || []).length) {
+    rows.push(`<div class="ev-row"><span class="ev-k">缺什么</span><span class="ev-v na">${ev.missing.map(esc).join("；")}</span></div>`);
+  }
+  return `<details class="more"><summary>详情（哪一步 / 改了哪 / 原始输出）</summary>
+    <div class="evidence">${rows.join("")}</div></details>`;
+}
+
+function decisionRow(d) {
   const when = d.at ? ago(d.at) : "";
   const kind = d.kind || "failed";
-  const head = `<span class="proj">${esc(d.project || "未记录项目")}</span>` +
-    `<span class="sep">·</span><span class="taskname">${esc(d.task_title || "（任务没写标题）")}</span>`;
-  const summary = d.headline || d.problem || d.title || "";
   const unvList = ((state.board || {}).unverified_runs || []).slice(0, 50);
-  let act = "", evidence = "";
+  let act = "", detail = "";
 
   if (kind === "proposal") {
     act = `<button class="primary" onclick="merge('${d.id}')">合并</button>
@@ -510,66 +617,16 @@ function decisionRow(d) {
     act = `<button class="primary" onclick="rerun('${d.run}')">${label}</button>` +
       `<button onclick="showLog('${d.run}')">看日志</button>` +
       (hint ? `<span class="hint">${esc(hint)}</span>` : "");
-
-    const rows = [];
-    if (ev.action) {
-      rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v">${esc(ev.action)}</span></div>`);
-    } else {
-      rows.push(`<div class="ev-row"><span class="ev-k">哪一步</span><span class="ev-v na">这类证据没有记录：event 表里没有 tool_call</span></div>`);
-    }
-    const tests = ev.tests || [];
-    if (tests.length) {
-      const list = tests.map(t => `<div class="test">
-          <span class="test-name">${esc(t.name || t.test || "")}</span>
-          ${t.assertion ? `<span class="test-assert">${esc(t.assertion)}</span>` : ""}</div>`).join("");
-      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
-        <div class="tests">${list}</div>
-        ${ev.error_tail ? `<details class="raw"><summary>原始输出（末尾 ${ev.error_tail.length} 字）</summary><pre class="tail">${esc(ev.error_tail)}</pre></details>` : ""}
-        </div></div>`);
-    } else if (ev.error_tail) {
-      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><div class="ev-v">
-        <pre class="tail">${esc(ev.error_tail)}</pre>
-        <div class="ev-src">${esc(ev.error_source || "原始输出")} · 末尾 ${ev.error_tail.length} 字</div></div></div>`);
-    } else {
-      rows.push(`<div class="ev-row"><span class="ev-k">什么错</span><span class="ev-v na">这类证据没有记录：run.error 和事件流里都没有报错原文</span></div>`);
-    }
-    if (d.change) {
-      rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><div class="ev-v">${esc(d.change)}
-        ${ev.change && ev.change.stat ? `<div class="ev-src mono">${esc(ev.change.stat)}</div>` : ""}
-        ${ev.change && ev.change.basis ? `<div class="ev-src">${esc(ev.change.basis)}</div>` : ""}</div></div>`);
-    } else {
-      rows.push(`<div class="ev-row"><span class="ev-k">改了哪</span><span class="ev-v na">这类证据没有记录：artifact 是空的</span></div>`);
-    }
-    const attempts = ev.attempts || [];
-    if (attempts.length) {
-      const chips = attempts.map(a => `<span class="attempt ${outcomeTone(a.outcome)}"><b>第 ${a.n} 次</b>${a.seconds == null ? "" : ` · ${a.seconds}s`}${a.outcome ? ` · ${esc(a.outcome)}` : ""}</span>`).join("");
-      const how = d.retry && d.retry.mode ? (d.retry.mode === "resume" ? "续会话" : "从头跑") : "";
-      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><div class="ev-v"><div class="attempts">${chips}</div>
-        ${how ? `<div class="ev-src">重试方式：${esc(how)}</div>` : ""}</div></div>`);
-    } else if (kind === "red") {
-      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v">没有自动重试：这个 run 跑完了，问题出在验收结果</span></div>`);
-    } else {
-      rows.push(`<div class="ev-row"><span class="ev-k">试过什么</span><span class="ev-v na">还没有自动重试过</span></div>`);
-    }
-    // The second of the three things a decision must answer: why the machine
-    // stopped trying. A row without it sends the reader back to a log.
-    if (d.why) {
-      rows.push(`<div class="ev-row"><span class="ev-k">为什么</span><span class="ev-v">${esc(d.why)}</span></div>`);
-    }
-    if ((ev.missing || []).length) {
-      rows.push(`<div class="ev-row"><span class="ev-k">缺什么</span><span class="ev-v na">${ev.missing.map(esc).join("；")}</span></div>`);
-    }
-    rows.push(`<div class="ev-row"><span class="ev-k">下一步</span><span class="ev-v">${esc(d.suggestion || "")}</span></div>`);
-    evidence = `<div class="evidence">${rows.join("")}</div>`;
+    detail = detailBlock(d);
   } else {
     act = d.run ? `<button onclick="showLog('${d.run}')">看日志</button>` : "";
+    detail = detailBlock(d);
   }
 
   const html = `<article class="card decision ${kind}">
-    <div class="d-head"><div class="d-where">${head}</div><span class="d-when">${esc(when)}</span></div>
-    <div class="d-summary" title="${esc(d.problem || "")}">${esc(summary)}</div>
+    ${questionLines(d, when)}
     <div class="d-act">${act}</div>
-    ${evidence}
+    ${detail}
   </article>`;
   if (kind !== "unverified" || !unvOpen) return html;
 
@@ -613,18 +670,14 @@ function renderBlocked(rows) {
   if (!rows.length) { sec.hidden = true; return; }
   sec.hidden = false;
   $("blocked-n").textContent = rows.length + " 件";
-  $("blocked").innerHTML = rows.map(r => {
-    const ev = r.evidence || {};
-    return `<article class="card blocked decision">
-       <div class="d-head"><div class="d-where"><span class="proj">${esc(r.project || "未记录项目")}</span><span class="sep">·</span><span class="taskname">${esc(r.task_title || "（任务没写标题）")}</span></div><span class="d-when">${esc(r.at ? ago(r.at) : "")}</span></div>
-       <div class="d-summary warn-text">${esc(r.headline || r.problem || "")}</div>
-       <div class="why"><span class="why-k">为什么不能靠重试</span>${esc(r.why || "")}</div>
-       ${ev.error_tail ? `<pre class="tail">${esc(ev.error_tail)}</pre>` : ""}
+  // Same five answers as the decision rows: this is also something a person
+  // has to decide, only the action is "fix the key/参数" instead of "重跑".
+  $("blocked").innerHTML = rows.map(r => `<article class="card blocked decision">
+       ${questionLines(r, r.at ? ago(r.at) : "")}
        <div class="d-act"><button class="primary" onclick="rerun('${r.run}')">修好后重跑</button>
-         <button onclick="showLog('${r.run}')">看日志</button>
-         <span class="hint">${esc(r.suggestion || "")}</span></div>
-     </article>`;
-  }).join("");
+         <button onclick="showLog('${r.run}')">看日志</button></div>
+       ${detailBlock(r)}
+     </article>`).join("");
 }
 
 function renderTodo() {
@@ -647,10 +700,14 @@ function renderTodo() {
         <div class="empty-sub">${esc(retryLine)}${fixLine ? " " + esc(fixLine) : ""}</div></div>
     </div>`;
   } else {
-    const shown = needs.slice(0, 5), rest = needs.slice(5);
+    // Nothing is hidden by default: a board that says "4 件" and shows 3 rows
+    // is a board whose count cannot be trusted. Past 8 the tail folds, and the
+    // fold says how many are behind it.
+    const LIMIT = 8;
+    const shown = needs.slice(0, LIMIT), rest = needs.slice(LIMIT);
     const blocks = shown.map(decisionRow);
     if (rest.length) {
-      blocks.push(`<div class="more-inline">还有 ${rest.length} 件
+      blocks.push(`<div class="more-inline">还有 ${rest.length} 条
         <button onclick="toggleMoreNeeds()">${moreNeedsOpen ? "收起" : "展开"}</button></div>`);
       if (moreNeedsOpen) blocks.push(...rest.map(decisionRow));
     }

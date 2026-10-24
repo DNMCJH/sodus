@@ -206,6 +206,19 @@ def _project(cwd) -> str:
     return re.split(r"[\\/]", value)[-1] if value else ""
 
 
+def _project_path(cwd, levels: int = 2) -> str:
+    """The last `levels` directories, so two same-named checkouts stay apart.
+
+    The project name alone is not a location: `research/2026-10-survey/
+    nodus-removal` and `research/2026-09-survey/nodus-removal` read the same
+    on a card and are different directories.
+    """
+    parts = [part for part in re.split(r"[\\/]+", str(cwd or "").strip()) if part]
+    if len(parts) <= 1:
+        return ""
+    return "/".join(parts[-levels:])
+
+
 def _task_facts(task_ids: list[str]) -> dict[str, dict]:
     """Title and goal per task, one query. The board names a task, not a run."""
     ids = [tid for tid in dict.fromkeys(task_ids) if tid]
@@ -287,8 +300,89 @@ def _change_summary(run: dict) -> str | None:
 # instead of being guessed.
 
 #: Original output a person can actually read. The full log stays one click
-#: away; 300 characters is what fits on a card and what the requirement asks.
-ERROR_TAIL_CHARS = 300
+#: away; 200 characters is what fits on a card and what the requirement asks.
+ERROR_TAIL_CHARS = 200
+
+#: The five classes a failure can fall into, in the operator's words. Every
+#: decision row names exactly one: "执行失败" is not a class, it is a shrug.
+FAILURE_KINDS = ("进程退出", "超时", "测试红", "模型报错", "证据缺失", "无法归类")
+
+#: Same text, different question: "what kind of failure" is about the process,
+#: "what probably caused it" is about the setup. Both read the same records.
+_TIMEOUT_TEXT = re.compile(r"timed?[\s_-]?out|etimedout|\btimeout\b|no output for|超时", re.I)
+_MODEL_TEXT = re.compile(
+    r"model[\s_-]?not[\s_-]?found|unknown model|invalid model|no such model|"
+    r"context[\s_-]?length|maximum context|too many tokens|"
+    r"\b(?:401|403|429)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
+    r"rate[\s_-]?limit|quota|模型|密钥|鉴权",
+    re.I,
+)
+_DEAD_TEXT = re.compile(
+    r"orphaned|killed|sigterm|terminated|interrupted|exit code -?\d+|"
+    r"traceback|error|exception|failed|denied|not found|no such file",
+    re.I,
+)
+
+#: The run did not fail on its own: something outside killed it. The tool
+#: output it left behind is the last thing it did, not the reason it stopped.
+_PROCESS_DEATH = re.compile(r"orphaned|killed|sigterm|terminated|interrupted", re.I)
+
+#: (pattern, the cause in three to eight characters). First match wins, so the
+#: specific ones come before the generic network/exit ones. The label is a
+#: *name*, not a sentence: it is the key `_CAUSE_ADVICE` looks the action up
+#: by, so a label with a colon in it silently loses its advice. The sentence
+#: is built around it, and the raw line it matched is quoted next to it.
+_CAUSE_RULES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"No module named '?[\w.\-]+'?"), "依赖没装"),
+    (re.compile(r"ModuleNotFoundError|ImportError|cannot import name"), "依赖或导入路径不对"),
+    (
+        re.compile(r"is not recognized as|command not found|不是内部或外部命令", re.I),
+        "命令不在 PATH 里",
+    ),
+    (
+        re.compile(r"no such file or directory|ENOENT|cannot find the path|"
+                   r"系统找不到指定的(?:文件|路径)|路径不存在", re.I),
+        "路径或环境不对",
+    ),
+    (
+        re.compile(r"\b(?:401|403)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
+                   r"authentication|密钥|鉴权|未授权", re.I),
+        "密钥无效或没有权限",
+    ),
+    (
+        re.compile(r"rate[\s_-]?limit|\b429\b|too many requests|quota|限流", re.I),
+        "被上游限流或额度用尽",
+    ),
+    (
+        re.compile(r"context[\s_-]?length|maximum context|too many tokens", re.I),
+        "上下文太长",
+    ),
+    (
+        re.compile(r"model[\s_-]?not[\s_-]?found|unknown model|invalid model|"
+                   r"no such model|模型[^\n。]{0,12}(?:不存在|不可用)", re.I),
+        "模型名不对",
+    ),
+    (_TIMEOUT_TEXT, "卡住超时"),
+    (
+        re.compile(r"econnrefused|connection refused|could not connect", re.I),
+        "目标服务没起",
+    ),
+    (
+        re.compile(r"econnreset|connection reset|broken pipe|ssl handshake|dns|无法解析", re.I),
+        "网络断了",
+    ),
+    (
+        re.compile(r"\b5\d\d\b|internal server error|bad gateway|service unavailable", re.I),
+        "上游服务出错",
+    ),
+    (
+        re.compile(r"orphaned|killed|sigterm|terminated|interrupted", re.I),
+        "进程被外部杀掉",
+    ),
+    # A process that exits non-zero and prints nothing is still a class of
+    # failure; "看不出" is a worse answer than "它自己退了，没留话".
+    (re.compile(r"exit code -?\d+", re.I), "进程自己退出"),
+]
 
 #: One board render asks the same question about the same run more than once
 #: (a decision row, the history row, the log endpoint). A per-thread cache
@@ -366,14 +460,31 @@ def _last_action(run: dict) -> dict:
 
 
 def _error_evidence(run: dict) -> dict:
-    """The raw tail a person reads, newest and most specific record first."""
+    """The raw tail a person reads, newest and most specific record first.
+
+    Two records can look like "the error": the last tool output that returned
+    non-zero, and the reason the run was declared failed. When the process was
+    killed, the tool output is what it was doing, not why it stopped — showing
+    a paragraph of skill documentation as the error is worse than showing
+    nothing, so the death reason wins there.
+    """
     run_id = str(run.get("id") or "")
     events = _events(run_id, ("error", "tool_result", "run.failed"))
+    death = _PROCESS_DEATH.search(str(run.get("error") or ""))
+    if death:
+        for event in reversed(events):
+            if event.get("type") == "run.failed":
+                text = str((event.get("payload") or {}).get("error") or "")
+                if text.strip():
+                    return {"tail": _tail(text), "source": "run.failed 事件（进程被杀）"}
+        return {"tail": _tail(str(run.get("error") or "")), "source": "run.error（进程被杀）"}
     for event in reversed(events):
         payload = event.get("payload") or {}
         if event.get("type") == "tool_result" and payload.get("ok") is False:
             text = str(payload.get("text") or "")
-            if text.strip():
+            # Not every failed tool prints an error: some print usage or a
+            # help page. Those are context, not the cause.
+            if text.strip() and _DEAD_TEXT.search(text):
                 return {"tail": _tail(text), "source": "最后一次失败的工具输出"}
     for event in reversed(events):
         if event.get("type") == "error":
@@ -699,6 +810,121 @@ def _error_phrase(text: str) -> str:
     return _clip(lines[-1], 100) if lines else ""
 
 
+def _evidence_gap(run: dict, evidence: dict) -> str:
+    """The sentence for a run that predates the evidence records.
+
+    A decision row built from an empty record must say the record is empty.
+    Falling back to "执行失败" hides the fact that nobody can tell what
+    happened; saying so is the honest version of the same sentence.
+
+    What counts as evidence is an *operation*: a tool call, a test result, or a
+    changed file. A `run.failed` lifecycle event is not — a legacy run carries
+    one and still tells the reader nothing, which is exactly the case this
+    sentence exists for.
+    """
+    run_id = str(run.get("id") or "")
+    if _events(run_id, ("tool_call", "tool_result", "error")):
+        return ""
+    change = evidence.get("change") or {}
+    if evidence.get("tests") or change.get("files"):
+        return ""
+    return "证据缺失：这次运行没有记录 tool_call / 改动 / 测试输出"
+
+
+def _failure_kind(run: dict, evidence: dict, state: str, gap: str = "") -> str:
+    """One of FAILURE_KINDS. This is the line the operator reads second.
+
+    A run with no tool_call, no change and no test is classified as 证据缺失
+    even when it left a one-line error: the error says how it stopped, not
+    what it was doing. The recognisable part still shows up in the headline,
+    the likely cause and the advice, so nothing is lost.
+    """
+    if state == "red" or (evidence.get("tests") or []):
+        return "测试红"
+    if gap:
+        return "证据缺失"
+    text = " ".join(
+        str(part or "")
+        for part in (evidence.get("error_tail"), run.get("error"), evidence.get("action"))
+    )
+    if not text.strip():
+        return "证据缺失"
+    if _TIMEOUT_TEXT.search(text):
+        return "超时"
+    if _MODEL_TEXT.search(text):
+        return "模型报错"
+    if _DEAD_TEXT.search(text):
+        return "进程退出"
+    return "无法归类"
+
+
+def _cause_snippet(text: str) -> str:
+    """The raw line the guess came from, short enough to sit in a sentence."""
+    return _clip(" ".join(str(text or "").split()), 80)
+
+
+def _likely_cause(run: dict, evidence: dict, state: str, gap: str = "") -> str:
+    """What probably went wrong, from the error string alone.
+
+    Rule-based on purpose: this runs on every board render, and a model call
+    per row would make the board cost money and be slow. The wording says it
+    is a guess ("大概率是") and shows the line it came from, so a wrong guess
+    is visibly a guess. A run with no operations recorded falls back to saying
+    so — but only after the error text has had its chance, because a legible
+    `ModuleNotFoundError` is a real cause even in a run with no tool_call.
+    """
+    tests = evidence.get("tests") or []
+    if state == "red" or tests:
+        first = tests[0] if tests else {}
+        name = str(first.get("test") or first.get("name") or "")
+        assertion = _assertion_phrase(str(first.get("assertion") or ""))
+        if name and assertion:
+            return f"大概率是改动没做到位：{name} 的断言没过（{assertion}）"
+        if name:
+            return f"大概率是改动没做到位：{name} 没过"
+        return "大概率是改动没做到位：测试跑完了但没通过"
+    text = " ".join(
+        str(part or "") for part in (evidence.get("error_tail"), run.get("error"))
+    )
+    for pattern, label in _CAUSE_RULES:
+        match = pattern.search(text)
+        if not match:
+            continue
+        return f"大概率是{label}（报错是 {_clip(match.group(0).strip(), 80)}）"
+    if gap:
+        return "推断不了：旧记录里没有 tool_call、也没有报错原文，只剩一个状态。"
+    if text.strip():
+        return f"看不出已知的错误模式，要读日志原文才知道：{_cause_snippet(text)}"
+    return "没有报错原文，推断不了。"
+
+
+def _retry_line(evidence: dict, kind: str, why: str = "", plan: dict | None = None) -> str:
+    """How many times it already tried, and what each try returned.
+
+    "未重试" is a fact, not a blank: the reason it never retried is on the same
+    line, because "no retries" and "retries were refused" are different
+    situations for the person deciding what to do next.
+    """
+    attempts = evidence.get("attempts") or []
+    if attempts:
+        parts = []
+        for item in attempts:
+            seconds = item.get("seconds")
+            took = f"{seconds}s" if isinstance(seconds, (int, float)) else "时长没记"
+            parts.append(f"第{item.get('n')}次 {took} {item.get('outcome') or '结果没记'}")
+        line = f"自动重试 {len(attempts)} 次：" + " / ".join(parts)
+        limit = (plan or {}).get("limit")
+        if isinstance(limit, int) and limit:
+            line += f"（上限 {limit} 次）"
+        return line
+    reason = str(why or "").strip()
+    if kind == "测试红" and not reason:
+        reason = "它已经跑完了，问题出在验收结果，重试不会改代码"
+    if not reason:
+        reason = "没有重试记录：这条失败没有进入自动恢复，或者记录里没存重试历史"
+    return f"未重试（原因：{reason}）"
+
+
 def _headline(
     run: dict,
     evidence: dict,
@@ -707,10 +933,13 @@ def _headline(
     plan: dict | None = None,
     gate: str = "",
 ) -> str:
-    """The one-sentence conclusion on the second line of a decision row."""
-    attempts = len(evidence.get("attempts") or [])
+    """The what-broke phrase, without the retry/gate framing.
+
+    The framing (why the machine stopped, how many tries) has its own line
+    now; duplicating it here is how the same card ends up saying "连续两次同样
+    的错" on three different failures.
+    """
     tests = evidence.get("tests") or []
-    phrase = ""
     if tests:
         first = tests[0]
         assertion = _assertion_phrase(str(first.get("assertion") or ""))
@@ -719,31 +948,13 @@ def _headline(
             phrase += f" 断言 {assertion}"
         if len(tests) > 1:
             phrase += f"，共 {len(tests)} 条失败"
-    elif evidence.get("error_tail"):
-        phrase = _error_phrase(evidence["error_tail"])
-    if not phrase:
-        match = re.search(r"exit code (-?\d+)", str(run.get("error") or ""))
-        if match:
-            phrase = f"进程退出码 {match.group(1)}"
-        else:
-            phrase = problem or recover.problem_text(run)
-    if state == "red":
-        return f"第 {attempts} 次重试后测试仍红：{phrase}" if attempts else f"测试红：{phrase}"
-    if recover.classify(run) == "deterministic":
-        if "重试不会好" in problem:
-            return problem
-        return f"重试不会好：{problem}"
-    if gate == "same-signature":
-        return f"连续两次同样的错：{phrase}"
-    if gate in ("budget", "cost-cap", "over-budget"):
-        # The money sentence is already the conclusion; repeating the error
-        # after it would bury the number the operator has to decide about.
-        return problem
-    if gate == "disabled":
-        return problem
-    if attempts:
-        return f"第 {attempts} 次重试仍失败：{phrase}"
-    return phrase
+        return phrase
+    if evidence.get("error_tail"):
+        return _error_phrase(evidence["error_tail"])
+    match = re.search(r"exit code (-?\d+)", str(run.get("error") or ""))
+    if match:
+        return f"进程退出码 {match.group(1)}"
+    return problem or recover.problem_text(run)
 
 
 def _change_line(change: dict) -> str | None:
@@ -756,8 +967,63 @@ def _change_line(change: dict) -> str | None:
     return f"改了 {len(files)} 个文件：{shown}"
 
 
+#: What to actually do, per likely cause. Every one of these names an action;
+#: none of them says "由你决定". The second half is the escape hatch for the
+#: operator who would rather fix it than spend another run. The keys are the
+#: labels in `_CAUSE_RULES`; a test pins the two tables together so a renamed
+#: label cannot silently lose its advice.
+_CAUSE_ADVICE: dict[str, str] = {
+    "依赖没装": "先把依赖装上（{module}），再点「重跑」；不想装就自己改掉这个 import，再点「重跑」。",
+    "依赖或导入路径不对": "先确认这个包装在跑 worker 的那个解释器里，再点「重跑」；路径的问题直接自己改更快。",
+    "命令不在 PATH 里": "先把这条命令装进 PATH（或改成绝对路径），再点「重跑」；临时要做就自己接手跑。",
+    "路径或环境不对": "先确认 cwd 和文件都在（{cwd}），再点「重跑」；路径本身错了就直接自己改。",
+    "密钥无效或没有权限": "换上有效的密钥或补权限，再点「重跑」；也可以换 codex 路由重试，或者自己接手。",
+    "被上游限流或额度用尽": "等几分钟再点「重跑」；一直 429 就换一条路由重试，或自己接手。",
+    "上下文太长": "把这个任务拆小再派，或换一个能吃更长上下文的路由重试。",
+    "模型名不对": "换一个可用模型（或换路由）再点「重跑」；模型名要在配置里改。",
+    "卡住超时": "先看日志最后停在哪一步，再点「重跑」；每次都卡在同一个地方就换 codex 路由重试一次，或自己接手。",
+    "目标服务没起": "先把要连的服务起起来，再点「重跑」；连不上就别重试，直接自己查。",
+    "网络断了": "网络恢复后点「重跑」；反复断就换一条路由重试。",
+    "上游服务出错": "等几分钟再点「重跑」；同一个 5xx 反复出现就自己接手。",
+    "进程被外部杀掉": "先确认 daemon 没在重启、机器没休眠，再点「重跑」；总在同一个秒数附近死就换 codex 路由重试，或自己接手。",
+    "进程自己退出": "它自己退了但没打印报错：先点「看日志」翻完整输出，再决定重跑；找不到原因就自己接手。",
+}
+
+_MODULE_NAME = re.compile(r"No module named '?([\w.\-]+)'?")
+
+
+def _advice_for(kind: str, cause: str, evidence: dict, cwd: str = "") -> str:
+    """The 建议 line: one concrete action, plus what to do instead.
+
+    The cause wins over the missing-evidence case: a run with no tool_call but
+    a legible `401` should be told to change the key, not to "rerun for
+    evidence".
+    """
+    label = str(cause or "").split("（", 1)[0]
+    label = label.replace("大概率是", "", 1).strip()
+    template = _CAUSE_ADVICE.get(label)
+    if template:
+        module = ""
+        match = _MODULE_NAME.search(str(evidence.get("error_tail") or ""))
+        if match:
+            module = f"pip install {match.group(1)} 之类"
+        return template.format(module=module or "装好缺的那个包", cwd=cwd or "这个目录")
+    if kind == "证据缺失":
+        return (
+            "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，"
+            "或者自己翻日志（旧记录补不回来）。"
+        )
+    return ""
+
+
 def _next_step(
-    evidence: dict, fallback: str, plan: dict | None = None, gate: str = ""
+    evidence: dict,
+    fallback: str,
+    plan: dict | None = None,
+    gate: str = "",
+    kind: str = "",
+    cause: str = "",
+    cwd: str = "",
 ) -> str:
     """The suggestion, built from what actually happened.
 
@@ -784,6 +1050,9 @@ def _next_step(
             "先看「试过什么」判断值不值：值得就点「重跑」手动批准，"
             "不值得就自己接手改。"
         )
+    action_advice = _advice_for(kind, cause, evidence, cwd=cwd)
+    if action_advice:
+        return action_advice
     tests = evidence.get("tests") or []
     if tests:
         first = tests[0]
@@ -834,23 +1103,42 @@ def _run_entry(
     """One decision row: which project, which task, what broke, what it cost.
 
     `problem` stays a one-sentence judgement (used by the log view and the old
-    API consumers); `headline` is the conclusion the card leads with, built
-    from evidence. `why` is the one sentence that explains why the machine
-    stopped retrying — every decision row has one, and none of them is
-    "由你决定". Both are always present, even when the evidence is missing —
-    "这类证据没有记录" is a fact, "执行失败" is not.
+    API consumers); `headline` is what broke, `failure_kind` is which of the
+    five classes it belongs to, `likely_cause` is the rule-based guess and
+    `retry_line` is how many tries already happened. Those four plus
+    `suggestion` are the five questions every decision row must answer; none
+    of them is "由你决定", and an empty record says "证据缺失" instead of
+    degrading into a generic sentence.
     """
     tid = str(run.get("task_id") or "")
     task = facts.get(tid) or {}
     cwd = str(run.get("cwd") or "")
     issue = problem or recover.problem_text(run)
     facts_ev = _evidence(run, state, deep=deep) if evidence else {}
+    gap = _evidence_gap(run, facts_ev) if evidence else ""
+    failure_kind = _failure_kind(run, facts_ev, state, gap=gap)
+    likely_cause = _likely_cause(run, facts_ev, state, gap=gap)
     if plan:
         gate = gate or str(plan.get("gate") or "")
         why = why or str(plan.get("why") or "")
+    phrase = headline or _headline(run, facts_ev, issue, state, plan=plan, gate=gate)
+    if gap:
+        # The gap sentence is the headline: it is the only thing we know for
+        # sure. Whatever one-line error survived goes in brackets after it.
+        phrase = gap + (f"（只留下：{phrase}）" if phrase else "")
+    elif phrase and failure_kind not in phrase:
+        phrase = f"{failure_kind}：{phrase}"
     advice = suggestion or recover.suggestion_text(run)
     if not suggestion and facts_ev and str(run.get("status") or "") == "failed":
-        advice = _next_step(facts_ev, advice, plan=plan, gate=gate)
+        advice = _next_step(
+            facts_ev,
+            advice,
+            plan=plan,
+            gate=gate,
+            kind=failure_kind,
+            cause=likely_cause,
+            cwd=cwd,
+        )
     change = _change_line(facts_ev.get("change") or {}) if facts_ev else _change_summary(run)
     retry_view = None
     if plan:
@@ -869,13 +1157,18 @@ def _run_entry(
         "run": str(run.get("id") or ""),
         "at": run.get("ended_at") or run.get("started_at"),
         "project": _project(cwd),
+        "project_path": _project_path(cwd),
         "cwd": cwd,
         "task_id": tid,
         "task_title": _task_label(task, run),
         "goal": _clip(task.get("goal") or ""),
         "cause": recover.cause(run),
+        "failure_kind": failure_kind,
         "problem": issue,
-        "headline": headline or _headline(run, facts_ev, issue, state, plan=plan, gate=gate),
+        "headline": phrase or issue,
+        "likely_cause": likely_cause,
+        "retry_line": _retry_line(facts_ev, failure_kind, why=why, plan=plan),
+        "evidence_missing": gap,
         "change": change,
         "suggestion": advice,
         "why": why or (
@@ -905,13 +1198,18 @@ def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
         "run": str(proposal.get("run_id") or ""),
         "at": proposal.get("created_at"),
         "project": _project(repo),
+        "project_path": _project_path(repo),
         "cwd": repo,
         "task_id": tid,
         "task_title": _task_label(task, run),
         "goal": _clip(task.get("goal") or ""),
+        "cause": "",
+        "failure_kind": "提案",
         "problem": "改动做完了，但在独立分支上，主工作区没动，等你决定合不合。",
         "headline": f"改动在分支 {proposal.get('branch') or '?'} 上等你合入"
         + (f"：{stat}" if stat else ""),
+        "likely_cause": "这个改动还没进主工作区：它只在分支上，合不合取决于测试过没过。",
+        "retry_line": "未重试（原因：提案不是失败，重试不会让它更对）",
         "change": stat or (f"改了 {len(files)} 个文件" if files else None),
         "suggestion": "先看改动摘要；测试红着或没验证就先重跑，没问题再点「合并」。",
         "title": "提案在分支上，等你合入或丢弃",
@@ -933,15 +1231,23 @@ def _unverified_entry(
         "run": "",
         "at": latest.get("ended_at"),
         "project": _project(cwd),
+        "project_path": _project_path(cwd),
         "cwd": cwd,
         "task_id": tid,
         "task_title": _task_label(task, full or latest),
         "goal": _clip(task.get("goal") or ""),
+        "cause": "",
+        "failure_kind": "证据缺失",
         "problem": (
             f"最近 {count} 个 run 跑完了但没有测试证据；"
             "进程退出码 0 只说明它退出了，不说明改对了。"
         ),
         "headline": f"最近 {count} 个 run 跑完却没有测试证据，不能算通过",
+        "likely_cause": (
+            "大概率是没跑测试：这些 run 没有 verify 事件，"
+            "任务可能没配验收命令，或 worker 改完没跑就退出了。"
+        ),
+        "retry_line": f"未重试（原因：这是 {count} 个 run 的汇总，不是某一次失败）",
         "change": _change_summary(full) if full else None,
         "suggestion": "展开看是哪几次，对最近一次点「重跑」让它跑测试。",
         "title": f"{count} 个 run 跑完但没有测试证据（状态只代表进程退出码）",
@@ -987,17 +1293,20 @@ def _needs_you(
         plan = recover.retry_plan(run, now=now)
         gate = plan["gate"] if recover.enabled() else "disabled"
         if gate in history_reasons:
+            # Deep evidence on purpose: a history row is still a decision row,
+            # and an old run that kept no tool_call must say "证据缺失" rather
+            # than degrade into the same generic sentence as a fresh failure.
             history.append(
                 _run_entry(
                     run,
                     facts,
                     history_reasons[gate],
-                    "看日志确认它到底改到哪一步。",
+                    "",
                     state=state,
-                    headline=history_reasons[gate],
-                    deep=False,
+                    deep=True,
                     gate=gate,
                     why=plan["why"],
+                    plan=plan,
                 )
             )
             continue
@@ -1092,19 +1401,21 @@ def _deterministic(
             continue
         if recover.classify(run) != "deterministic":
             continue
-        problem = recover.problem_text(run)
+        # The reason a retry cannot help belongs on the `why` line; the
+        # headline says what broke, and the advice comes from the cause rules
+        # (`401` gets "换密钥", not "改好配置或代码").
         rows.append(
             _run_entry(
                 run,
                 facts,
-                problem,
-                recover.suggestion_text(run),
+                recover.problem_text(run),
+                "",
                 state=states.get(str(run.get("id") or ""), "none"),
-                headline=problem if "重试不会好" in problem else f"重试不会好：{problem}",
+                why=recover.why_not_retried(run),
             )
         )
     rows.sort(key=lambda item: item.get("at") or 0, reverse=True)
-    return rows[:5]
+    return rows
 
 
 def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], dict]:
@@ -1146,12 +1457,17 @@ def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], di
     failed = [r for r in runs if r.get("status") == "failed"]
     counts["failed"] = len(failed)
     for r in failed[:3]:
+        # The old title here was "执行失败，要不要重跑由你定" — the exact
+        # sentence this board exists to replace. MCP and the pet read this
+        # list, so it gets the same class sentence as the page.
+        evidence = _evidence(r, states.get(r["id"], "none"), deep=False)
+        kind = _failure_kind(r, evidence, states.get(r["id"], "none"))
         items.append(
             {
                 "kind": "failed",
                 "id": r["id"],
                 "run": r["id"],
-                "title": "执行失败，要不要重跑由你定",
+                "title": f"{kind}：{_error_phrase(evidence.get('error_tail') or '') or recover.problem_text(r)}",
                 "detail": (r.get("error") or "")[:160],
                 "note": "",
                 "at": r.get("ended_at") or r.get("started_at"),
