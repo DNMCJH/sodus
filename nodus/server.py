@@ -21,6 +21,7 @@ from . import (
     config,
     db,
     jobs,
+    llm,
     memory,
     pet,
     profiles,
@@ -2338,6 +2339,21 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
             return _json(self, 201, run)
+
+        if path == "/llm/chat":
+            # The desktop pets' only way to a model. One route, one provider,
+            # one credential — the caller names an agent and never an endpoint,
+            # so a pet host needs no key of its own. Failures carry a `kind`
+            # because the caller has to tell "Nodus is down" from "the agent
+            # name is wrong" without parsing prose.
+            status, payload = llm.chat(
+                agent=body.get("agent") or "",
+                messages=body.get("messages"),
+                max_tokens=body.get("max_tokens"),
+                note=str(body.get("note") or ""),
+                cwd=str(body.get("cwd") or ""),
+            )
+            return _json(self, status, payload)
 
         if path == "/memory/adopt":
             ids = body.get("ids")

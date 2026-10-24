@@ -780,6 +780,79 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /llm/chat:
+    post:
+      tags: [llm]
+      operationId: chatCompletion
+      summary: 一次 chat completion（按 agent 选路由，用该路由自己的凭证）
+      description: |
+        桌宠（以及任何拿不到密钥的本地客户端）唯一接模型的口子：调用方只说
+        `agent`，不说端点和密钥——接口地址、凭证、限额、记账全在 daemon 一处。
+
+        限额是契约的一部分：每次 ≤ 400 输出 token（`max_tokens` 只能往下压），
+        同一 agent 每分钟 ≤ 10 次。超了返回 `429`，`kind=rate-limited`。
+
+        记账：每次成功的调用都会在 `run` 表落一行（`status=completed`，
+        `usage_json` 与 run 同字段），所以 `nodus stats` / `nodus stats usage`
+        能看到这笔花费。`cost_basis` 说明这个数字有多可信：
+        `calibrated`（按实测标定）/ `list_price`（按价目表）/
+        `metered`（账户计量前后差，账户级，含并发重叠）/ 省略（未计价）。
+
+        失败一律是 `{"error":{"kind","message"}}` + 合适的状态码，不裸 500。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LlmChatRequest'
+      responses:
+        '200':
+          description: 模型返回的文本与这次调用的账
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmChatResult'
+        '400':
+          description: agent 为空、messages 非法（空数组/角色不对/正文为空）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: agent 名字不在路由表里
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+        '409':
+          description: 路由没有可用 provider（缺密钥、没有模型、没有 base_url）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: 这个 agent 这一分钟打满了 10 次
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+        '502':
+          description: 端点返回错误或非 JSON，或网络不可达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+        '504':
+          description: 端点超时（45s）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LlmError'
+
   /events:
     get:
       tags: [events]
@@ -947,6 +1020,115 @@ components:
           description: 同主题下有另一种相反说法；规则很粗，看之前先读两条原文
         adopted:
           type: boolean
+
+    LlmChatRequest:
+      type: object
+      additionalProperties: false
+      required: [agent, messages]
+      description: |
+        `agent` 是路由名（`claude` / `codex` / `dsh` / `opencode-gemini` …），
+        不是模型名。`system` 角色直接放在 `messages` 里即可：Anthropic 协议没
+        有这个角色，daemon 会把它提到顶层 `system` 字段。
+      properties:
+        agent:
+          type: string
+          examples: [claude]
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/LlmMessage'
+        max_tokens:
+          type: integer
+          minimum: 1
+          maximum: 400
+          default: 400
+          description: 只能往下压；超过 400 按 400 算
+        note:
+          type: string
+          description: 写进这次 run 的 note（桌宠传「碎碎念」「对话」），只用于看板显示
+        cwd:
+          type: string
+          description: 写进这次 run 的 cwd；不传则用 Nodus home
+
+    LlmMessage:
+      type: object
+      additionalProperties: false
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+          minLength: 1
+
+    LlmChatResult:
+      type: object
+      additionalProperties: false
+      required: [text, model, agent, provider, route, cost, currency, usage, run]
+      properties:
+        text:
+          type: string
+          description: 模型返回的正文（已 strip）
+        model:
+          type: string
+          description: 端点回报的模型名；没回报就用请求里的
+        agent:
+          type: string
+          description: 路由背后的 agent（与 run 表的 agent 一致）
+        provider:
+          type: string
+          description: 这次真正服务的 provider
+        route:
+          type: string
+        cost:
+          type: number
+          nullable: true
+          description: 这次调用的钱；null 表示端点没报用量且没有可用的计价依据
+        currency:
+          type: string
+          nullable: true
+          examples: [CNY]
+        cost_basis:
+          type: string
+          nullable: true
+          enum: [calibrated, list_price, metered, null]
+        usage:
+          type: object
+          additionalProperties: false
+          required: [input_tokens, output_tokens, cache_read, cache_write]
+          properties:
+            input_tokens: {type: integer}
+            output_tokens: {type: integer}
+            cache_read: {type: integer}
+            cache_write: {type: integer}
+        run:
+          type: string
+          description: 这次调用在 run 表里的 id（记账用）；写账失败时为空串
+
+    LlmError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [kind, message]
+          properties:
+            kind:
+              type: string
+              enum: [bad-request, unauthorized, unknown-agent, not-ready, rate-limited,
+                     timeout, network, bad-response, provider-error, max-tokens, empty]
+            message:
+              type: string
+            provider:
+              type: string
+              description: 能归到某个 provider 时带上
+            retry_after:
+              type: integer
+              description: 限流时建议等多少秒
 
     MemoryAdoptRequest:
       type: object

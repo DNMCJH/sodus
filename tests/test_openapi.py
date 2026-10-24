@@ -101,6 +101,7 @@ def test_contract_covers_every_route_server_serves(spec):
         ("post", "/proposals/{id}/merge"),
         ("post", "/proposals/{id}/reject"),
         ("post", "/memory/adopt"),
+        ("post", "/llm/chat"),
         ("get", "/events"),
     }
     actual = {

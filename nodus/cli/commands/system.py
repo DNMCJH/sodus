@@ -432,7 +432,13 @@ def _money_text(cost: dict) -> str:
     for currency, bucket in sorted(cost.items()):
         total = bucket["total"]
         if currency == "CNY":
-            parts.append(f"¥{total:.2f}")
+            # A fraction of a cent is not zero. One pet line costs a few tenths
+            # of a fen, and `¥0.00` for a group that did spend money reads as
+            # "free" — so below half a cent the fourth decimal is what's shown.
+            shown = f"{total:.2f}"
+            if total and shown == "0.00":
+                shown = f"{total:.4f}"
+            parts.append(f"¥{shown}")
         elif currency == usage_stats.UNKNOWN_CURRENCY:
             parts.append(f"币种未记录 {total:.4f}")
         else:
