@@ -22,6 +22,10 @@ with attempts left appears under "自动重试中" with dots instead of buttons;
 "需要你决定" only holds spent chains, red tests and proposals; a deterministic
 failure (401/403/400, model, content policy) gets its own section with the
 reason a rerun would return the same error.
+
+Nothing here polls. `/board` is fetched on load, when the tab regains focus, and
+when 刷新 is clicked; the numbers between those moments are a snapshot, and that
+is the trade the page makes to cost no CPU while it sits open.
 """
 
 from __future__ import annotations
@@ -92,6 +96,8 @@ PAGE = """<!doctype html>
   button.danger { color:var(--bad); }
   button.danger:hover { border-color:rgba(239,107,107,.4); background:rgba(239,107,107,.07); }
   button:focus-visible { outline:2px solid rgba(111,140,255,.5); outline-offset:1px; }
+  #refresh { height:28px; padding:0 11px; font-size:12px; }
+  #refresh[disabled] { opacity:.55; cursor:default; }
   .decision { padding:15px 17px 14px; }
   .d-head { display:flex; align-items:baseline; gap:10px; min-width:0; }
   .d-where { display:flex; align-items:baseline; gap:7px; min-width:0;
@@ -224,6 +230,7 @@ PAGE = """<!doctype html>
     <span class="chip" id="s-retry" hidden></span>
   </div>
   <div class="rule">结束 ≠ 通过 · 只有测试证据变绿才算验收</div>
+  <button id="refresh" onclick="manualRefresh()" title="重新拉取 /board。页面不会自己刷新。">刷新</button>
 </header>
 <main>
   <section>
@@ -386,7 +393,7 @@ function liveWhat(r) {
 }
 
 let state = { board: null, runs: [], proposals: [], pipelines: [], routes: [], tasks: [] };
-let sseLive = false, timer = 0, inflight = false;
+let inflight = false;
 let unvOpen = false, moreNeedsOpen = false;
 const count = k => ((state.board || {}).decision_counts || {})[k] || 0;
 
@@ -437,7 +444,7 @@ function renderLive() {
     else sub.push("约 " + money(r.partial_currency || "USD", r.partial_cost) + "（还没结算）");
     return `<div class="live-row">
       <div>
-        <div class="live-what"><span class="status-dot ok"></span> ${liveWhat(r)} <span class="dim">· 已跑 <span data-start="${r.started_at || 0}">${span(now - (r.started_at || now))}</span></span></div>
+        <div class="live-what"><span class="status-dot ok"></span> ${liveWhat(r)} <span class="dim">· 已跑 ${span(now - (r.started_at || now))}</span></div>
         <div class="live-sub">${sub.join('<span class="sep">·</span>')}</div>
       </div>
       <div class="act"><button class="danger" onclick="stopRun('${r.id}')">停止</button></div>
@@ -447,7 +454,7 @@ function renderLive() {
     const start = p.started_at || p.created_at || 0;
     rows.push(`<div class="live-row">
       <div>
-        <div class="live-what"><span class="status-dot ok"></span> <b>流水线</b> ${esc(p.kind)} 正在跑 <span class="dim">· 已跑 <span data-start="${start}">${span(now - (start || now))}</span></span></div>
+        <div class="live-what"><span class="status-dot ok"></span> <b>流水线</b> ${esc(p.kind)} 正在跑 <span class="dim">· 已跑 ${span(now - (start || now))}</span></div>
         <div class="live-sub">${esc(p.label || "后台批次")}<span class="sep">·</span>不计入花费</div>
       </div>
       <div class="act"><button class="danger" onclick="stopPipe('${p.id}')">停止</button></div>
@@ -783,15 +790,15 @@ async function showLog(rid) {
 async function stopRun(id) {
   const r = state.runs.find(x => x.id === id) || state.board.running.find(x => x.id === id) || {};
   if (!confirm("停止 " + whoName(r.agent || r.route) + " 这个任务？已经改过的文件不会回滚。")) return;
-  try { await api("/runs/" + id + "/stop", "POST"); flash("已请求停止，几秒后刷新"); }
+  try { await api("/runs/" + id + "/stop", "POST"); flash("已请求停止"); }
   catch (e) { flash("停止失败：" + e.message, true); }
-  scheduleRefresh(300);
+  refresh();
 }
 async function stopPipe(id) {
   if (!confirm("停止这个流水线？")) return;
-  try { await api("/pipelines/" + id + "/stop", "POST"); flash("已请求停止，几秒后刷新"); }
+  try { await api("/pipelines/" + id + "/stop", "POST"); flash("已请求停止"); }
   catch (e) { flash("停止失败：" + e.message, true); }
-  scheduleRefresh(300);
+  refresh();
 }
 async function merge(id) {
   const p = state.proposals.find(x => x.id === id) || {};
@@ -805,13 +812,13 @@ async function merge(id) {
   try { const r = await api("/proposals/" + id + "/merge", "POST");
     flash(r.ok ? "已合入主工作区" + (r.commit ? "：" + String(r.commit).slice(0, 8) : "") : "合并失败：" + r.reason, !r.ok); }
   catch (e) { flash("合并失败：" + e.message, true); }
-  scheduleRefresh(300);
+  refresh();
 }
 async function reject(id) {
   if (!confirm("丢弃这次改动？分支和工作区都会删掉，改动不会保留。")) return;
   try { await api("/proposals/" + id + "/reject", "POST"); flash("已丢弃"); }
   catch (e) { flash("丢弃失败：" + e.message, true); }
-  scheduleRefresh(300);
+  refresh();
 }
 async function rerun(rid, lead) {
   const r = state.runs.find(x => x.id === rid);
@@ -828,7 +835,7 @@ async function rerun(rid, lead) {
     });
     flash("已重新派活，跑完会跑测试");
     if (run && run.id) state.runs.unshift({ ...run, agent: r.agent, route: r.route, cwd: r.cwd });
-    scheduleRefresh(300);
+    refresh();
   } catch (e) { flash("重跑失败：" + e.message, true); }
 }
 function rerunRecent() {
@@ -870,7 +877,7 @@ async function dispatch(ev) {
     });
     flash("已派活（" + route + "）");
     $("f-goal").value = ""; $("f-accept").value = "";
-    scheduleRefresh(300);
+    refresh();
   } catch (e) { flash("派活失败：" + e.message, true); }
 }
 
@@ -883,11 +890,6 @@ async function loadRoutes() {
       .join("");
     $("f-hint").textContent = state.routes.length ? "" : "没有可用的路由，先去配置端点。";
   } catch (e) { $("f-hint").textContent = "读不到路由：" + e.message; }
-}
-
-function scheduleRefresh(ms) {
-  clearTimeout(timer);
-  timer = setTimeout(refresh, ms);
 }
 
 async function refresh() {
@@ -919,32 +921,17 @@ async function refresh() {
   }
 }
 
-function startStream() {
-  if (!window.EventSource) return;
-  // SSE carries this daemon's own runs (runner.BUS is in-process). A run
-  // started from a terminal in another process never appears here, so the
-  // stream is an accelerator and the timers below stay as the floor.
-  try {
-    const es = new EventSource("/events?token=" + encodeURIComponent(TOKEN));
-    es.onopen = () => { sseLive = true; };
-    es.onmessage = () => scheduleRefresh(250);
-    es.onerror = () => { sseLive = false; };
-  } catch (e) { sseLive = false; }
-}
-
-function tick() {
-  const now = Date.now() / 1000;
-  document.querySelectorAll("[data-start]").forEach(el => {
-    const start = Number(el.dataset.start);
-    if (start) el.textContent = span(now - start);
-  });
+async function manualRefresh() {
+  const b = $("refresh");
+  b.disabled = true; b.textContent = "刷新中…";
+  try { await refresh(); } finally { b.disabled = false; b.textContent = "刷新"; }
 }
 
 $("dispatch").addEventListener("submit", dispatch);
-loadRoutes(); refresh(); startStream();
-setInterval(tick, 1000);
-setInterval(refresh, 15000);
-setInterval(() => { if (!sseLive) refresh(); }, 5000);
+// Three ways the board updates: load, tab focus, the button. No timer, so an
+// idle board costs nothing — the numbers in between are a snapshot.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+loadRoutes(); refresh();
 </script>
 </body>
 </html>

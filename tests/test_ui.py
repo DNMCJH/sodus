@@ -117,3 +117,21 @@ def test_failure_wording_lives_in_recover_not_in_the_page():
     assert "启动它的进程退出了" in recover.problem_text(
         {"error": "orphaned: the process that owned this run is gone"}
     )
+
+
+def test_the_board_refreshes_only_when_asked():
+    # A 1s tick, a 15s /board poll, a 5s SSE fallback and the EventSource
+    # itself all went away: an idle board must not cost a request. If any of
+    # them comes back, this test is the place that says it was a decision.
+    assert "setInterval" not in ui.PAGE
+    assert "EventSource" not in ui.PAGE
+    assert "data-start" not in ui.PAGE
+    assert "function tick" not in ui.PAGE
+    assert 'id="refresh"' in ui.PAGE
+    # the button belongs to the header, not to a section further down
+    assert ui.PAGE.index('id="refresh"') < ui.PAGE.index("<main>")
+    assert "visibilitychange" in ui.PAGE
+    assert "刷新中…" in ui.PAGE
+    # one fetch on load, then only a click or a tab focus does another
+    assert "loadRoutes(); refresh();" in ui.PAGE
+
