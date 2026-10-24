@@ -1,11 +1,19 @@
-"""The first screen: a decision must say what broke, why it stopped, and what next.
+"""The first screen: a failure is never a question.
 
 `/board` keeps `decisions`/`decision_counts` for MCP and the pet; these tests
-pin the newer contract. A failure the daemon retries is *not* a decision; a
-failure it refused is a decision with the three things the operator asked for:
-where exactly it broke (last tool call, raw error tail, failed tests, diff
-stat), why the machine stopped retrying (one sentence from the retry gate), and
-a concrete next step.
+pin the contract that replaced the old decision blob:
+
+- `needs_you` holds only the things a person owns: a proposal to merge and a
+  spend decision past the budget (an ambiguous requirement would land here
+  too). A failure in there is the bug this board exists to fix.
+- `handling` is the machine at work: attempt number, history, likely cause and
+  plan, with no button but 看日志.
+- `stopped` is the report for a spent chain, a repeated error, a deterministic
+  error or a red test nobody owns — what I tried, why I stopped, where the
+  evidence is. A `重试` button may exist as convenience; the copy may not ask.
+- `unverifiable` is information: a finished run with no test evidence says why
+  (no test entry) and what would make the next one verifiable (an acceptance
+  command).
 """
 
 from __future__ import annotations
@@ -165,17 +173,22 @@ def spent_chain(home) -> tuple[dict, dict, list[dict]]:
 # ---- refusing to retry, with the reason -------------------------------
 
 
-def test_the_same_error_twice_is_a_decision(home):
+def test_the_same_error_twice_is_a_stopped_row(home):
     _, first, second = same_signature_pair(home)
 
     board = server.board_state()
+    # Nothing about a failure reaches a person as a question anymore.
+    assert board["needs_you"] == []
     assert all(item.get("run") != second["id"] for item in board["auto_recovering"])
-    entry = find(board, "needs_you", second["id"])
+    entry = find(board, "stopped", second["id"])
 
+    assert entry["kind"] == "stopped"
+    assert entry["stop_reason"] == "same-signature"
+    assert entry["settled"] is False
     assert entry["project"] == "shop"
     assert entry["task_title"] == "修复 token 刷新"
-    # Line 2 is the failure class, not the gate: the gate has its own line and
-    # its own field, and repeating it as the headline hid what actually broke.
+    # The failure class is the line's tag, not the gate: the gate has its own
+    # line, and repeating it as the headline hid what actually broke.
     assert entry["failure_kind"] == "证据缺失"
     assert entry["headline"].startswith("证据缺失：")
     assert entry["evidence_missing"].startswith("证据缺失：")
@@ -184,8 +197,12 @@ def test_the_same_error_twice_is_a_decision(home):
     assert "只会一样" in entry["why"]
     assert entry["retry_line"].startswith("自动重试 1 次：")
     assert "第1次 40s orphaned" in entry["retry_line"]
+    # The report: what I tried, why I stopped, where the evidence is.
+    assert entry["statement"].startswith("1 次都试过了：")
     assert entry["likely_cause"]
-    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
+    assert entry["cause_line"].startswith(entry["likely_cause"])
+    assert entry["plan"] and "由你决定" not in entry["plan"]
+    assert "要不要" not in entry["plan"]
 
 
 def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
@@ -202,13 +219,20 @@ def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
     board = server.board_state()
     entry = find(board, "needs_you", run["id"])
 
+    # The question is money, not "is this failure yours to deal with".
+    assert entry["kind"] == "budget"
+    assert entry["decision"] == "spend"
     assert entry["gate"] == "budget"
-    assert "剩余额度不够" in entry["problem"]
-    assert "¥0.10" in entry["why"]
+    assert entry["question"].startswith("要不要再花")
+    assert "¥" in entry["question"]
+    assert "剩余额度不够" in entry["basis"]
+    assert "¥0.10" in entry["basis"]
     assert "NODUS_DAILY_BUDGET" in entry["suggestion"]
-    # The money sentence explains why the machine stopped (why), not what broke.
-    assert "剩余额度不够" in entry["why"]
-    assert entry["failure_kind"] in server.FAILURE_KINDS
+    # A spend decision carries no failure framing: those fields stay empty so
+    # no row on the first screen reads as "this failed, you deal with it".
+    assert entry["failure_kind"] == ""
+    assert entry["headline"] == ""
+    assert entry["retry_line"] == ""
     assert all(item["run_id"] != run["id"] for item in board["auto_recovering"])
 
 
@@ -223,17 +247,22 @@ def test_a_retry_above_the_cost_cap_waits_for_a_click(home):
 
     entry = find(server.board_state(), "needs_you", run["id"])
 
+    assert entry["kind"] == "budget"
     assert entry["gate"] == "cost-cap"
-    assert "¥1.20" in entry["why"] and "¥0.50" in entry["why"]
-    assert "手动批准" in entry["suggestion"] or "值不值" in entry["suggestion"]
+    assert "¥1.20" in entry["basis"] and "¥0.50" in entry["basis"]
+    assert "要不要再花" in entry["question"]
+    assert entry["failure_kind"] == ""
 
 
 def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
     task, _original, children = spent_chain(home)
 
     board = server.board_state()
-    entry = find(board, "needs_you", children[2]["id"])
+    assert board["needs_you"] == []
+    entry = find(board, "stopped", children[2]["id"])
 
+    assert entry["kind"] == "stopped"
+    assert entry["stop_reason"] == "retry-limit"
     # Line 1: project · the last two directories · task; line 2: the class.
     assert entry["project"] == "shop"
     assert entry["project_path"] == "work/shop"
@@ -244,11 +273,16 @@ def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
     )
     assert entry["gate"] == "retry-limit"
     assert "上限" in entry["why"]
-    # Line 3 and 4: how many tries, and what it probably was.
+    # Line 3 and 4: what I tried, and what it probably was. The cause line
+    # names what would have to change, not what the reader must go do.
     assert entry["retry_line"].startswith("自动重试 3 次：")
     assert "第1次 42s tests_red" in entry["retry_line"]
     assert "第2次 38s timeout" in entry["retry_line"]
+    assert entry["statement"].startswith("3 次都试过了：")
+    assert "第3次 51s exit 1" in entry["statement"]
     assert entry["likely_cause"].startswith("大概率是依赖没装")
+    assert "要解决得" in entry["cause_line"]
+    assert "由你决定" not in entry["plan"]
 
     ev = entry["evidence"]
     # 哪一步
@@ -264,7 +298,7 @@ def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
         "tests_red", "timeout", "exit 1",
     ]
     assert [item["seconds"] for item in ev["attempts"]] == [42, 38, 51]
-    assert entry["suggestion"]
+    assert entry["plan"]
 
 
 def test_a_git_repo_gets_a_diff_stat(home):
@@ -288,7 +322,7 @@ def test_a_git_repo_gets_a_diff_stat(home):
     (home / "work" / "shop" / "app.py").write_text("one\ntwo\n", encoding="utf-8")
     add_artifact(run, "app.py")
 
-    entry = find(server.board_state(), "needs_you", run["id"])
+    entry = find(server.board_state(), "stopped", run["id"])
 
     assert entry["evidence"]["change"]["added"] == 1
     assert "app.py | +1 −0" in entry["evidence"]["change"]["stat"]
@@ -307,6 +341,11 @@ def test_a_deterministic_failure_is_not_a_decision(home):
     assert "401" in entry["headline"]
     assert "密钥" in entry["why"]
     assert entry["evidence"]["attempts"] == []
+    # The same failure is in 已停止, where it is a statement, not a question.
+    stop = find(board, "stopped", run["id"])
+    assert stop["stop_reason"] == "deterministic"
+    assert stop["statement"] == "这个错重试不会变，所以我一次都没试"
+    assert "重试还是同一个错" in stop["plan"]
 
 
 def test_an_unclassified_failure_is_judged_not_hidden(home):
@@ -333,7 +372,10 @@ def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
     # A lifecycle event is not evidence: it says the run ended, not what it did.
     add_event(run, "run.failed", {"error": ORPHAN})
 
-    entry = find(server.board_state(), "needs_you", run["id"])
+    board = server.board_state()
+    assert board["needs_you"] == []
+    entry = find(board, "stopped", run["id"])
+    assert entry["stop_reason"] == "disabled"
 
     missing = "证据缺失：这次运行没有记录 tool_call / 改动 / 测试输出"
     assert entry["failure_kind"] == "证据缺失"
@@ -343,7 +385,8 @@ def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
     assert entry["retry_line"].startswith("未重试（原因：")
     # The cause still comes from the one line that survived, not from a shrug.
     assert entry["likely_cause"].startswith("大概率是进程被外部杀掉")
-    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
+    assert entry["statement"]
+    assert "由你决定" not in entry["plan"]
     # The one line that did survive is still shown, in brackets.
     assert "orphaned" in entry["headline"]
 
@@ -357,6 +400,16 @@ def test_every_cause_label_has_a_concrete_advice():
     for advice in server._CAUSE_ADVICE.values():
         assert "由你决定" not in advice
         assert "重跑" in advice or "接手" in advice or "重试" in advice
+
+
+def test_every_cause_label_has_a_noun_phrase_for_the_stopped_row():
+    # 已停止 is a report, so its cause line says what would have to change
+    # ("要解决得装上缺的依赖") instead of ordering the reader to go do it.
+    labels = [label for _pattern, label in server._CAUSE_RULES]
+    assert [label for label in labels if label not in server._CAUSE_FIX] == []
+    for fix in server._CAUSE_FIX.values():
+        assert "由你决定" not in fix
+        assert "点" not in fix
 
 
 @pytest.mark.parametrize(
@@ -392,8 +445,12 @@ def test_a_red_test_names_the_failed_test_and_its_assertion(home):
     add_tool_call(run, "edit", file_path=str(home / "work" / "shop" / "app.py"))
     add_artifact(run, "app.py")
 
-    entry = find(server.board_state(), "needs_you", run["id"])
+    board = server.board_state()
+    assert board["needs_you"] == []
+    entry = find(board, "stopped", run["id"])
 
+    assert entry["stop_reason"] == "tests_red"
+    assert entry["statement"] == "跑完了一遍，测试没过，我没有再重试"
     assert entry["headline"] == "测试红：test_token_refresh 断言 401 == 200"
     assert entry["evidence"]["tests"] == [
         {
@@ -405,25 +462,30 @@ def test_a_red_test_names_the_failed_test_and_its_assertion(home):
     assert entry["evidence"]["test_cmd"] == "python -m pytest -q"
 
 
-def test_over_budget_is_a_decision_not_a_retry(home):
+def test_over_budget_is_a_spend_question_not_a_retry(home):
     task = db.create_task(goal="g", acceptance="a", title="预算任务")
     db.update_task(task["id"], budget_json='{"max_runs": 1}')
     _, run = seed(home, error=ORPHAN, task=task)
 
     board = server.board_state()
     entry = find(board, "needs_you", run["id"])
+    assert entry["kind"] == "budget"
     assert entry["gate"] == "over-budget"
-    assert "预算上限" in entry["problem"]
+    assert "预算上限" in entry["question"]
+    assert "预算上限" in entry["basis"]
+    assert entry["failure_kind"] == ""
     assert all(item["run_id"] != run["id"] for item in board["auto_recovering"])
 
 
-def test_switching_recovery_off_makes_failures_a_decision(home, monkeypatch):
+def test_switching_recovery_off_stops_instead_of_asking(home, monkeypatch):
     monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
     _, run = seed(home, error=ORPHAN)
 
     board = server.board_state()
-    entry = find(board, "needs_you", run["id"])
-    assert entry["gate"] == "disabled"
+    assert board["needs_you"] == []
+    assert board["handling"] == []
+    entry = find(board, "stopped", run["id"])
+    assert entry["stop_reason"] == "disabled"
     assert "自动恢复已关闭" in entry["problem"]
     assert board["auto_recovering"] == []
 
@@ -439,13 +501,15 @@ def test_a_failure_the_chain_moved_past_is_kept_in_history(home):
     assert all(item.get("run") != original["id"] for item in board["needs_you"])
     entry = find(board, "history_failures", original["id"])
     assert "已经自动重试过" in entry["problem"]
-    # Being history does not excuse a row from the five questions.
+    assert entry["settled"] is True
+    # Being history does not excuse a row from the five answers.
     assert entry["failure_kind"] == "证据缺失"
     assert "证据缺失" in entry["headline"]
     assert "不会为同一次失败开两张单" in entry["why"]
     assert entry["retry_line"].startswith("未重试（原因：")
     assert entry["likely_cause"]
-    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
+    assert entry["statement"] == "后面已经派过重试，这一条翻过去了"
+    assert "由你决定" not in entry["plan"]
     assert board["decision_counts"]["history_failed"] == 1
 
 
@@ -466,6 +530,9 @@ def test_a_proposal_carries_the_repo_and_the_stat(home):
     board = server.board_state()
     entry = next(item for item in board["needs_you"] if item["id"] == proposal["id"])
     assert entry["kind"] == "proposal"
+    assert entry["decision"] == "merge"
+    assert "要不要合进主工作区" in entry["question"]
+    assert "nodus/fix-login" in entry["basis"]
     assert entry["project"] == "shop"
     assert entry["task_title"] == "修复登录"
     assert entry["change"].startswith("1 file changed")
@@ -473,14 +540,22 @@ def test_a_proposal_carries_the_repo_and_the_stat(home):
     assert "nodus/fix-login" in entry["headline"]
 
 
-def test_unverified_runs_stay_one_explained_row(home):
+def test_unverified_runs_are_information_not_a_question(home):
     _, run = seed(home, error="", status="completed")
 
     board = server.board_state()
-    entry = next(item for item in board["needs_you"] if item["kind"] == "unverified")
+    # Not a decision: the answer is "cannot be verified", and no person is
+    # being asked to pick one.
+    assert all(item["kind"] != "unverified" for item in board["needs_you"])
+    entry = board["unverifiable"][0]
+    assert entry["kind"] == "unverifiable"
     assert "没有测试证据" in entry["problem"]
     assert entry["project"] == "shop"
     assert entry["headline"].startswith("最近 1 个 run 跑完却没有测试证据")
+    # The reason names the actual cause and the advice names the fix: a task
+    # with an acceptance command would have run the test.
+    assert "目标目录没有测试入口" in entry["reason"]
+    assert "验收标准" in entry["suggestion"]
     assert board["unverified_runs"][0]["id"] == run["id"]
 
 
@@ -493,24 +568,28 @@ def test_board_keeps_the_old_keys_and_adds_the_new_ones(home):
     assert {
         "now", "day", "profile", "running", "decisions", "decision_counts", "today",
         "unverified_runs", "needs_you", "auto_recovering", "deterministic",
-        "history_failures",
+        "history_failures", "handling", "stopped", "unverifiable",
     } <= set(board)
     assert board["decision_counts"]["needs_you"] == len(board["needs_you"])
+    assert board["decision_counts"]["handling"] == len(board["handling"])
+    assert board["decision_counts"]["stopped"] == len(board["stopped"])
+    assert board["decision_counts"]["unverifiable"] == len(board["unverifiable"])
     assert board["decision_counts"]["deterministic"] == len(board["deterministic"])
 
 
-def test_every_decision_has_the_three_parts(home):
+def test_every_stopped_row_has_the_three_parts(home):
     _, _first, second = same_signature_pair(home)
-    entry = find(server.board_state(), "needs_you", second["id"])
+    entry = find(server.board_state(), "stopped", second["id"])
 
     # 1. what broke, with the records behind it
     assert entry["evidence"]["error_tail"]
     assert entry["change"] is not None or entry["evidence"]["missing"]
     # 2. why the machine stopped
     assert entry["why"] and "由你决定" not in entry["why"]
-    # 3. a concrete next step
-    assert entry["suggestion"] and "由你决定" not in entry["suggestion"]
-    assert "重跑" in entry["suggestion"] or "接手" in entry["suggestion"]
+    # 3. the report: what I tried and where the evidence is
+    assert entry["statement"]
+    assert entry["plan"] and "由你决定" not in entry["plan"]
+    assert "要不要" not in entry["plan"]
 
 
 def test_failures_recovery_gave_up_on_are_still_visible(home):
@@ -524,32 +603,171 @@ def test_failures_recovery_gave_up_on_are_still_visible(home):
     ids = {item["run"] for item in board["history_failures"]}
     assert original["id"] in ids
     for item in board["history_failures"]:
-        assert item["kind"] == "failed"
+        assert item["kind"] == "stopped"
+        assert item["settled"] is True
         assert item.get("problem")
+
+
+# ---- the hard acceptance: a failure never reaches a person as a question
+
+
+def test_no_failure_lands_in_needs_you(home):
+    """The whole point: 失败不进「需要你决定」，那是系统自己的活.
+
+    One of every failure shape the board knows about, and not one of them may
+    show up as a question. The only decisions left are the three in
+    `server.DECISION_KINDS`.
+    """
+    same_signature_pair(home)          # repeated error
+    spent_chain(home)                  # retry limit reached
+    _task, red_run = seed(home, error="", status="completed", title="红测试")
+    red_event(red_run)                 # acceptance failed
+    seed(home, error="401 Unauthorized", title="密钥坏了")   # deterministic
+    seed(home, error="", status="completed", title="没验证")  # verify=none
+    seed(home, error=ORPHAN, title="正在被重试")               # handling
+
+    board = server.board_state()
+    assert board["needs_you"] == []
+    assert board["handling"], "the retryable recent failure must be in handling"
+    assert board["stopped"], "the spent chain must be in stopped"
+
+    # Every failure is visible somewhere that says what the machine did.
+    failed = {r["id"] for r in db.list_runs(limit=50) if r["status"] == "failed"}
+    visible = {item["run"] for item in board["handling"]} | {
+        item["run"] for item in board["stopped"]
+    }
+    assert failed <= visible
+
+    # No row here is a failure card, and none of the three voices leaks.
+    for item in board["needs_you"]:
+        assert item["kind"] in server.DECISION_KINDS
+        assert item["kind"] not in {"failed", "red", "unverified", "stopped", "handling"}
+        assert item.get("failure_kind") not in server.FAILURE_KINDS
+
+
+def test_a_retry_in_flight_says_what_i_am_doing(home):
+    _, run = seed(home, error="exit code 1", folder="nodus-review", title="创新点对抗评审")
+
+    board = server.board_state()
+    entry = find(board, "handling", run["id"])
+
+    assert entry["kind"] == "handling"
+    assert entry["attempt"] == 1
+    assert entry["limit"] == 3
+    assert entry["project"] == "nodus-review"
+    assert entry["statement"] == "第 1/3 次重试"
+    assert entry["history"] == []
+    assert entry["retry_line"] == "还没重试过：这是第 1 次"
+    assert entry["likely_cause"]
+    assert "3 次都不行我就停下" in entry["plan"]
+    assert "「已停止」" in entry["plan"]
+    # The evidence is behind 详情; the only button on the card is 看日志.
+    assert entry["evidence"]["attempts"] == []
+
+
+def test_a_second_attempt_reports_the_first_one(home):
+    task, first = seed(
+        home, error="exit code 1", title="修依赖", ended=time.time() - 700,
+        started=time.time() - 740,
+    )
+    _, second = seed(
+        home, error="Command timed out after 60s", task=task, parent=first["id"],
+        note="auto-retry 1/3\n继续", title="修依赖",
+        ended=time.time() - 300, started=time.time() - 340,
+    )
+
+    board = server.board_state()
+    entry = find(board, "handling", second["id"])
+
+    assert entry["attempt"] == 2
+    assert "第 2/3 次重试" in entry["statement"]
+    assert [item["n"] for item in entry["history"]] == [1]
+    assert entry["history"][0]["outcome"] == "timeout"
+    assert "第1次 40s timeout" in entry["retry_line"]
+    assert "第 2/3 次" in entry["plan"]
+    assert board["decision_counts"]["handling"] == 1
 
 
 # ---- the page ----------------------------------------------------------
 
 
-def test_the_page_renders_the_five_answers():
-    start = ui.PAGE.index("function questionLines")
-    end = ui.PAGE.index("function detailBlock")
+def test_every_block_has_its_own_title_and_voice():
+    for title in ("需要你决定", "我在处理", "已停止", "不可验证"):
+        assert f"<h2>{title}</h2>" in ui.PAGE
+    assert "只有三件事要你定" in ui.PAGE
+    assert "失败、重试、验收都是我这边的事" in ui.PAGE
+    assert "试到上限我就停" in ui.PAGE
+    assert "不算通过，也不算失败" in ui.PAGE
+
+
+def test_no_failure_copy_asks_the_reader_to_decide():
+    # "执行失败，要不要重跑由你定" was the sentence this change removes. The
+    # only question on the page is the decision card's 要决定 line.
+    for phrase in ("由你决定", "要不要重跑", "要不要你决定", "由你定"):
+        assert phrase not in ui.PAGE
+    assert 'q-k">要决定' in ui.PAGE
+    assert "d.question" in ui.PAGE
+    assert 'stopped: ["项目", "我试了", "原因", "我的判断", "收尾"]' in ui.PAGE
+    assert 'handling: ["项目", "我在做", "已试过", "原因推测", "计划"]' in ui.PAGE
+
+
+def test_the_handling_card_offers_only_the_log():
+    start = ui.PAGE.index("function handlingCard")
+    end = ui.PAGE.index("function stoppedCard")
     body = ui.PAGE[start:end]
-    # 项目 · 路径 · 任务; 失败类型; 重试历史; 可能原因; 建议
-    order = ["d.project", "d.project_path", "d.headline", "d.retry_line",
-             "d.likely_cause", "d.suggestion"]
+    assert "看日志" in body
+    assert "重试" not in body
+    assert "不用你点" in body
+
+
+def test_the_stopped_card_is_a_report_with_a_convenience_button():
+    start = ui.PAGE.index("function stoppedCard")
+    end = ui.PAGE.index("const unvList")
+    body = ui.PAGE[start:end]
+    assert "我停了，证据都在这" in body
+    assert "看日志" in body
+    # A 重试 button is allowed as a shortcut, but the copy is a statement.
+    assert ">重试</button>" in body
+    assert "要不要" not in body
+
+
+def test_the_unverifiable_block_explains_itself():
+    start = ui.PAGE.index("function unverifiableCard")
+    end = ui.PAGE.index("function renderTodo")
+    body = ui.PAGE[start:end]
+    assert "d.reason" in body
+    assert "不可验证不等于通过" in body
+    assert "不算失败" in body
+
+
+def test_the_page_renders_the_five_answers_in_the_order_they_are_asked():
+    start = ui.PAGE.index("function answerLines")
+    end = ui.PAGE.index("function retryChips")
+    body = ui.PAGE[start:end]
+    # 项目 · 路径 · 任务; what I am doing / tried; the attempts; the cause; the plan
+    order = ["projectLine(d, when)", "doingText(d, voice)", "d.retry_line",
+             "d.cause_line", "d.plan"]
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
-    detail = ui.PAGE[end:ui.PAGE.index("function decisionRow")]
+    project = ui.PAGE[ui.PAGE.index("function projectLine"):start]
+    for token in ("d.project", "d.project_path", "d.task_title"):
+        assert token in project
+    doing = ui.PAGE[ui.PAGE.index("function doingText"):end]
+    assert "d.statement" in doing
+    assert 'handling: ["项目", "我在做", "已试过", "原因推测", "计划"]' in ui.PAGE
+    assert 'stopped: ["项目", "我试了", "原因", "我的判断", "收尾"]' in ui.PAGE
+
+    detail = ui.PAGE[ui.PAGE.index("function detailBlock"):ui.PAGE.index("function decisionCard")]
     for label in ("哪一步", "什么错", "改了哪", "试过什么", "为什么"):
         assert label in detail
-    assert "diff" not in detail.lower() or "change.stat" in detail
+    assert '<details class="more">' in detail
+    assert "ev.error_tail" in detail
 
 
-def test_the_empty_decision_state_names_what_is_running():
+def test_the_empty_decision_state_points_at_the_two_working_blocks():
     assert "没有需要你决定的事" in ui.PAGE
-    assert "个任务正在自动重试" in ui.PAGE
-    assert "现在没有任务在自动重试" in ui.PAGE
+    assert "现在没有在处理的失败" in ui.PAGE
+    assert "把结论和证据写进「已停止」" in ui.PAGE
 
 
 def test_the_page_has_no_cdn_and_no_framework():
@@ -559,10 +777,12 @@ def test_the_page_has_no_cdn_and_no_framework():
 
 
 def test_the_page_renders_the_evidence_and_the_money_gates():
-    for label in ("项目", "失败", "重试", "原因", "建议", "哪一步", "什么错", "改了哪"):
+    for label in ("项目", "要决定", "依据", "我在做", "我试了", "看日志", "详情"):
         assert label in ui.PAGE
     assert "这类证据没有记录" in ui.PAGE
     assert "d.evidence_missing" in ui.PAGE
-    assert "加额度后重跑" in ui.PAGE
-    assert "花这笔钱重跑" in ui.PAGE
+    assert "继续花" in ui.PAGE
+    assert "不花，看日志" in ui.PAGE
+    assert "加额度后重跑" not in ui.PAGE
+    assert "花这笔钱重跑" not in ui.PAGE
     assert "continuous" not in ui.PAGE

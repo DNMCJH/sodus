@@ -31,6 +31,7 @@ from . import (
     runner,
     ui,
     usage as usage_stats,
+    verify,
 )
 
 MAX_BODY = 1_000_000
@@ -306,6 +307,22 @@ ERROR_TAIL_CHARS = 200
 #: The five classes a failure can fall into, in the operator's words. Every
 #: decision row names exactly one: "执行失败" is not a class, it is a shrug.
 FAILURE_KINDS = ("进程退出", "超时", "测试红", "模型报错", "证据缺失", "无法归类")
+
+#: The only things a person has to decide: merge a proposal (a value
+#: judgement), pick a direction when the request is ambiguous, and spend money
+#: past the budget. A failure is never one of them — retrying, verifying and
+#: giving up are the machine's own work, and the board reports them as
+#: statements ("我在处理", "已停止"), not as questions.
+#:
+#: `ambiguous` has no producer yet: tasks carry no question field, so nothing
+#: writes it today. It stays in the tuple so that when one does, it lands here
+#: as one more decision kind instead of being smuggled into the failure path.
+DECISION_KINDS = ("proposal", "budget", "ambiguous")
+
+#: Retry gates that are really the money question: "继续花，还是停？". These are
+#: the only failure-shaped rows that still reach a person, and they are asked
+#: as a spend decision, never as "执行失败，要不要重跑".
+SPEND_GATES = ("budget", "cost-cap", "over-budget")
 
 #: Same text, different question: "what kind of failure" is about the process,
 #: "what probably caused it" is about the setup. Both read the same records.
@@ -898,6 +915,18 @@ def _likely_cause(run: dict, evidence: dict, state: str, gap: str = "") -> str:
     return "没有报错原文，推断不了。"
 
 
+def _attempt_phrase(attempts: list[dict]) -> str:
+    """`第1次 42s tests_red / 第2次 38s timeout`, the format the operator asked
+    for. Shared by the retry line and the stopped row so the two cannot drift.
+    """
+    parts = []
+    for item in attempts:
+        seconds = item.get("seconds")
+        took = f"{seconds}s" if isinstance(seconds, (int, float)) else "时长没记"
+        parts.append(f"第{item.get('n')}次 {took} {item.get('outcome') or '结果没记'}")
+    return " / ".join(parts)
+
+
 def _retry_line(evidence: dict, kind: str, why: str = "", plan: dict | None = None) -> str:
     """How many times it already tried, and what each try returned.
 
@@ -907,12 +936,7 @@ def _retry_line(evidence: dict, kind: str, why: str = "", plan: dict | None = No
     """
     attempts = evidence.get("attempts") or []
     if attempts:
-        parts = []
-        for item in attempts:
-            seconds = item.get("seconds")
-            took = f"{seconds}s" if isinstance(seconds, (int, float)) else "时长没记"
-            parts.append(f"第{item.get('n')}次 {took} {item.get('outcome') or '结果没记'}")
-        line = f"自动重试 {len(attempts)} 次：" + " / ".join(parts)
+        line = f"自动重试 {len(attempts)} 次：" + _attempt_phrase(attempts)
         limit = (plan or {}).get("limit")
         if isinstance(limit, int) and limit:
             line += f"（上限 {limit} 次）"
@@ -991,6 +1015,38 @@ _CAUSE_ADVICE: dict[str, str] = {
 
 _MODULE_NAME = re.compile(r"No module named '?([\w.\-]+)'?")
 
+#: The same labels as `_CAUSE_ADVICE`, as a *noun phrase* instead of an order.
+#: A stopped row is a report of what happened, so its cause line says what
+#: would have to change ("要解决得装上缺的依赖"), not what the reader must do.
+_CAUSE_FIX: dict[str, str] = {
+    "依赖没装": "把缺的包装进跑 worker 的那个解释器",
+    "依赖或导入路径不对": "确认那个包在正确的解释器里",
+    "命令不在 PATH 里": "把命令装进 PATH，或写成绝对路径",
+    "路径或环境不对": "先确认 cwd 和文件都在",
+    "密钥无效或没有权限": "换上有效的密钥或补权限",
+    "被上游限流或额度用尽": "等限流过去，或换一条路由",
+    "上下文太长": "把任务拆小，或换一条长上下文路由",
+    "模型名不对": "改配置里的模型名",
+    "卡住超时": "换一条路由再试，或换个做法",
+    "目标服务没起": "先把要连的服务起起来",
+    "网络断了": "等网络恢复，或换一条路由",
+    "上游服务出错": "等一会，或换一条路由",
+    "进程被外部杀掉": "确认 daemon 没有在重启、机器没有休眠",
+    "进程自己退出": "读完整日志定位它退在哪一步",
+}
+
+
+def _cause_label(cause: str) -> str:
+    """The bare label (`依赖没装`) out of `大概率是依赖没装（报错是 …）`."""
+    label = str(cause or "").split("（", 1)[0]
+    return label.replace("大概率是", "", 1).strip()
+
+
+def _cause_fix(cause: str) -> str:
+    """`；要解决得…` for a stopped row, or "" when the cause is not a label."""
+    fix = _CAUSE_FIX.get(_cause_label(cause))
+    return f"；要解决得{fix}" if fix else ""
+
 
 def _advice_for(kind: str, cause: str, evidence: dict, cwd: str = "") -> str:
     """The 建议 line: one concrete action, plus what to do instead.
@@ -999,9 +1055,7 @@ def _advice_for(kind: str, cause: str, evidence: dict, cwd: str = "") -> str:
     a legible `401` should be told to change the key, not to "rerun for
     evidence".
     """
-    label = str(cause or "").split("（", 1)[0]
-    label = label.replace("大概率是", "", 1).strip()
-    template = _CAUSE_ADVICE.get(label)
+    template = _CAUSE_ADVICE.get(_cause_label(cause))
     if template:
         module = ""
         match = _MODULE_NAME.search(str(evidence.get("error_tail") or ""))
@@ -1194,6 +1248,10 @@ def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
     stat = str(proposal.get("stat") or "")
     return {
         "kind": "proposal",
+        "decision": "merge",
+        "question": "这个改动要不要合进主工作区？",
+        "basis": f"改动在分支 {proposal.get('branch') or '?'} 上"
+        + (f"：{stat}" if stat else ""),
         "id": str(proposal.get("id") or ""),
         "run": str(proposal.get("run_id") or ""),
         "at": proposal.get("created_at"),
@@ -1205,7 +1263,7 @@ def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
         "goal": _clip(task.get("goal") or ""),
         "cause": "",
         "failure_kind": "提案",
-        "problem": "改动做完了，但在独立分支上，主工作区没动，等你决定合不合。",
+        "problem": "改动做完了，但在独立分支上，主工作区没动。",
         "headline": f"改动在分支 {proposal.get('branch') or '?'} 上等你合入"
         + (f"：{stat}" if stat else ""),
         "likely_cause": "这个改动还没进主工作区：它只在分支上，合不合取决于测试过没过。",
@@ -1218,15 +1276,51 @@ def _proposal_entry(proposal: dict, facts: dict[str, dict]) -> dict:
     }
 
 
+def _unverifiable_reason(cwd: str) -> tuple[str, str]:
+    """Why a finished run has no test evidence, and what would change that.
+
+    "unverified" is neither a failure nor a pass: the process exited 0 and
+    nothing checked the result. The honest reason is either "this directory has
+    no test entry" or "it has one and nobody ran it", and those need different
+    advice — one is a task-definition problem, the other a setting.
+    """
+    found = None
+    path = Path(cwd) if cwd else None
+    try:
+        if path is not None and path.is_dir():
+            found = verify.detect(path)
+    except OSError:  # a missing or locked directory must not take the board down
+        found = None
+    if found:
+        return (
+            f"目录里有测试入口（{found.get('reason') or '检测到测试命令'}），"
+            "但这次 run 没跑：改完没跑测试，或自动验证被关掉了。",
+            "确认 NODUS_AUTO_VERIFY 没被设成 0；下次改完文件就会自动跑测试，跑过才有绿灯。",
+        )
+    return (
+        "目标目录没有测试入口（没有 pyproject.toml / package.json 的 scripts.test / "
+        "Cargo.toml / go.mod），所以跑完也没有绿灯可看。",
+        "派活时把验收标准写成能跑的命令（acceptance），并在有测试的项目目录里跑；"
+        "这批旧 run 的证据补不回来。",
+    )
+
+
 def _unverified_entry(
     latest: dict, facts: dict[str, dict], count: int, run: dict | None = None
 ) -> dict:
+    """The one informational row about runs nobody could verify.
+
+    This used to sit in 需要你决定, which asked a person to triage something no
+    person can decide: the record has no test evidence, so the answer is
+    "cannot be verified", not "your call". It is information, and it says why.
+    """
     tid = str(latest.get("task_id") or "")
     task = facts.get(tid) or {}
     full = run or {}
     cwd = str(full.get("cwd") or "")
+    reason, advice = _unverifiable_reason(cwd)
     return {
-        "kind": "unverified",
+        "kind": "unverifiable",
         "id": "",
         "run": "",
         "at": latest.get("ended_at"),
@@ -1237,152 +1331,362 @@ def _unverified_entry(
         "task_title": _task_label(task, full or latest),
         "goal": _clip(task.get("goal") or ""),
         "cause": "",
-        "failure_kind": "证据缺失",
+        "failure_kind": "",
         "problem": (
             f"最近 {count} 个 run 跑完了但没有测试证据；"
             "进程退出码 0 只说明它退出了，不说明改对了。"
         ),
         "headline": f"最近 {count} 个 run 跑完却没有测试证据，不能算通过",
-        "likely_cause": (
-            "大概率是没跑测试：这些 run 没有 verify 事件，"
-            "任务可能没配验收命令，或 worker 改完没跑就退出了。"
-        ),
-        "retry_line": f"未重试（原因：这是 {count} 个 run 的汇总，不是某一次失败）",
+        "reason": reason,
+        "likely_cause": "",
+        "retry_line": "",
         "change": _change_summary(full) if full else None,
-        "suggestion": "展开看是哪几次，对最近一次点「重跑」让它跑测试。",
+        "suggestion": advice,
         "title": f"{count} 个 run 跑完但没有测试证据（状态只代表进程退出码）",
         "detail": "",
         "note": "",
     }
 
 
+def _unverifiable(
+    unverified_runs: list[dict], runs: list[dict], facts: dict[str, dict]
+) -> list[dict]:
+    """The 不可验证 block: information, not a task and not a decision."""
+    if not unverified_runs:
+        return []
+    latest = unverified_runs[0]
+    latest_run = next((r for r in runs if r.get("id") == latest.get("id")), {})
+    return [_unverified_entry(latest, facts, len(unverified_runs), latest_run)]
+
+
+def _budget_decision(run: dict, facts: dict[str, dict], state: str, plan: dict) -> dict:
+    """The one failure-shaped row that still reaches a person: the money.
+
+    A retry the remaining budget (or the cost cap) cannot cover is a spend
+    decision, so the board asks it as one — "要不要再花 ¥0.50" — and keeps the
+    failure itself out of the question. The evidence stays behind 详情 because
+    the answer usually depends on whether the last attempt got anywhere.
+    """
+    gate = str(plan.get("gate") or "")
+    entry = _run_entry(run, facts, state=state, plan=plan, gate=gate)
+    estimate = plan.get("estimate")
+    if gate == "over-budget":
+        question = "这个任务已经到预算上限：要不要再加预算让它继续？"
+    else:
+        money = f"¥{estimate:.2f}" if isinstance(estimate, (int, float)) else "一次重试的钱"
+        question = f"要不要再花 {money} 让它再试一次？"
+    entry.update(
+        {
+            "kind": "budget",
+            "decision": "spend",
+            "question": question,
+            "basis": str(plan.get("why") or entry.get("problem") or ""),
+            "money": {
+                "remaining": plan.get("remaining"),
+                "estimate": estimate,
+                "cost_cap": plan.get("cost_cap"),
+            },
+            # A spend decision is not a failure card: these stay empty so that
+            # no row on the first screen reads as "this failed, you deal with
+            # it". The evidence is still one click down.
+            "failure_kind": "",
+            "headline": "",
+            "likely_cause": "",
+            "retry_line": "",
+            # How the "yes" actually happens. The estimate gate is a soft stop
+            # that a manual dispatch is allowed to pass; the daily ceiling is
+            # not, and that one needs the number in the config raised.
+            "suggestion": (
+                "点「继续花」会按手动批准派一次；如果今天的额度已经用光"
+                "（今天的钱见下面），要先把 budget.daily_cny 或 NODUS_DAILY_BUDGET 加够。"
+            ),
+        }
+    )
+    return entry
+
+
 def _needs_you(
-    runs: list[dict],
-    states: dict[str, str],
-    facts: dict[str, dict],
-    unverified_runs: list[dict],
-    now: float,
-) -> tuple[list[dict], list[dict]]:
-    """Only what a person must decide. Recovery decides the rest by itself.
+    runs: list[dict], states: dict[str, str], facts: dict[str, dict], now: float
+) -> list[dict]:
+    """The three decisions that are actually a person's call.
 
-    A retryable failure that still has attempts left is *not* here: the board
-    shows it under "auto recovering" instead. The moment the judgement says
-    stop, the same failure moves here — with the reason it stopped, because a
-    decision without a reason is not a decision.
+    Everything else about a failure — retrying it, verifying it, giving up on
+    it — is the machine's job, and is reported by `_handling` and `_stopped`.
+    What is left: a value judgement (merge this proposal), a spend decision
+    (this retry is past the budget), and an ambiguous requirement, which no
+    producer writes yet (`DECISION_KINDS`).
 
-    A deterministic failure is never here: it has its own section, because the
-    decision is "change the key/parameters", not "run it again".
+    Kept under the old name because every caller already knows it.
     """
     items: list[dict] = []
-    failed: list[dict] = []
-    # Failures that recovery has already given up on (or never owned) still
-    # happened. Dropping them from every list is how a board starts lying: the
-    # count says five failures and a human can only find one of them.
-    history: list[dict] = []
-    history_reasons = {
-        "already-retried": "已经自动重试过，不会再试了",
-        "task-running": "这个任务已经有新的一条在跑",
-        "too-old": "太旧了，不在自动恢复窗口内",
-    }
     for run in runs:
         if str(run.get("status") or "") != "failed":
             continue
         if recover.classify(run) == "deterministic":
             continue
+        if not recover.enabled():
+            # Recovery is off, so no retry will ever spend this money: the row
+            # is a stopped chain, not a spend question.
+            continue
+        plan = recover.retry_plan(run, now=now)
+        if plan["gate"] not in SPEND_GATES:
+            continue
+        items.append(
+            _budget_decision(
+                run, facts, states.get(str(run.get("id") or ""), "none"), plan
+            )
+        )
+    items.sort(key=lambda item: item.get("at") or 0, reverse=True)
+    for proposal in db.list_proposals("open"):
+        items.append(_proposal_entry(proposal, facts))
+    return items
+
+
+def _handling_statement(entry: dict) -> str:
+    """`第 2/3 次重试正在跑` — what I am doing, in the first person."""
+    attempt = entry.get("attempt") or 1
+    limit = entry.get("limit") or 3
+    if entry.get("running"):
+        return f"第 {attempt}/{limit} 次重试正在跑"
+    return f"第 {attempt}/{limit} 次重试"
+
+
+def _handling_plan(entry: dict) -> str:
+    """What I will do next, and what happens if it also fails."""
+    attempt = entry.get("attempt") or 1
+    limit = entry.get("limit") or 3
+    if entry.get("running"):
+        return (
+            "这一次跑完我再判断：绿了就算过，红了按同样的规则决定下一次；"
+            f"{limit} 次用完就停下，把报错和证据写进「已停止」。"
+        )
+    how = "续上次的会话再跑" if str(entry.get("mode") or "") == "resume" else "从头再跑"
+    redo = (entry.get("retry") or {}).get("redo") or {}
+    extra = "（上次改过的文件要重做）" if redo else ""
+    return (
+        f"{how}（第 {attempt}/{limit} 次）{extra}；"
+        f"{limit} 次都不行我就停下，把报错和证据写进「已停止」。"
+    )
+
+
+def _handling(recovering: list[dict], facts: dict[str, dict], now: float) -> list[dict]:
+    """The failures the machine is on right now, said in the first person.
+
+    One row per attempt in flight: what I am doing, what I already tried, the
+    guess at the cause, and the plan. The only button is 看日志 — there is no
+    "要不要重跑" here, because there is nothing for a person to press.
+
+    The five answers come from the last failed run in the chain (a live retry
+    child has no failure of its own yet); the progress comes from the child.
+    """
+    out: list[dict] = []
+    for row in recovering:
+        run = db.get_run(str(row.get("run_id") or "")) or {}
+        if not run:
+            continue
+        failed = [r for r in recover.chain(run) if str(r.get("status") or "") == "failed"]
+        anchor = failed[-1] if failed else run
+        plan = (
+            recover.retry_plan(run, now=now)
+            if str(run.get("status") or "") == "failed"
+            else None
+        )
+        anchor_id = str(anchor.get("id") or "")
+        state = (
+            db.verify_states([anchor_id]).get(anchor_id, "none") if anchor_id else "none"
+        )
+        entry = _run_entry(anchor, facts, str(row.get("problem") or ""), state=state, plan=plan)
+        history = list((entry.get("evidence") or {}).get("attempts") or [])
+        entry.update(
+            {
+                "kind": "handling",
+                "decision": "",
+                "id": str(run.get("id") or ""),
+                "run": str(run.get("id") or ""),
+                "anchor_run": anchor_id,
+                "at": run.get("ended_at") or run.get("started_at") or entry.get("at"),
+                "attempt": row.get("attempt"),
+                "limit": row.get("limit"),
+                "mode": row.get("mode") or "",
+                "estimate": row.get("estimate"),
+                "next_retry_at": row.get("next_retry_at"),
+                "running": row.get("next_retry_at") is None,
+                "history": history,
+                "retry_line": (
+                    entry.get("retry_line") if history else "还没重试过：这是第 1 次"
+                ),
+            }
+        )
+        cause = str(entry.get("likely_cause") or "")
+        entry["cause_line"] = cause + _cause_fix(cause)
+        entry["statement"] = _handling_statement(entry)
+        entry["plan"] = _handling_plan(entry)
+        entry["suggestion"] = entry["plan"]
+        out.append(entry)
+    out.sort(key=lambda item: (item.get("next_retry_at") or 0, item.get("attempt") or 0))
+    return out
+
+
+#: Gates that mean "this chain is over". They are the same three the old board
+#: called history, plus the terminal ones handled below.
+_STOP_HISTORY = {
+    "already-retried": "已经自动重试过，不会为同一次失败再开一张单",
+    "task-running": "这个任务已经有新的一条在跑，等它结束再看",
+    "too-old": "太旧了，不在自动恢复窗口内",
+}
+
+
+#: Why a settled row is no longer moving. The statement on the card is about
+#: the work, so these are phrased as "what happened next", not as a status.
+_SETTLED_STATEMENT = {
+    "already-retried": "后面已经派过重试，这一条翻过去了",
+    "task-running": "这个任务已经有新的一条在跑，这一条翻过去了",
+    "too-old": "太旧了，已经不在自动恢复窗口内",
+}
+
+
+def _stop_statement(entry: dict, attempts: list[dict]) -> str:
+    """`3 次都试过了：第1次 42s tests_red / …` — the work report, not a question."""
+    if attempts:
+        return f"{len(attempts)} 次都试过了：{_attempt_phrase(attempts)}"
+    reason = str(entry.get("stop_reason") or "")
+    if entry.get("settled"):
+        return _SETTLED_STATEMENT.get(reason, "这一条已经翻过去了")
+    if reason == "tests_red":
+        return "跑完了一遍，测试没过，我没有再重试"
+    if reason == "deterministic":
+        return "这个错重试不会变，所以我一次都没试"
+    return "没有重试就停在这里"
+
+
+def _stop_plan(entry: dict, settled: bool) -> str:
+    """Where the evidence is, and the two things a person may still do."""
+    reason = str(entry.get("stop_reason") or "")
+    if settled:
+        return "证据留在详情里，点「重试」可以再开一次。"
+    if reason == "deterministic":
+        return "重试还是同一个错，所以我停在这里；证据留在详情里，要换做法直接告诉我。"
+    if reason == "tests_red":
+        return "测试红着，我没有接着跑；失败的那条测试在详情里，点「重试」可以再试一次。"
+    if reason == "disabled":
+        return (
+            "自动恢复现在是关着的，所以没人在重试；证据留在详情里，"
+            "点「重试」也可以手动开一次。"
+        )
+    return (
+        "已停止，不会再自动重试；报错原文、改动和每次尝试都留在详情里，"
+        "点「重试」可以再试一次，或者告诉我换个思路。"
+    )
+
+
+def _stop_entry(entry: dict, reason: str, *, settled: bool) -> dict:
+    """One 已停止 row: what I tried, why I stopped, where the evidence is."""
+    attempts = list((entry.get("evidence") or {}).get("attempts") or [])
+    entry["kind"] = "stopped"
+    entry["stop_reason"] = reason
+    entry["settled"] = settled
+    entry["history"] = attempts
+    cause = str(entry.get("likely_cause") or "")
+    entry["cause_line"] = cause + _cause_fix(cause)
+    entry["statement"] = _stop_statement(entry, attempts)
+    entry["plan"] = _stop_plan(entry, settled)
+    # The 建议 slot keeps the old shape but now carries the closing statement:
+    # nothing here tells the person what they must go do.
+    entry["suggestion"] = entry["plan"]
+    return entry
+
+
+def _stopped(
+    runs: list[dict], states: dict[str, str], facts: dict[str, dict], now: float
+) -> tuple[list[dict], list[dict]]:
+    """Failures the machine is done with, told as a report, not a request.
+
+    `stopped` is everything no longer moving: a spent retry chain, a repeated
+    signature, a deterministic error, a red test nobody owns, and the older
+    failures a later retry moved past (`settled`, also returned separately as
+    `history_failures` for the old callers).
+
+    Each row answers three things — what I tried, why I stopped, where the
+    evidence is — and none of them asks the person whether the failure is
+    theirs to handle.
+    """
+    stopped: list[dict] = []
+    history: list[dict] = []
+    for run in runs:
+        if str(run.get("status") or "") != "failed":
+            continue
         state = states.get(str(run.get("id") or ""), "none")
         plan = recover.retry_plan(run, now=now)
         gate = plan["gate"] if recover.enabled() else "disabled"
-        if gate in history_reasons:
-            # Deep evidence on purpose: a history row is still a decision row,
-            # and an old run that kept no tool_call must say "证据缺失" rather
-            # than degrade into the same generic sentence as a fresh failure.
-            history.append(
-                _run_entry(
-                    run,
-                    facts,
-                    history_reasons[gate],
-                    "",
-                    state=state,
-                    deep=True,
-                    gate=gate,
-                    why=plan["why"],
-                    plan=plan,
-                )
+        if recover.classify(run) == "deterministic":
+            entry = _run_entry(
+                run,
+                facts,
+                recover.problem_text(run),
+                state=state,
+                why=recover.why_not_retried(run),
+                gate="deterministic",
+                plan=plan,
             )
+            stopped.append(_stop_entry(entry, "deterministic", settled=False))
             continue
-        if gate in ("", "backoff"):
-            # Being recovered right now: visible under "auto recovering", so
-            # listing it twice would be noise.
+        if gate in _STOP_HISTORY:
+            # Deep evidence on purpose: an old run that kept no tool_call must
+            # say "证据缺失" rather than degrade into a generic sentence.
+            entry = _run_entry(
+                run,
+                facts,
+                _STOP_HISTORY[gate],
+                state=state,
+                deep=True,
+                gate=gate,
+                why=plan["why"],
+                plan=plan,
+            )
+            row = _stop_entry(entry, gate, settled=True)
+            history.append(row)
+            stopped.append(row)
             continue
-        depth = recover.retry_depth(run)
+        if gate in ("", "backoff") or gate in SPEND_GATES:
+            # In flight (「我在处理」) or waiting on a spend decision
+            # (「需要你决定」); listing it twice would be noise.
+            continue
         if gate == "disabled":
             problem = "自动恢复已关闭，这个失败不会有人重试。"
-            suggestion = "手动点「重跑」，或去掉 NODUS_AUTO_RECOVER=0 再启动 daemon。"
         elif gate == "retry-limit":
+            depth = recover.retry_depth(run)
             problem = (
                 f"自动重试 {depth} 次都没成功，最后一次是：{recover.problem_text(run)}"
                 if depth
                 else plan["why"]
             )
-            suggestion = ""
-        elif gate in ("same-signature", "budget", "cost-cap", "over-budget"):
-            problem = plan["why"]
-            suggestion = ""
-        elif gate in ("missing-context", "task-gone"):
-            problem = plan["why"]
-            suggestion = "重新派一次这个任务；旧记录只作为历史。"
         else:
-            continue
-        failed.append(
-            _run_entry(
-                run,
-                facts,
-                problem,
-                suggestion,
-                state=state,
-                plan=plan,
-                gate=gate,
-                why=plan["why"] or problem,
-            )
+            problem = plan["why"] or recover.problem_text(run)
+        entry = _run_entry(
+            run,
+            facts,
+            problem,
+            state=state,
+            plan=plan,
+            gate=gate,
+            why=plan["why"] or problem,
         )
-    # A failed run with a red test is already in `failed`, with the test
-    # evidence attached to it; listing it a second time here would
-    # double-count one run.
+        stopped.append(_stop_entry(entry, gate, settled=False))
+    # A red test on a completed run: the acceptance failed and recovery does
+    # not own completed runs, so nobody is retrying it.
     red = [
         r
         for r in runs
         if states.get(r["id"]) == "red" and str(r.get("status") or "") != "failed"
     ]
     for run in red:
-        failed.append(
-            _run_entry(
-                run,
-                facts,
-                problem="跑完了，但项目的测试没通过。",
-                suggestion="看失败的那条测试和断言；点「重跑」让它再改一次，或自己接手。",
-                state="red",
-                kind="red",
-            )
+        entry = _run_entry(
+            run, facts, "跑完了，但项目的测试没通过。", state="red", kind="red"
         )
-    # Interruptions first, newest first within them: a failed run or a red
-    # test is the thing the operator did not ask for, a proposal is the
-    # expected output of work they did ask for.
-    failed.sort(key=lambda item: item.get("at") or 0, reverse=True)
-    items.extend(failed)
-
-    for proposal in db.list_proposals("open"):
-        items.append(_proposal_entry(proposal, facts))
-
-    if unverified_runs:
-        # The aggregate row is built from the same run snapshot, not a second
-        # lookup: the page must not print a project for a run it cannot see.
-        latest_run = next(
-            (r for r in runs if r.get("id") == unverified_runs[0].get("id")), {}
-        )
-        items.append(
-            _unverified_entry(unverified_runs[0], facts, len(unverified_runs), latest_run)
-        )
-    return items, history
+        stopped.append(_stop_entry(entry, "tests_red", settled=False))
+    # Fresh stops first, then the settled tail; newest first inside both.
+    stopped.sort(key=lambda item: (bool(item.get("settled")), -(item.get("at") or 0)))
+    return stopped, history
 
 
 def _deterministic(
@@ -1615,10 +1919,22 @@ def _memory_board(limit: int = 300) -> list[dict]:
 def board_state(now: float | None = None) -> dict:
     """The first screen: what is running, what waits on a human, today's money.
 
-    `decisions` and `decision_counts` keep their old shape because MCP and the
-    desktop pet read them. The recovery-era screen reads three newer fields:
-    `needs_you` (a human decision), `auto_recovering` (the machine is already
-    on it) and `deterministic` (retrying cannot help; fix the cause).
+    The screen splits by *whose job it is*, not by how bad it looks:
+
+    - `needs_you`: only the three decisions a person owns (a proposal to merge,
+      a spend decision past the budget, an ambiguous requirement). A failure is
+      never in here — that was the bug this split exists to fix.
+    - `handling`: the failures the machine is on right now, with the attempt
+      number, the history, the likely cause and the plan.
+    - `stopped`: the ones it has finished with (spent chain, repeated error,
+      deterministic error, red test nobody owns) plus the older failures a
+      retry moved past. A report, not a question.
+    - `unverifiable`: runs that completed with no test evidence. Information;
+      it says why, and what would make the next run verifiable.
+
+    `decisions`/`decision_counts`, `auto_recovering`, `deterministic` and
+    `history_failures` keep their old shape because MCP and the desktop pet
+    read them; the new fields are additive.
 
     `memory_candidates` is the other kind of human decision: facts harvested
     from the harnesses' own memory files, which only a person may adopt.
@@ -1633,11 +1949,17 @@ def board_state(now: float | None = None) -> dict:
     titles = _task_titles([r.get("task_id") or "" for r in runs])
     unverified_runs = _unverified_rows(runs, states, titles)
     facts = _task_facts([r.get("task_id") or "" for r in runs])
-    needs_you, history_failures = _needs_you(runs, states, facts, unverified_runs, now)
-    deterministic = _deterministic(runs, facts, states)
+    needs_you = _needs_you(runs, states, facts, now)
     auto_recovering = recover.recovering(now)
+    handling = _handling(auto_recovering, facts, now)
+    stopped, history_failures = _stopped(runs, states, facts, now)
+    unverifiable = _unverifiable(unverified_runs, runs, facts)
+    deterministic = _deterministic(runs, facts, states)
     counts["needs_you"] = len(needs_you)
     counts["auto_recovering"] = len(auto_recovering)
+    counts["handling"] = len(handling)
+    counts["stopped"] = len(stopped)
+    counts["unverifiable"] = len(unverifiable)
     counts["deterministic"] = len(deterministic)
     counts["history_failed"] = len(history_failures)
     conn = db.connect()
@@ -1656,6 +1978,9 @@ def board_state(now: float | None = None) -> dict:
         "decision_counts": counts,
         "unverified_runs": unverified_runs,
         "needs_you": needs_you,
+        "handling": handling,
+        "stopped": stopped,
+        "unverifiable": unverifiable,
         "auto_recovering": auto_recovering,
         "deterministic": deterministic,
         "history_failures": history_failures,

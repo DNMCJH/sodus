@@ -15,11 +15,11 @@ def test_the_page_asks_for_the_token_exactly_once():
 
 
 def test_the_sections_come_in_the_agreed_order():
-    # The first screen is the questions that need no scrolling; the working
-    # sections sit behind <details> in this order.
+    # The first screen is questions plus the two working blocks; the money and
+    # the logs sit behind them.
     order = [
-        "正在跑", "需要你决定", "自动重试中", "不会自动重试", "今天的钱",
-        "最近执行", "提案", "派活",
+        "正在跑", "需要你决定", "我在处理", "已停止", "不可验证", "记忆待审",
+        "今天的钱", "用量", "最近执行", "提案", "派活",
     ]
     positions = [ui.PAGE.index(name) for name in order]
     assert positions == sorted(positions)
@@ -47,10 +47,9 @@ def test_unverified_runs_are_listed_before_they_are_rerun():
     # One number must not stand in for a button that acts on one of 43 runs:
     # the page offers the list, and each row reruns exactly that run.
     assert "看看是哪" in ui.PAGE
-    assert "重跑最近一次" in ui.PAGE
-    assert "重跑并验收" not in ui.PAGE
-    assert "rerunOne" in ui.PAGE
     assert "重跑这一次" in ui.PAGE
+    assert "rerunOne" in ui.PAGE
+    assert "重跑并验收" not in ui.PAGE
 
 
 def test_a_run_is_named_by_its_task_before_its_directory():
@@ -62,51 +61,67 @@ def test_a_run_is_named_by_its_task_before_its_directory():
     assert ".slice(-2).join" not in ui.PAGE
 
 
-def test_the_first_screen_renders_needs_you_not_the_old_blob():
+def test_the_first_screen_renders_the_split_not_the_old_blob():
     # `decisions` stays in the API for MCP and the pet, but the page reads the
-    # recovered split so a retry in flight never looks like a question.
-    assert "b.needs_you" in ui.PAGE
-    assert "b.auto_recovering" in ui.PAGE
-    assert "b.deterministic" in ui.PAGE
+    # split by whose job it is: a failure is never a question.
+    assert ".needs_you" in ui.PAGE
+    assert ".handling" in ui.PAGE
+    assert ".stopped" in ui.PAGE
+    assert ".unverifiable" in ui.PAGE
     assert "b.decisions" not in ui.PAGE
+    assert "b.auto_recovering" not in ui.PAGE
 
 
-def test_a_decision_row_is_five_answers_in_the_order_they_are_asked():
-    # 哪个项目 → 什么样的失败 → 重试过几次 → 可能原因 → 建议. The evidence
-    # (action / diff / raw tail) hangs off `detailBlock`, folded behind 详情.
-    start = ui.PAGE.index("function questionLines")
-    end = ui.PAGE.index("function decisionRow")
+def test_a_failure_row_is_five_answers_in_the_order_they_are_asked():
+    # 哪个项目 → 我在做/我试了 → 已经试过几次 → 可能原因 → 接下来怎么办.
+    # The labels change with the voice; the order does not.
+    start = ui.PAGE.index("function answerLines")
+    end = ui.PAGE.index("function retryChips")
     body = ui.PAGE[start:end]
-    order = ["d.project", "d.project_path", "d.headline", "d.retry_line",
-             "d.likely_cause", "d.suggestion"]
+    order = ["projectLine(d, when)", "doingText(d, voice)", "d.retry_line",
+             "d.cause_line", "d.plan"]
     positions = [body.index(token) for token in order]
     assert positions == sorted(positions)
-    for label in ("项目", "失败", "重试", "原因", "建议"):
-        assert f'q-k">{label}' in body
+    project = ui.PAGE[ui.PAGE.index("function projectLine"):start]
+    for token in ("d.project", "d.project_path", "d.task_title"):
+        assert token in project
+    doing = ui.PAGE[ui.PAGE.index("function doingText"):end]
+    assert "d.statement" in doing and "next_retry_at" in doing
+    assert 'handling: ["项目", "我在做", "已试过", "原因推测", "计划"]' in ui.PAGE
+    assert 'stopped: ["项目", "我试了", "原因", "我的判断", "收尾"]' in ui.PAGE
     assert "d.failure_kind" in body
     assert "d.evidence_missing" in body
 
-    detail = ui.PAGE[ui.PAGE.index("function detailBlock"):end]
-    assert "详情" in detail
-    for label in ("哪一步", "什么错", "改了哪", "试过什么"):
-        assert label in detail
+
+def test_the_question_card_is_the_only_one_that_asks():
+    # 需要你决定 is a value judgement: one question and the evidence behind it.
+    start = ui.PAGE.index("function decisionCard")
+    end = ui.PAGE.index("function handlingCard")
+    body = ui.PAGE[start:end]
+    assert 'q-k">要决定' in body
+    assert "d.question" in body
+    assert 'q-k">依据' in body
+    assert "合并" in body and "继续花" in body
 
 
 def test_evidence_is_folded_not_printed_under_the_answer():
     start = ui.PAGE.index("function detailBlock")
-    end = ui.PAGE.index("function decisionRow")
+    end = ui.PAGE.index("function decisionCard")
     body = ui.PAGE[start:end]
     assert '<details class="more">' in body
     assert "ev.error_tail" in body
 
 
-def test_the_auto_retry_block_shows_progress_and_offers_nothing_to_click():
-    # The operator has no decision here, so the block must not grow a button.
-    start = ui.PAGE.index("function renderRecover")
-    end = ui.PAGE.index("function renderBlocked")
+def test_the_handling_card_offers_only_the_log():
+    # The operator has no decision here, so the block must not grow a rerun
+    # button: 看日志 is information, not a prompt.
+    start = ui.PAGE.index("function handlingCard")
+    end = ui.PAGE.index("function stoppedCard")
     body = ui.PAGE[start:end]
-    assert "attempt" in body and "next_retry_at" in body
-    assert "<button" not in body
+    assert "看日志" in body
+    assert "重试" not in body
+    assert "不用你点" in body
+    assert "next_retry_at" in ui.PAGE
 
 
 def test_remaining_decisions_expand_where_they_are_counted():
@@ -118,12 +133,13 @@ def test_remaining_decisions_expand_where_they_are_counted():
     assert "needs.slice(0, 3)" not in ui.PAGE
 
 
-def test_failures_recovery_gave_up_on_stay_reachable():
-    # already-retried / task-running / too-old failures are not decisions, but
-    # they must not vanish while decision_counts.failed still counts them.
-    assert "history_failures" in ui.PAGE
+def test_older_failures_stay_reachable_under_the_fresh_stops():
+    # already-retried / task-running / too-old failures are not questions, but
+    # they must not vanish while the failures are still counted.
+    assert "settled" in ui.PAGE
     assert "toggleHistory" in ui.PAGE
-    assert "不会再自动重试" in ui.PAGE
+    assert "更早的失败" in ui.PAGE
+    assert "history_failures" not in ui.PAGE
 
 
 def test_a_retry_in_flight_says_so_in_the_live_row():

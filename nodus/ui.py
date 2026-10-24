@@ -9,22 +9,27 @@ can read it, and any local process could read `~/.nodus/token` anyway.
 Cross-origin reads are blocked by the same-origin policy, and cross-origin
 writes cannot add the Authorization header.
 
-The first screen answers five questions about every decision, one line each:
-**哪个项目 / 什么样的失败 / 自己重试过几次 / 可能原因 / 建议怎么做**. The project
-line carries the last two directories (`nodus-removal（…/2026-10-survey）`), the
-failure line names the class (进程退出 / 超时 / 测试红 / 模型报错 / 证据缺失 /
-无法归类), the retry line counts the attempts and what each returned, the cause
-line is a rule-based guess quoting the line it came from, and the advice line
-names one concrete action. The raw evidence — last tool call, failed tests,
-diff, error tail — is folded behind 详情 instead of pushing the answers down
-the card. Missing evidence is printed as "证据缺失：…"; nothing is paraphrased
-into "执行失败".
+A failure is never a question. The first screen splits by whose job it is:
+"需要你决定" holds only the three things a person owns (merge a proposal, a
+spend decision past the budget, an ambiguous requirement); "我在处理" is the
+machine at work — the attempt number, the attempts already spent, the likely
+cause and the plan, with no button but 看日志; "已停止" is the report for a
+spent chain, a repeated error, a deterministic error or a red test nobody
+owns, plus the older failures a retry moved past; "不可验证" is information
+about runs that finished with no test evidence, and says why (usually no test
+entry in that directory) and what would give the next one a green light.
 
-The board also splits failures by who can resolve them. A retryable failure
-with attempts left appears under "自动重试中" with dots instead of buttons;
-"需要你决定" only holds spent chains, red tests and proposals; a deterministic
-failure (401/403/400, model, content policy) gets its own section with the
-reason a rerun would return the same error.
+Every card keeps the five answers — **哪个项目 / 什么样的失败 / 自己试过几次 /
+可能原因 / 接下来怎么办** — but the labels change with the voice: 我试了 /
+原因 / 我的判断 / 收尾 for a stopped row, 我在做 / 已试过 / 原因推测 / 计划
+for one in flight. The project line carries the last two directories
+(`nodus-removal（…/2026-10-survey）`), the failure line names the class
+(进程退出 / 超时 / 测试红 / 模型报错 / 证据缺失 / 无法归类), and the cause
+line is a rule-based guess quoting the line it came from. The raw evidence —
+last tool call, failed tests, diff, error tail — is folded behind 详情 instead
+of pushing the answers down the card. Missing evidence is printed as
+"证据缺失：…"; nothing is paraphrased into "执行失败", and no failure copy
+asks the reader whether the failure is theirs to handle.
 
 Nothing here polls. `/board` is fetched on load, when the tab regains focus, and
 when 刷新 is clicked; the numbers between those moments are a snapshot, and that
@@ -87,6 +92,8 @@ PAGE = """<!doctype html>
   .empty-icon { width:22px; height:22px; border-radius:99px; border:1px solid rgba(78,195,138,.35);
                 background:rgba(78,195,138,.08); color:var(--ok); display:flex; align-items:center;
                 justify-content:center; font-size:12px; flex:none; margin-top:1px; }
+  .empty-icon.wait { border-color:rgba(224,163,64,.35); background:rgba(224,163,64,.08);
+                     color:var(--warn); }
   .empty-title { color:var(--text); font-size:14px; font-weight:600; }
   .empty-sub { color:var(--dim); font-size:12.5px; margin-top:3px; line-height:1.6; }
   button { appearance:none; background:transparent; color:var(--text-2); border:1px solid var(--line);
@@ -102,12 +109,18 @@ PAGE = """<!doctype html>
   #refresh { height:28px; padding:0 11px; font-size:12px; }
   #refresh[disabled] { opacity:.55; cursor:default; }
   .decision { padding:15px 17px 14px; }
+  /* The two failure voices carry a border tone instead of a badge: the working
+     block is warn, the stopped block is bad, and neither is a call to action. */
+  .card.handling { border-color:rgba(224,163,64,.20); }
+  .card.stopped { border-color:rgba(239,107,107,.15); }
+  .card.unverifiable { border-style:dashed; }
+  .q-ask .q-v { color:var(--text); font-size:13.5px; }
   .d-when { margin-left:auto; color:var(--faint); font-size:12px; white-space:nowrap;
             font-variant-numeric:tabular-nums; }
   /* The five questions every decision must answer, one line each. A reader
      skims these left labels; the values are the answer. */
   .questions { margin-top:9px; display:grid; gap:6px; }
-  .q-line { display:grid; grid-template-columns:40px minmax(0,1fr); gap:10px;
+  .q-line { display:grid; grid-template-columns:54px minmax(0,1fr); gap:10px;
             font-size:13px; line-height:1.5; }
   .q-k { color:var(--faint); font-size:11.5px; padding-top:2px; letter-spacing:.04em; }
   .q-v { color:var(--text-2); min-width:0; overflow-wrap:anywhere; }
@@ -267,16 +280,20 @@ PAGE = """<!doctype html>
     <div id="live" class="stack"><div class="empty">现在没有任务在跑</div></div>
   </section>
   <section>
-    <div class="sec-head"><h2>需要你决定</h2><span class="sec-note">重试也解决不了的，才在这里</span><span class="count" id="todo-n"></span></div>
+    <div class="sec-head"><h2>需要你决定</h2><span class="sec-note">只有三件事要你定：合不合、花不花钱、往哪个方向走</span><span class="count" id="todo-n"></span></div>
     <div id="todo" class="stack"><div class="empty">正在读…</div></div>
   </section>
-  <section id="recover-sec" hidden>
-    <div class="sec-head"><h2>自动重试中</h2><span class="sec-note">系统自己重跑，不用你点任何东西</span><span class="count" id="recover-n"></span></div>
-    <div id="recover" class="stack"></div>
+  <section id="handling-sec">
+    <div class="sec-head"><h2>我在处理</h2><span class="sec-note">失败、重试、验收都是我这边的事，不用你动手</span><span class="count" id="handling-n"></span></div>
+    <div id="handling" class="stack"><div class="empty">正在读…</div></div>
   </section>
-  <section id="blocked-sec" hidden>
-    <div class="sec-head"><h2>不会自动重试</h2><span class="sec-note">这些错误改参数、换密钥或换模型之后才能继续</span><span class="count" id="blocked-n"></span></div>
-    <div id="blocked" class="stack"></div>
+  <section id="stopped-sec" hidden>
+    <div class="sec-head"><h2>已停止</h2><span class="sec-note">试到上限我就停：做了什么、结论是什么、证据在哪</span><span class="count" id="stopped-n"></span></div>
+    <div id="stopped" class="stack"></div>
+  </section>
+  <section id="unv-sec" hidden>
+    <div class="sec-head"><h2>不可验证</h2><span class="sec-note">跑完了但没有测试证据：不算通过，也不算失败</span><span class="count" id="unv-n"></span></div>
+    <div id="unv" class="stack"></div>
   </section>
   <section id="memory-sec" hidden>
     <div class="sec-head"><h2>记忆待审</h2><span class="sec-note">从 CLAUDE.md / AGENTS.md 抽出来的指令，项目来源写进项目 AGENTS.md，全局来源写进 ~/.nodus/AGENTS.md</span><span class="count" id="memory-n"></span></div>
@@ -454,12 +471,12 @@ function renderHeader() {
   const cost = Object.keys(t.totals || {}).length ? moneyParts(t.totals)
     : (runs ? "待计价" : money("CNY", 0));
   const waiting = (b.needs_you || []).length;
-  const retrying = (b.auto_recovering || []).length;
+  const retrying = (b.handling || []).length;
   $("s-live").innerHTML = `<b>${live}</b> 个在跑`;
   $("s-cost").innerHTML = `今天 <b>${cost}</b><span class="dim"> · ${runs} 单</span>`;
-  $("s-wait").textContent = waiting ? waiting + " 件待决定" : "没有待决定";
+  $("s-wait").textContent = waiting ? waiting + " 件要你定" : "没有要你定的事";
   $("s-wait-dot").className = "status-dot " + (waiting ? "bad" : "ok");
-  $("s-retry").innerHTML = `<span class="status-dot warn"></span><b>${retrying}</b> 个自动重试中`;
+  $("s-retry").innerHTML = `<span class="status-dot warn"></span><b>${retrying}</b> 个失败在重试`;
   $("s-retry").hidden = !retrying;
 }
 
@@ -496,11 +513,18 @@ function renderLive() {
   $("live").innerHTML = rows.length ? rows.join("") : `<div class="empty">现在没有任务在跑</div>`;
 }
 
-// The five questions a decision row has to answer, one line each, in the
-// order a person asks them: which project, what kind of failure, how many
-// retries already happened, what probably caused it, and what to do now.
-// Labels are on the left so the answers can be skimmed without reading prose.
+// A failure is never a question. The board speaks in three voices:
+//   需要你决定 — a value judgement (merge? spend? which direction?),
+//   我在处理   — a statement about what the system is doing right now,
+//   已停止     — a report: what I tried, why I stopped, where the evidence is.
+// The five answers survive from the old decision card, relabelled per voice;
+// the raw evidence (tool call / tests / diff / tail) stays behind 详情.
 const KIND_TONE = new Set(["测试红", "模型报错", "进程退出"]);
+const LINES = {
+  handling: ["项目", "我在做", "已试过", "原因推测", "计划"],
+  stopped: ["项目", "我试了", "原因", "我的判断", "收尾"],
+};
+
 // The server sends `cwd` next to the project name so two same-named checkouts
 // stay apart. The project's own directory is already on the line as `project`,
 // so the locator only needs the parent: nodus-removal（…/2026-10-survey）.
@@ -509,30 +533,43 @@ function parentPath(path, project) {
   const parent = tail && path.endsWith(tail) ? path.slice(0, -tail.length) : path;
   return parent && parent !== project ? parent : "";
 }
-function questionLines(d, when) {
-  const kind = d.failure_kind || "";
+
+function projectLine(d, when) {
   const project = d.project || "未记录项目";
-  const path = d.project_path || "";
-  const parent = parentPath(path, project);
-  const tone = d.evidence_missing ? "na" : KIND_TONE.has(kind) ? "bad" : "";
-  // The tag already names the class; repeating it inside the sentence reads
-  // as a stutter ("证据缺失证据缺失：…").
-  let summary = d.headline || d.problem || d.title || "";
-  if (kind && summary.startsWith(kind + "：")) summary = summary.slice(kind.length + 1);
-  return `<div class="questions">
-    <div class="q-line q-project"><span class="q-k">项目</span><span class="q-v">
+  const parent = parentPath(d.project_path || "", project);
+  return `<div class="q-line q-project"><span class="q-k">项目</span><span class="q-v">
       <b>${esc(project)}</b>
       ${parent ? `<span class="d-path" title="${esc(d.cwd || "")}">（…/${esc(parent)}）</span>` : ""}
       <span class="sep" style="color:var(--faint);margin:0 5px">·</span>${esc(d.task_title || "（任务没写标题）")}
       ${when ? `<span class="d-when">${esc(when)}</span>` : ""}
-    </span></div>
-    <div class="q-line"><span class="q-k">失败</span><span class="q-v">
-      ${kind ? `<span class="q-tag ${tone}">${esc(kind)}</span>` : ""} <span>${esc(summary)}</span>
-    </span></div>
-    <div class="q-line"><span class="q-k">重试</span><span class="q-v">${esc(d.retry_line || "未重试（原因：这条记录里没有重试历史）")}</span></div>
-    <div class="q-line"><span class="q-k">原因</span><span class="q-v">${esc(d.likely_cause || "推断不了：这条记录里没有能归因的报错原文")}</span></div>
-    <div class="q-line q-advice"><span class="q-k">建议</span><span class="q-v">${esc(d.suggestion || "看日志确认卡在哪一步，再决定重跑还是自己接手")}</span></div>
+    </span></div>`;
+}
+
+function retryWait(ts) {
+  if (!ts) return "正在跑";
+  const left = ts - Date.now() / 1000;
+  return left <= 0 ? "马上开始" : "约 " + span(left) + "后";
+}
+
+function answerLines(d, when, voice) {
+  const labels = LINES[voice];
+  const kind = d.failure_kind || "";
+  const tone = d.evidence_missing ? "na" : KIND_TONE.has(kind) ? "bad" : "";
+  return `<div class="questions">
+    ${projectLine(d, when)}
+    <div class="q-line"><span class="q-k">${labels[1]}</span><span class="q-v">${doingText(d, voice)}</span></div>
+    <div class="q-line"><span class="q-k">${labels[2]}</span><span class="q-v">${esc(d.retry_line || "没有重试记录")}</span></div>
+    <div class="q-line"><span class="q-k">${labels[3]}</span><span class="q-v">${kind ? `<span class="q-tag ${tone}">${esc(kind)}</span>` : ""}${esc(d.cause_line || d.likely_cause || "推断不了：这条记录里没有能归因的报错原文")}</span></div>
+    <div class="q-line q-advice"><span class="q-k">${labels[4]}</span><span class="q-v">${esc(d.plan || d.suggestion || "")}</span></div>
   </div>`;
+}
+
+// "第 1/3 次重试" + when it starts. The server keeps the sentence free of a
+// countdown so the page can refresh it without re-fetching.
+function doingText(d, voice) {
+  const text = esc(d.statement || "");
+  if (voice !== "handling" || d.running || !d.next_retry_at) return text;
+  return `${text}（${esc(retryWait(d.next_retry_at))}开始）`;
 }
 
 function retryChips(ev, d) {
@@ -544,7 +581,7 @@ function retryChips(ev, d) {
     ${how ? `<div class="ev-src">重试方式：${esc(how)}</div>` : ""}</div></div>`;
 }
 
-// Everything raw lives behind 详情: the five answers stay readable, and the
+// Everything raw lives behind 详情: the answers stay readable, and the
 // tool_call / diff / error tail are one click down instead of pushing them off
 // the card.
 function detailBlock(d) {
@@ -594,137 +631,160 @@ function detailBlock(d) {
     <div class="evidence">${rows.join("")}</div></details>`;
 }
 
-function decisionRow(d) {
+// 需要你决定: a question with two answers, not a failure to triage. The proposal
+// is a value judgement, the budget row is money, and both show the evidence
+// behind 详情 because the answer usually depends on it.
+function decisionCard(d) {
   const when = d.at ? ago(d.at) : "";
-  const kind = d.kind || "failed";
-  const unvList = ((state.board || {}).unverified_runs || []).slice(0, 50);
-  let act = "", detail = "";
-
+  const kind = d.kind || "proposal";
+  let act = "";
   if (kind === "proposal") {
     act = `<button class="primary" onclick="merge('${d.id}')">合并</button>
            <button class="danger" onclick="reject('${d.id}')">丢弃</button>`;
-  } else if (kind === "unverified") {
-    const n = count("unverified") || unvList.length || "";
-    act = `<button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + n + " 次"}</button>` +
-      (unvList[0] ? `<button class="primary" onclick="rerunOne('${unvList[0].id}')">重跑最近一次</button>` : "");
-  } else if (kind === "red" || kind === "failed") {
-    const label = d.gate === "cost-cap" ? "花这笔钱重跑"
-      : d.gate === "budget" ? "加额度后重跑"
-      : d.why ? "修好后重跑" : "重跑";
-    const hint = d.gate === "budget" ? "系统没有自动花这笔钱"
-      : d.gate === "cost-cap" ? "超过自动上限，你点才花"
-      : d.why ? "现在重跑只会换回同一个错误" : "";
-    act = `<button class="primary" onclick="rerun('${d.run}')">${label}</button>` +
-      `<button onclick="showLog('${d.run}')">看日志</button>` +
-      (hint ? `<span class="hint">${esc(hint)}</span>` : "");
-    detail = detailBlock(d);
-  } else {
-    act = d.run ? `<button onclick="showLog('${d.run}')">看日志</button>` : "";
-    detail = detailBlock(d);
+  } else if (kind === "budget") {
+    act = `<button class="primary" onclick="rerun('${d.run}', '再让这个任务试一次')">继续花</button>
+           <button onclick="showLog('${d.run}')">不花，看日志</button>`;
+  } else if (d.run) {
+    act = `<button onclick="showLog('${d.run}')">看日志</button>`;
   }
-
-  const html = `<article class="card decision ${kind}">
-    ${questionLines(d, when)}
+  return `<article class="card decision ${kind}">
+    <div class="questions">
+      ${projectLine(d, when)}
+      <div class="q-line q-ask"><span class="q-k">要决定</span><span class="q-v">${esc(d.question || "这件事要不要做？")}</span></div>
+      <div class="q-line"><span class="q-k">依据</span><span class="q-v">${esc(d.basis || d.problem || "")}</span></div>
+      ${d.suggestion ? `<div class="q-line"><span class="q-k"></span><span class="q-v dim">${esc(d.suggestion)}</span></div>` : ""}
+    </div>
     <div class="d-act">${act}</div>
-    ${detail}
+    ${d.evidence ? detailBlock(d) : ""}
   </article>`;
-  if (kind !== "unverified" || !unvOpen) return html;
+}
 
-  // one line per run: when, who, what, and a button that reruns exactly that
-  // run. No single button stands in for all of them.
-  const rows = unvList.map(u => `<div class="unv-row">
+// 我在处理: the system is on it. The only button is 看日志, because there is
+// nothing for a person to press: this block never asks whether to run again.
+function handlingCard(d) {
+  const when = d.at ? ago(d.at) : "";
+  return `<article class="card handling">
+    ${answerLines(d, when, "handling")}
+    <div class="d-act">
+      <button onclick="showLog('${d.run}')">看日志</button>
+      <span class="hint">${d.running ? "正在跑，不用你点" : "到点我自己开跑，不用你点"}</span>
+    </div>
+    ${detailBlock(d)}
+  </article>`;
+}
+
+// 已停止: the work report. A convenience retry button is allowed; the copy is
+// a statement ("我试了 / 我的判断 / 收尾"), never a question back to the reader.
+function stoppedCard(d) {
+  const when = d.at ? ago(d.at) : "";
+  const hint = d.settled ? "更早的失败，已经翻过去了" : "我停了，证据都在这";
+  return `<article class="card stopped">
+    ${answerLines(d, when, "stopped")}
+    <div class="d-act">
+      <button onclick="showLog('${d.run}')">看日志</button>
+      ${d.run ? `<button onclick="rerun('${d.run}', '再试一次这个任务')">重试</button>` : ""}
+      <span class="hint">${hint}</span>
+    </div>
+    ${detailBlock(d)}
+  </article>`;
+}
+
+const unvList = () => ((state.board || {}).unverified_runs || []).slice(0, 50);
+
+// 不可验证: information, not a decision and not a failure. It says why there is
+// no green light and what would give the next run one.
+function unverifiableCard(d) {
+  const when = d.at ? ago(d.at) : "";
+  const rows = unvList();
+  const head = `<article class="card unverifiable">
+    <div class="questions">
+      ${projectLine(d, when)}
+      <div class="q-line"><span class="q-k">情况</span><span class="q-v">${esc(d.headline || d.problem || "")}</span></div>
+      <div class="q-line"><span class="q-k">原因</span><span class="q-v">${esc(d.reason || "")}</span></div>
+      <div class="q-line q-advice"><span class="q-k">建议</span><span class="q-v">${esc(d.suggestion || "")}</span></div>
+    </div>
+    <div class="d-act"><button onclick="toggleUnv()">${unvOpen ? "收起" : "看看是哪 " + rows.length + " 次"}</button>
+      <span class="hint">不可验证不等于通过，也不算失败</span></div>`;
+  if (!unvOpen) return head + "</article>";
+  const list = rows.map(u => `<div class="unv-row">
       <span class="dim nowrap">${esc(ago(u.ended_at) || "时间没记")}</span>
       <span class="nowrap">${esc(whoName(u.agent))}</span>
       <span class="unv-title" title="${esc(u.title || "")}">${esc(u.title || "（任务没写标题）")}</span>
       <button onclick="rerunOne('${u.id}')">重跑</button>
     </div>`).join("");
-  return html + `<div class="unv-list">${rows || '<div class="empty">没有可展开的记录</div>'}</div>`;
-}
-
-function retryWait(ts) {
-  if (!ts) return "正在跑";
-  const left = ts - Date.now() / 1000;
-  return left <= 0 ? "马上开始" : "约 " + span(left) + "后";
-}
-
-function renderRecover(rows) {
-  const sec = $("recover-sec");
-  if (!rows.length) { sec.hidden = true; return; }
-  sec.hidden = false;
-  $("recover-n").textContent = rows.length + " 件";
-  $("recover").innerHTML = rows.map(r => {
-    const limit = r.limit || 3;
-    const dots = Array.from({ length: limit }, (_, i) => `<i class="${i < (r.attempt || 0) ? "on" : ""}"></i>`).join("");
-    return `<div class="retry-row">
-       <span class="status-dot warn"></span>
-       <div class="retry-who"><b>${esc(r.project || "未记录项目")}</b><span class="sep">·</span>${esc(r.task_title || "（任务没写标题）")}
-         <div class="retry-last">上次：${esc(r.problem || "执行失败")}${r.mode ? ` · ${r.mode === "resume" ? "续会话" : "从头跑"}` : ""}${typeof r.estimate === "number" ? ` · 预计 ¥${r.estimate.toFixed(2)}` : ""}</div></div>
-       <div class="retry-progress"><span class="dots">${dots}</span>第 ${r.attempt}/${limit} 次重试</div>
-       <div class="when">${esc(retryWait(r.next_retry_at))}</div>
-     </div>`;
-  }).join("");
-}
-
-function renderBlocked(rows) {
-  const sec = $("blocked-sec");
-  if (!rows.length) { sec.hidden = true; return; }
-  sec.hidden = false;
-  $("blocked-n").textContent = rows.length + " 件";
-  // Same five answers as the decision rows: this is also something a person
-  // has to decide, only the action is "fix the key/参数" instead of "重跑".
-  $("blocked").innerHTML = rows.map(r => `<article class="card blocked decision">
-       ${questionLines(r, r.at ? ago(r.at) : "")}
-       <div class="d-act"><button class="primary" onclick="rerun('${r.run}')">修好后重跑</button>
-         <button onclick="showLog('${r.run}')">看日志</button></div>
-       ${detailBlock(r)}
-     </article>`).join("");
+  return head + `<div class="unv-list">${list || '<div class="empty">没有可展开的记录</div>'}</div></article>`;
 }
 
 function renderTodo() {
-  const b = state.board || {};
-  const needs = b.needs_you || [];
-  const recovering = b.auto_recovering || [];
-  const blocked = b.deterministic || [];
-  const history = b.history_failures || [];
+  const needs = (state.board || {}).needs_you || [];
   $("todo-n").textContent = needs.length ? needs.length + " 件" : "";
   $("todo-n").className = "count" + (needs.length ? " bad" : "");
   if (!needs.length) {
-    const retrying = new Set(recovering.map(r => r.task_id || r.run_id)).size;
-    const retryLine = retrying
-      ? `${retrying} 个任务正在自动重试（每个最多 ${recovering[0].limit || 3} 次），按退避时间自己跑，不用你点。`
-      : "现在没有任务在自动重试。";
-    const fixLine = blocked.length ? `另有 ${blocked.length} 件要先改配置才能继续，见下面「不会自动重试」。` : "";
     $("todo").innerHTML = `<div class="empty-card">
       <span class="empty-icon">✓</span>
       <div><div class="empty-title">没有需要你决定的事</div>
-        <div class="empty-sub">${esc(retryLine)}${fixLine ? " " + esc(fixLine) : ""}</div></div>
+        <div class="empty-sub">失败、重试、验收都是我在管：在跑的在「我在处理」，停下来的在「已停止」；
+          你只需要决定合不合、花不花钱、往哪个方向走。</div></div>
     </div>`;
-  } else {
-    // Nothing is hidden by default: a board that says "4 件" and shows 3 rows
-    // is a board whose count cannot be trusted. Past 8 the tail folds, and the
-    // fold says how many are behind it.
-    const LIMIT = 8;
-    const shown = needs.slice(0, LIMIT), rest = needs.slice(LIMIT);
-    const blocks = shown.map(decisionRow);
-    if (rest.length) {
-      blocks.push(`<div class="more-inline">还有 ${rest.length} 条
-        <button onclick="toggleMoreNeeds()">${moreNeedsOpen ? "收起" : "展开"}</button></div>`);
-      if (moreNeedsOpen) blocks.push(...rest.map(decisionRow));
-    }
-    $("todo").innerHTML = blocks.join("");
+    return;
   }
-  if (history.length) {
-    $("todo").insertAdjacentHTML("beforeend",
-      `<div class="more-inline">还有 ${history.length} 个失败不会再自动重试
-        <button onclick="toggleHistory()">${historyOpen ? "收起" : "展开"}</button></div>` +
-      (historyOpen ? history.map(decisionRow).join("") : ""));
+  // Nothing is hidden by default: a board that says "4 件" and shows 3 rows is
+  // a board whose count cannot be trusted. Past 8 the tail folds, and the fold
+  // says how many are behind it.
+  const LIMIT = 8;
+  const shown = needs.slice(0, LIMIT), rest = needs.slice(LIMIT);
+  const blocks = shown.map(decisionCard);
+  if (rest.length) {
+    blocks.push(`<div class="more-inline">还有 ${rest.length} 条
+      <button onclick="toggleMoreNeeds()">${moreNeedsOpen ? "收起" : "展开"}</button></div>`);
+    if (moreNeedsOpen) blocks.push(...rest.map(decisionCard));
   }
-  renderRecover(recovering);
-  renderBlocked(blocked);
+  $("todo").innerHTML = blocks.join("");
+}
+
+function renderHandling() {
+  const rows = (state.board || {}).handling || [];
+  $("handling-n").textContent = rows.length ? rows.length + " 件" : "";
+  if (!rows.length) {
+    $("handling").innerHTML = `<div class="empty-card">
+      <span class="empty-icon wait">·</span>
+      <div><div class="empty-title">现在没有在处理的失败</div>
+        <div class="empty-sub">有失败我会自己重试，到点自己开跑；试到上限都不行才停下，
+          把结论和证据写进「已停止」。</div></div>
+    </div>`;
+    return;
+  }
+  $("handling").innerHTML = rows.map(handlingCard).join("");
+}
+
+function renderStopped() {
+  const rows = (state.board || {}).stopped || [];
+  const fresh = rows.filter(d => !d.settled);
+  const older = rows.filter(d => d.settled);
+  const sec = $("stopped-sec");
+  if (!rows.length) { sec.hidden = true; $("stopped").innerHTML = ""; return; }
+  sec.hidden = false;
+  $("stopped-n").textContent = rows.length + " 件";
+  let html = fresh.map(stoppedCard).join("");
+  if (older.length) {
+    html += `<div class="more-inline">另有 ${older.length} 条更早的失败（已经重试过或太旧）
+      <button onclick="toggleHistory()">${historyOpen ? "收起" : "展开"}</button></div>`
+      + (historyOpen ? older.map(stoppedCard).join("") : "");
+  }
+  $("stopped").innerHTML = html;
+}
+
+function renderUnverifiable() {
+  const rows = (state.board || {}).unverifiable || [];
+  const sec = $("unv-sec");
+  if (!rows.length) { sec.hidden = true; $("unv").innerHTML = ""; return; }
+  sec.hidden = false;
+  $("unv-n").textContent = unvList().length + " 个 run";
+  $("unv").innerHTML = rows.map(unverifiableCard).join("");
 }
 
 let historyOpen = false;
-function toggleHistory() { historyOpen = !historyOpen; renderTodo(); }
+function toggleHistory() { historyOpen = !historyOpen; renderStopped(); }
 
 // Facts are harvested from the harnesses' own files; adopting appends them to
 // the project's AGENTS.md. An empty list hides the whole section: "no pending
@@ -958,17 +1018,12 @@ async function rerun(rid, lead) {
     refresh();
   } catch (e) { flash("重跑失败：" + e.message, true); }
 }
-function rerunRecent() {
-  const r = (state.board.unverified_runs || [])[0];
-  if (!r) return flash("找不到没验证的任务了，刷新看看", true);
-  rerun(r.id, "重跑最近一次？");
-}
 function rerunOne(rid) {
   rerun(rid, "重跑这一次？");
 }
 function toggleUnv() {
   unvOpen = !unvOpen;
-  renderTodo();
+  renderUnverifiable();
 }
 function toggleMoreNeeds() {
   moreNeedsOpen = !moreNeedsOpen;
@@ -1028,8 +1083,8 @@ async function refresh() {
     state.proposals = proposals;
     state.pipelines = pipelines;
     state.tasks = tasks;
-    renderHeader(); renderLive(); renderTodo(); renderMemory(); renderMoney(board.today);
-    renderUsage(board.today);
+    renderHeader(); renderLive(); renderTodo(); renderHandling(); renderStopped();
+    renderUnverifiable(); renderMemory(); renderMoney(board.today); renderUsage(board.today);
     renderRuns(); renderProposals();
   } catch (e) {
     $("todo").innerHTML = '<div class="empty bad">连不上 daemon：' + esc(e.message) + "</div>";
