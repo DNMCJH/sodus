@@ -2,9 +2,28 @@
 
 from __future__ import annotations
 
+import pytest
+
 import json
 
 from nodus import budget, config, db
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """Isolate the database: budget tests must not read today's real spend.
+
+    Without this the test compared its own ¥1.5 against whatever the machine
+    had really spent today, so it went red whenever the workspace was busy
+    enough -- a test that fails because of the user's afternoon.
+    """
+    from nodus import config
+
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    monkeypatch.setenv("NODUS_WORKSPACE", "ws-budget-test")
+    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
+    (tmp_path / "home").mkdir()
+    return tmp_path
 
 
 def _run(cost: float, currency: str = "CNY") -> str:
@@ -37,7 +56,7 @@ def test_limit_reads_the_environment_first(monkeypatch):
     assert budget.limit() == 0.0
 
 
-def test_spend_today_counts_only_cny(monkeypatch):
+def test_spend_today_counts_only_cny(monkeypatch, home):
     monkeypatch.setattr(budget, "limit", lambda: 100.0)
     ids = [_run(1.5), _run(2.0, "USD")]
     try:
@@ -57,7 +76,7 @@ def test_over_the_limit_is_reported_with_numbers(monkeypatch):
     assert "2.50" in message and "1.00" in message
 
 
-def test_the_ceiling_refuses_new_runs(monkeypatch):
+def test_the_ceiling_refuses_new_runs(monkeypatch, home):
     monkeypatch.setattr(budget, "limit", lambda: 1.0)
     monkeypatch.setattr(budget, "spent", lambda now=None: 9.0)
     from nodus import runner
