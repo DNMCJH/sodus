@@ -26,6 +26,7 @@ from . import (
     ledger,
     llm,
     memory,
+    observe,
     pet,
     profiles,
     propose,
@@ -1856,12 +1857,18 @@ def _today(conn, start: float) -> dict:
     reading and the bucketing are `ledger.by_agent`, so this page, the CLI and
     MCP cannot drift apart on what "today, per agent" means.
     """
-    rows = conn.execute(
-        "SELECT agent, route, usage_json FROM run"
-        " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
-        (config.workspace_id(), start),
-    ).fetchall()
-    return ledger.by_agent(dict(row) for row in rows)
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT agent, route, usage_json FROM run"
+            " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
+            (config.workspace_id(), start),
+        ).fetchall()
+    ]
+    # A harness session the user drove is not a run, but its tokens were paid
+    # for today; the board's first question ("what did today cost") includes it.
+    rows.extend(observe.observed_runs(start))
+    return ledger.by_agent(rows)
 
 
 def _usage_rows(conn, start: float) -> list[dict]:
@@ -1871,7 +1878,7 @@ def _usage_rows(conn, start: float) -> list[dict]:
         " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
         (config.workspace_id(), start),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [dict(row) for row in rows] + observe.observed_runs(start)
 
 
 def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:

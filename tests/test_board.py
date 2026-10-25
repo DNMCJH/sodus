@@ -64,6 +64,15 @@ class _EmptyDB:
     def __iter__(self):
         return iter(())
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def fetchone(self):
+        return None
+
     def close(self):
         pass
 

@@ -86,6 +86,8 @@ DEBUG_COMMANDS = (
     "proposal",
     # remembered facts
     "memory",
+    # harness tributaries
+    "observe",
 )
 
 
@@ -147,6 +149,7 @@ def build_parser():
         bench,
         decisions,
         memory,
+        observe,
         pipeline,
         proposals,
         sessions,
@@ -155,7 +158,10 @@ def build_parser():
         topology,
     )
 
-    modules = (system, tasks, pipeline, sessions, decisions, topology, proposals, bench, memory)
+    modules = (
+        system, tasks, pipeline, sessions, decisions, topology, proposals,
+        bench, memory, observe,
+    )
 
     parser = argparse.ArgumentParser(
         prog="nodus",

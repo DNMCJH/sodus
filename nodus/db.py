@@ -63,6 +63,27 @@ CREATE TABLE IF NOT EXISTS event (
   ts REAL
 );
 CREATE INDEX IF NOT EXISTS idx_event_run ON event(run_id, seq);
+-- A harness's own session log, read as a tributary. Nothing here was dispatched
+-- by Nodus: no retry, no verification, no write lock. It is a billing fact, not
+-- a run, so it lives in its own table and never pollutes run history.
+CREATE TABLE IF NOT EXISTS observation (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  harness TEXT,
+  project TEXT,
+  session_id TEXT,
+  seq INTEGER,
+  at REAL,
+  model TEXT,
+  provider TEXT,
+  tokens_json TEXT,
+  cost REAL,
+  currency TEXT,
+  cost_basis TEXT,
+  imported_at REAL,
+  UNIQUE(harness, session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_observation_at ON observation(workspace_id, at);
 CREATE TABLE IF NOT EXISTS artifact (
   id TEXT PRIMARY KEY,
   workspace_id TEXT,
@@ -270,6 +291,82 @@ def new_id(prefix: str) -> str:
 
 def now() -> float:
     return time.time()
+
+
+# ---- observed usage (a harness's own log) ------------------------------
+#
+# observe.py reads DSH session files; these helpers are the only writer and
+# reader. They are separate from run because the semantics differ: an
+# observation is one assistant message, a run is an execution with an owner.
+
+
+def insert_observations(rows: list[dict]) -> int:
+    """Insert observed messages, ignoring ones already imported.
+
+    Returns how many rows were new. The UNIQUE(harness, session_id, seq) key is
+    what makes a re-import a no-op rather than a double bill.
+    """
+    if not rows:
+        return 0
+    inserted = 0
+    with connect() as c:
+        for row in rows:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO observation(id, workspace_id, harness, project,"
+                " session_id, seq, at, model, provider, tokens_json, cost, currency,"
+                " cost_basis, imported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    row["id"],
+                    config.workspace_id(),
+                    row["harness"],
+                    row["project"],
+                    row["session_id"],
+                    row["seq"],
+                    row["at"],
+                    row["model"],
+                    row["provider"],
+                    row["tokens_json"],
+                    row.get("cost"),
+                    row.get("currency"),
+                    row.get("cost_basis"),
+                    now(),
+                ),
+            )
+            inserted += cur.rowcount
+    return inserted
+
+
+def observations(start: float | None = None, end: float | None = None) -> list[dict]:
+    """Observed messages in a [start, end) window, oldest first."""
+    sql = "SELECT * FROM observation WHERE workspace_id=?"
+    args: list[Any] = [config.workspace_id()]
+    if start is not None:
+        sql += " AND at>=?"
+        args.append(start)
+    if end is not None:
+        sql += " AND at<?"
+        args.append(end)
+    sql += " ORDER BY at"
+    with connect() as c:
+        return [dict(row) for row in c.execute(sql, args)]
+
+
+def observation_cursor(key: str) -> dict | None:
+    with connect() as c:
+        row = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    try:
+        return json.loads(row[0]) if row else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_observation_cursor(key: str, value: dict) -> None:
+    with connect() as c:
+        c.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value, ensure_ascii=False, sort_keys=True)),
+        )
 
 
 def create_session(

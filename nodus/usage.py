@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import config, db, ledger
+from . import config, db, ledger, observe
 
 PERIODS = ledger.PERIODS
 GROUP_BYS = ledger.GROUP_BYS
@@ -64,9 +64,12 @@ def _rows(start: float | None = None, end: float | None = None) -> list[dict]:
         args.append(end)
     conn = db.connect()
     try:
-        return [dict(row) for row in conn.execute(sql, args)]
+        rows = [dict(row) for row in conn.execute(sql, args)]
     finally:
         conn.close()
+    # Sessions a human drove are not runs, but they spent money; the report
+    # counts them as one row per session-day (see observe.observed_runs).
+    return rows + observe.observed_runs(start, end)
 
 
 def summary(period: str = "day", group_by: str = "route", now: float | None = None) -> dict:
