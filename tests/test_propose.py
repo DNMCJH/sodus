@@ -65,6 +65,22 @@ def test_collect_is_none_when_nothing_changed(repo):
     assert propose.collect(ctx, "t") is None
 
 
+def test_collect_keeps_work_the_worker_committed_itself(repo):
+    """A clean tree after the worker committed is a proposal, not a no-op."""
+    ctx = propose.prepare(repo, "run-committed")
+    tree = Path(ctx["worktree"])
+    (tree / "committed.txt").write_text("worker commit\n", encoding="utf-8")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-m", "worker did it")
+
+    collected = propose.collect(ctx, "a task")
+
+    assert collected is not None
+    assert "1 file(s)" in collected["stat"]
+    patch = Path(collected["patch_path"]).read_text(encoding="utf-8")
+    assert "committed.txt" in patch
+
+
 def test_collect_commits_and_produces_a_patch(repo):
     ctx = propose.prepare(repo, "run-work")
     tree = Path(ctx["worktree"])

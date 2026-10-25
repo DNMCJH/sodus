@@ -76,19 +76,24 @@ def collect(ctx: dict, title: str) -> dict | None:
     Returns None when the run changed nothing — an empty branch is not a
     proposal, it is a no-op, and listing it would train people to ignore the
     list.
+
+    A worker may have committed its own work before finishing; that is a clean
+    tree, not an empty proposal. What decides emptiness is the diff against
+    the base commit, never the dirty state of the tree.
     """
     worktree = Path(ctx["worktree"])
     if not worktree.is_dir():
         return None
     _git(worktree, "add", "-A")
     changed = _git(worktree, "status", "--porcelain").stdout or ""
-    if not changed.strip():
-        return None
-    _git(worktree, "commit", "-m", f"nodus: {title[:72] or ctx['branch']}")
+    if changed.strip():
+        _git(worktree, "commit", "-m", f"nodus: {title[:72] or ctx['branch']}")
 
+    patch = _git(worktree, "diff", "--binary", f"{ctx['base']}..HEAD").stdout or ""
+    if not patch.strip():
+        return None
     patch_path = config.HOME / "proposals" / f"{Path(ctx['worktree']).name}.patch"
     patch_path.parent.mkdir(parents=True, exist_ok=True)
-    patch = _git(worktree, "diff", "--binary", f"{ctx['base']}..HEAD").stdout or ""
     patch_path.write_text(patch, encoding="utf-8")
 
     numstat = _git(worktree, "diff", "--numstat", f"{ctx['base']}..HEAD").stdout or ""
