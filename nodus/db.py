@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS run (
   parent_run_id TEXT,
   cwd TEXT,
   note TEXT,
+  kind TEXT DEFAULT 'work',
   effort TEXT,
   session_ref_json TEXT,
   usage_json TEXT,
@@ -160,12 +161,26 @@ def describe_busy(cwd: str, holder: dict) -> str:
     )
 
 
+#: Databases this process has already opened and migrated. Schema repair is
+#: idempotent but expensive (executescript + a PRAGMA table_info per table);
+#: a board render opens dozens of connections, so paying it each time was the
+#: single biggest cost of the page (board ~10s -> measured 2026-10-25). One
+#: entry per database path keeps tests that build a fresh database safe.
+_SCHEMA_READY: set[str] = set()
+
+
 def connect() -> sqlite3.Connection:
-    config.ensure_dirs()
-    conn = sqlite3.connect(config.HOME / "nodus.sqlite3", timeout=10)
+    path = config.HOME / "nodus.sqlite3"
+    key = str(path)
+    ready = key in _SCHEMA_READY
+    if not ready:
+        config.ensure_dirs()
+    conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    if ready:
+        return conn
     conn.executescript(SCHEMA)
     for table in ("session", "task", "run", "artifact", "handoff"):
         cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
@@ -190,6 +205,23 @@ def connect() -> sqlite3.Connection:
         conn.execute("ALTER TABLE run ADD COLUMN owner_pid INTEGER")
     if "owner_host" not in cols:
         conn.execute("ALTER TABLE run ADD COLUMN owner_host TEXT")
+    # A pet utterance is a token bill, not work. "kind" separates the two so the
+    # board and the route history stop reading chat as attempts. Old rows carry
+    # the note llm._record writes ("桌宠...") or the ledger source it stamps
+    # ("llm/chat"); those are the only signals that already exist.
+    if "kind" not in cols:
+        conn.execute("ALTER TABLE run ADD COLUMN kind TEXT DEFAULT 'work'")
+        # Two signals, both already in the old rows: the note the pet writes
+        # ("桌宠" with or without a route name after it) and the ledger source
+        # llm._record stamps on every call it makes ("source": "llm/chat").
+        # Matching the note from its first character is deliberate: the pet's
+        # rows in the live database say exactly "桌宠" (no route suffix), so
+        # the narrower "桌宠 %" would have migrated almost none of them.
+        conn.execute(
+            "UPDATE run SET kind='chat' WHERE (kind IS NULL OR kind='work')"
+            " AND (note LIKE '桌宠%' OR usage_json LIKE '%llm/chat%')"
+        )
+    conn.execute("UPDATE run SET kind='work' WHERE kind IS NULL OR kind=''")
     # Lineage: where this session was continued or forked from, and which run
     # brought it into existence. Old rows have no parent by definition, and
     # 'fresh' is what "no parent" is called, so the backfill states the truth
@@ -228,6 +260,7 @@ def connect() -> sqlite3.Connection:
             (config.workspace_id(),),
         )
     conn.commit()
+    _SCHEMA_READY.add(key)
     return conn
 
 
@@ -365,6 +398,7 @@ def create_run(
     rid: str = "",
     owner_pid: int | None = None,
     owner_host: str = "",
+    kind: str = "work",
 ) -> dict:
     """Create a run, optionally taking the write lock on its directory.
 
@@ -382,7 +416,7 @@ def create_run(
         try:
             _insert_run(rid, task_id, agent, cwd, parent_run_id, note, effort, model,
                         route, provider, profile, key if lock else "",
-                        owner_pid=owner_pid, owner_host=owner_host)
+                        owner_pid=owner_pid, owner_host=owner_host, kind=kind)
             return get_run(rid)
         except Busy as busy:
             if attempt == 0 and release_if_finished(busy.holder):
@@ -406,12 +440,13 @@ def _insert_run(
     lock_key: str,
     owner_pid: int | None = None,
     owner_host: str = "",
+    kind: str = "work",
 ) -> None:
     with connect() as c:
         c.execute(
             "INSERT INTO run(id, workspace_id, task_id, agent, cwd, parent_run_id, note,"
-            " effort, model, route, provider, profile, owner_pid, owner_host, started_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " kind, effort, model, route, provider, profile, owner_pid, owner_host, started_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 rid,
                 config.workspace_id(),
@@ -420,6 +455,7 @@ def _insert_run(
                 cwd,
                 parent_run_id,
                 note,
+                kind or "work",
                 effort,
                 model,
                 route,
@@ -538,19 +574,30 @@ def get_run(rid: str) -> dict:
     return dict(row) if row else {}
 
 
-def list_runs(task_id: str | None = None, limit: int = 50) -> list[dict]:
+def list_runs(
+    task_id: str | None = None, limit: int = 50, kind: str | None = None
+) -> list[dict]:
+    """Newest runs first, optionally of one kind.
+
+    "kind" filters *before* the limit, which is the point: the pet's utterances
+    are newer than every real run and must not push all the work out of a
+    50-row window.
+    Rows written before the column existed read as 'work' (see connect()).
+    """
+    where = ["workspace_id=?"]
+    args: list[Any] = [config.workspace_id()]
+    if task_id:
+        where.append("task_id=?")
+        args.append(task_id)
+    if kind:
+        where.append("COALESCE(NULLIF(kind, ''), 'work')=?")
+        args.append(kind)
     with connect() as c:
-        if task_id:
-            rows = c.execute(
-                "SELECT * FROM run WHERE task_id=? AND workspace_id=?"
-                " ORDER BY started_at DESC LIMIT ?",
-                (task_id, config.workspace_id(), limit),
-            ).fetchall()
-        else:
-            rows = c.execute(
-                "SELECT * FROM run WHERE workspace_id=? ORDER BY started_at DESC LIMIT ?",
-                (config.workspace_id(), limit),
-            ).fetchall()
+        rows = c.execute(
+            "SELECT * FROM run WHERE " + " AND ".join(where) +
+            " ORDER BY started_at DESC LIMIT ?",
+            (*args, limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 

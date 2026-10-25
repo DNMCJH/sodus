@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -54,6 +56,25 @@ def _log(message: str) -> None:
             f.write(f"{stamp} {message}\n")
     except OSError:
         pass
+
+
+def _is_disconnect(exc: BaseException | None) -> bool:
+    """A client that hung up is not a server error.
+
+    Browsers open the SSE stream and walk away; Windows reports the dead pipe as
+    WinError 10053/10054, Python usually as one of the three ConnectionError
+    subclasses. Logging a 20-line traceback for each one is what grew
+    daemon.log past 6 MB. Anything that is not a disconnect keeps its traceback.
+    """
+    if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+        return True
+    if getattr(exc, "winerror", None) in (10053, 10054):
+        return True
+    return getattr(exc, "errno", None) in (
+        errno.ECONNABORTED,
+        errno.ECONNRESET,
+        errno.EPIPE,
+    )
 
 
 def authorized(header: str) -> bool:
@@ -569,8 +590,18 @@ def _verify_red(run_id: str) -> dict:
     return {}
 
 
+#: A git diff for a directory is stable enough to reuse across requests for a
+#: few seconds: the card describes a run that already ended, and the
+#: 5-repository worst case was ~1.6s in git subprocesses alone (board was 10s
+#: before this, measured 2026-10-25). Keyed by cwd; a user editing files gets
+#: at most this much stale line counts on old cards.
+_NUMSTAT_TTL = 30.0
+_NUMSTAT: dict[str, tuple[float, dict[str, tuple[int, int]]]] = {}
+
+
 def _git_numstat_all(cwd: str) -> dict[str, tuple[int, int]]:
-    """One `git diff --numstat` for the whole work tree, cached per request.
+    """One `git diff --numstat` for the whole work tree, cached per request and
+    briefly across requests.
 
     HEAD covers staged and unstaged changes; the fallback covers a repository
     with no commit yet. Running it once per directory and filtering in Python
@@ -578,6 +609,16 @@ def _git_numstat_all(cwd: str) -> dict[str, tuple[int, int]]:
     """
     if not cwd:
         return {}
+    now = time.time()
+    hit = _NUMSTAT.get(cwd)
+    if hit is not None and now - hit[0] < _NUMSTAT_TTL:
+        return hit[1]
+    stats = _read_git_numstat(cwd)
+    _NUMSTAT[cwd] = (now, stats)
+    return stats
+
+
+def _read_git_numstat(cwd: str) -> dict[str, tuple[int, int]]:
     for base in (["HEAD"], []):
         args = ["git", "-C", cwd, "diff", "--numstat", *base]
         try:
@@ -1952,7 +1993,12 @@ def board_state(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     start, day = _day_start(now)
     month_start, _, _ = usage_stats.bounds("month", now)
-    runs = db.list_runs(limit=50)
+    # Only work. The pet's small talk is hundreds of rows of chatter through
+    # the same table; letting it into a 50-row window would push every real run
+    # out of the board's counts (and call each utterance "unverified work"). Money is
+    # the exception: _today and _usage_snapshot read the run table directly, so
+    # chat spend still lands in today's total.
+    runs = db.list_runs(limit=50, kind="work")
     states = db.verify_states([r["id"] for r in runs])
     decisions, counts = _decisions(runs, states)
     titles = _task_titles([r.get("task_id") or "" for r in runs])
@@ -2034,7 +2080,7 @@ def _sse(handler: BaseHTTPRequestHandler, run_id: str | None, after: int) -> Non
             handler.wfile.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
             handler.wfile.flush()
             last_ping = time.time()
-    except (BrokenPipeError, ConnectionResetError):
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
         pass
     finally:
         runner.BUS.unsubscribe(q)
@@ -2050,11 +2096,11 @@ class Handler(BaseHTTPRequestHandler):
         """Never let an exception take the connection (and the client) down."""
         try:
             handler()
-        except (BrokenPipeError, ConnectionResetError):
-            return
-        except Exception:  # noqa: BLE001 - last line of defence
-            import traceback
-
+        except Exception as exc:  # noqa: BLE001 - last line of defence
+            # A client that hung up is not a server fault: no traceback for it.
+            # Everything else still gets the full stack.
+            if _is_disconnect(exc):
+                return
             _log("handler crashed:\n" + traceback.format_exc())
             try:
                 _json(self, 500, {"error": "internal error"})
@@ -2432,6 +2478,22 @@ class Handler(BaseHTTPRequestHandler):
         return _json(self, 404, {"error": "not found"})
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """The HTTP server, minus the traceback for a client that hung up.
+
+    socketserver writes a full traceback for every exception that escapes a
+    request thread, including the ConnectionAbortedError(10053) a browser
+    produces by closing an SSE stream. daemon.log had ~5,800 of those and they
+    drowned the real failures. A disconnect is dropped silently; anything else
+    still gets its full stack in the log.
+    """
+
+    def handle_error(self, request, client_address) -> None:
+        if _is_disconnect(sys.exc_info()[1]):
+            return
+        _log("request crashed:\n" + traceback.format_exc())
+
+
 def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     if host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get(
         "NODUS_ALLOW_REMOTE"
@@ -2445,7 +2507,7 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     # restart never leaves clients waiting on a corpse.
     reaped = runner.RUNNER.reap_orphans()
     stalled = jobs.reap(db.list_pipelines("running"))
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = _QuietServer((host, port), Handler)
     server.daemon_threads = True
     # The pet doubles as a status light: when something new starts waiting on a
     # human, the desktop pet says so. Off with NODUS_STATUS_LIGHT=0 for anyone

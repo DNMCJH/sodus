@@ -318,7 +318,10 @@ def for_task(task_id: str) -> dict:
     task = db.get_task(str(task_id or "").strip())
     if not task:
         return {}
-    runs = db.list_runs(task["id"], limit=100000)
+    # A pet utterance is not an attempt at this task. Chat rows carry no
+    # task_id today, so this filter mostly states the invariant; it is what
+    # keeps the route table honest if that ever changes.
+    runs = db.list_runs(task["id"], limit=100000, kind="work")
     marks = db.verify_states([r["id"] for r in runs])
     rows = [_run_summary(r, marks.get(r["id"], "none")) for r in runs]
     rows.sort(key=lambda r: r["started_at"])  # oldest first: this is a history

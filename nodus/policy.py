@@ -812,7 +812,8 @@ def _usage_cost(usage_json: str | None) -> tuple[float, str, str] | None:
 def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
     """What this workspace actually saw on `route`, from the run table.
 
-    Only finished runs count. A run is a *success* only when it completed and
+    Only finished work runs count: pet chatter (kind='chat') is a token bill,
+    not an attempt at the route. A run is a *success* only when it completed and
     its tests went green: exit code 0 with nothing verified is the exact thing
     this project exists to stop calling success. Costs stay in their own
     currency — converting CNY and USD at today's rate would invent a number
@@ -836,6 +837,7 @@ def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:
                 for row in conn.execute(
                     "SELECT id, status, started_at, ended_at, usage_json FROM run"
                     " WHERE workspace_id=? AND status IN ('completed','failed')"
+                    " AND COALESCE(NULLIF(kind, ''), 'work')='work'"
                     " AND (route=? OR ((route IS NULL OR route='') AND agent=?))"
                     " ORDER BY started_at DESC LIMIT ?",
                     (config.workspace_id(), route, route, window),

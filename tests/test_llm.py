@@ -9,10 +9,11 @@ through to the route's next one, and a successful call leaves a priced row that
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
-from nodus import config, llm, providers, routes
+from nodus import config, db, llm, providers, routes
 
 
 @pytest.fixture(autouse=True)
@@ -198,3 +199,41 @@ def test_output_tokens_are_capped_at_four_hundred(monkeypatch, secrets):
     monkeypatch.setattr(llm, "_record", lambda *a, **k: "run-cap")
     llm.chat("claude", [{"role": "user", "content": "x"}], max_tokens=5000)
     assert captured["max_tokens"] == llm.MAX_OUTPUT_TOKENS
+
+def test_a_pet_utterance_is_recorded_as_a_chat_run(tmp_path, monkeypatch):
+    """The row llm._record writes comes back marked kind=chat.
+
+    That is the only durable signal: the note is free text the caller passes
+    ("桌宠", "冒烟测试"), so the board and the route history cannot classify the
+    row from it after the fact.
+    """
+    monkeypatch.setattr(config, "HOME", tmp_path / "home")
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("NODUS_WORKSPACE", "ws-llm-chat")
+    route = routes.resolve("claude")
+    provider = providers.load()["relay"]
+    started = time.time()
+
+    rid = llm._record(
+        route,
+        provider,
+        "claude-opus-5-5[1M]",
+        {
+            "input_tokens": 12,
+            "output_tokens": 3,
+            "cost": 0.01,
+            "currency": "CNY",
+            "cost_basis": "calibrated",
+            "source": "llm/chat",
+        },
+        "桌宠",
+        str(config.HOME),
+        started,
+    )
+
+    run = db.get_run(rid)
+    assert run["kind"] == "chat"
+    assert run["route"] == "claude"
+    assert run["agent"] == route.agent
+    assert run["status"] == "completed"
+

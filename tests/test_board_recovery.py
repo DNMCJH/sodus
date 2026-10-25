@@ -788,3 +788,66 @@ def test_the_page_renders_the_evidence_and_the_money_gates():
     assert "加额度后重跑" not in ui.PAGE
     assert "花这笔钱重跑" not in ui.PAGE
     assert "continuous" not in ui.PAGE
+
+
+# ---- chat is not work --------------------------------------------------
+
+
+def _chat_run(home, *, status: str = "completed", moment: float | None = None) -> dict:
+    """One pet utterance, shaped the way llm._record writes it."""
+    run = db.create_run(
+        "", "claude", str(home / "work"), note="桌宠", route="claude",
+        provider="relay", kind="chat",
+    )
+    at = time.time() - 3 if moment is None else moment
+    fields = {"status": status, "started_at": at, "ended_at": at}
+    if status == "failed":
+        fields["error"] = "exit code 1"
+    db.update_run(run["id"], **fields)
+    return db.get_run(run["id"])
+
+
+def test_pet_chatter_does_not_fill_the_board_window(home):
+    """119 newer chat rows must not hide the one run that is actually work.
+
+    The bug this pins: db.list_runs(limit=50) returned 50 pet utterances newest
+    first, so every work count on the board read zero and the page looked idle
+    while real runs were sitting right there.
+    """
+    now = time.time()
+    work = seed(
+        home, error="", status="completed", title="修好登录",
+        ended=now - 5, started=now - 45,
+    )[1]
+    chatter = [_chat_run(home, moment=now - 4 + index * 0.001) for index in range(60)]
+
+    board = server.board_state()
+
+    # The window now holds work: the completed run is the only unverified row.
+    assert [row["id"] for row in board["unverified_runs"]] == [work["id"]]
+    assert board["decision_counts"]["unverified"] == 1
+    # No chat row leaked into any of the work lists.
+    chat_ids = {run["id"] for run in chatter}
+    for field in ("needs_you", "handling", "stopped", "history_failures"):
+        assert not chat_ids & {item.get("run") for item in board[field]}, field
+    assert not chat_ids & {item.get("run") for item in board["decisions"]}
+
+
+def test_the_board_still_counts_the_money_a_pet_spends(home):
+    """Chat is not work, but it is a token bill: today's total keeps it."""
+    now = time.time()
+    seed(home, error="", status="completed", title="修好登录", ended=now - 5, started=now - 45)
+    for index in range(6):
+        _chat_run(home, moment=now - 4 + index * 0.001)
+    for run in [r for r in db.list_runs(limit=100) if r["kind"] == "chat"]:
+        db.update_run(
+            run["id"],
+            usage_json=json.dumps({"cost": 0.02, "currency": "CNY"}),
+        )
+
+    today = server.board_state()["today"]
+
+    # 1 work + 6 chat rows started today: the money page does not filter chat.
+    assert today["runs"] == 7
+    assert today["totals"]["CNY"] == pytest.approx(0.12)
+

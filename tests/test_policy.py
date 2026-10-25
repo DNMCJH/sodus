@@ -447,6 +447,28 @@ def test_runs_from_before_the_route_column_still_count(home, rules_only, reports
 
     assert policy._run_history("codex")["samples"] == 3
 
+def test_pet_chatter_is_not_a_route_sample(home, rules_only, reports):
+    """A route's history is what it did on work. 3 chat rows must not become
+    the "samples" that make a route look measured (and failing)."""
+    task = db.create_task(goal="fix the login bug")
+    _finish(task["id"], "codex", "completed", verify="green")
+    for index in range(3):
+        run = db.create_run(
+            "", "claude", str(config.HOME), note="桌宠", route="claude", kind="chat",
+        )
+        db.update_run(
+            run["id"],
+            status="completed",
+            started_at=run["started_at"],
+            ended_at=run["started_at"] + 2,
+        )
+
+    assert policy._run_history("claude")["samples"] == 0
+    assert policy._run_history("claude")["status"] == "none"
+    # The work run is still the one sample on its own route.
+    assert policy._run_history("codex")["samples"] == 1
+
+
 
 def test_operator_route_assessment_does_not_spend_a_jev_call(home, monkeypatch):
     monkeypatch.setattr(decision, "available", lambda: (True, "ok"))

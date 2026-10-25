@@ -37,6 +37,12 @@ def test_status_reports_up_with_recorded_pid(monkeypatch):
 def test_start_is_idempotent_when_already_up(monkeypatch):
     monkeypatch.setattr(daemon, "read_state", lambda: {"pid": 77, "port": 4199})
     monkeypatch.setattr(daemon, "health", lambda port, timeout=1.0: True)
+    # /health of whatever really listens on 4199 is not this test's business:
+    # without the stub it fails on a machine whose live daemon uses a different
+    # NODUS_HOME (a test run under a temp home, for one).
+    monkeypatch.setattr(
+        daemon, "health_info", lambda port, timeout=1.0: {"home": daemon.config.home_id()}
+    )
     result = daemon.start()
     assert result["ok"] and result["already"] is True
 

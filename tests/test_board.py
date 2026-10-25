@@ -69,7 +69,11 @@ class _EmptyDB:
 
 
 def test_board_keeps_its_old_keys_and_adds_unverified_runs(monkeypatch):
-    monkeypatch.setattr(server.db, "list_runs", lambda limit=50: [_run("run-a")])
+    # board_state asks for the work kind: the 50-row window must not be
+    # filled by pet chatter (test_run_kind.py covers the filter itself).
+    monkeypatch.setattr(
+        server.db, "list_runs", lambda limit=50, kind=None: [_run("run-a")]
+    )
     monkeypatch.setattr(server.db, "verify_states", lambda ids: {"run-a": "none"})
     monkeypatch.setattr(server.db, "list_proposals", lambda status: [])
     monkeypatch.setattr(server, "_task_titles", lambda ids: {"task-a": "写一个文件"})

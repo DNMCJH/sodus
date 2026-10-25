@@ -476,6 +476,10 @@ def _record(
             model=model,
             route=route.name,
             provider=provider.name,
+            # A pet utterance is a token bill, not work: it must stay out of the
+            # board's 50-row window and out of the route history, and the only
+            # way to tell it apart afterwards is this column.
+            kind="chat",
         )
         rid = row["id"]
         db.update_run(
