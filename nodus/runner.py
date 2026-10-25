@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, policy, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -882,11 +882,14 @@ class Runner:
             else None
         )
         if calibration is not None:
-            usage["cost"] = round(
-                calibration.cost(usage) * config.cost_rate("relay_unit"), 6
+            # The arithmetic is pricing.py's: the CLI, the board and this run
+            # must not each round a calibration to a different fen.
+            amount, currency, basis, _detail = pricing.price(
+                attempt.get("model") or "", provider, usage
             )
-            usage["currency"] = "CNY"
-            usage["cost_basis"] = "calibrated"
+            usage["cost"] = amount
+            usage["currency"] = currency
+            usage["cost_basis"] = basis
             usage["calibration"] = calibration.as_json()
             if metered is not None and before is not None:
                 # Keep the account-side number too. It is inflated whenever
@@ -906,9 +909,13 @@ class Runner:
                 "window_s": round(attempt["ended_at"] - attempt["started_at"], 1),
             }
         elif provider.pricing is not None:
-            usage["cost"] = provider.pricing.cost(usage)
-            usage["currency"] = provider.pricing.currency
-            usage["cost_basis"] = "list_price"
+            amount, currency, basis, _detail = pricing.price(
+                attempt.get("model") or "", provider, usage
+            )
+            if amount is not None:
+                usage["cost"] = amount
+                usage["currency"] = currency
+                usage["cost_basis"] = basis
         elif isinstance(usage.get("cost"), (int, float)):
             usage["currency"] = "USD"
             usage["cost_basis"] = "reported"

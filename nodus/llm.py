@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config, db, meter, providers, routes
+from . import config, db, meter, pricing, providers, routes
 
 #: Hard ceiling on output tokens for one pet utterance.
 MAX_OUTPUT_TOKENS = 400
@@ -237,18 +237,12 @@ def _price(
     calibration = (
         providers.calibration_for(model) if provider.meter == "relay" else None
     )
-    if calibration is not None:
-        return {
-            "cost": round(calibration.cost(usage) * config.cost_rate("relay_unit"), 6),
-            "currency": "CNY",
-            "cost_basis": "calibrated",
-        }
-    if provider.pricing is not None:
-        return {
-            "cost": provider.pricing.cost(usage),
-            "currency": provider.pricing.currency,
-            "cost_basis": "list_price",
-        }
+    if calibration is not None or provider.pricing is not None:
+        # pricing.py owns the arithmetic so a pet utterance and a task run on
+        # the same endpoint cannot round differently.
+        amount, currency, basis, _detail = pricing.price(model, provider, usage)
+        if amount is not None:
+            return {"cost": amount, "currency": currency, "cost_basis": basis}
     if before is not None:
         # Billing lands seconds after the call, so give it a moment: a delta of
         # zero recorded as "this was free" is worse than saying nothing.

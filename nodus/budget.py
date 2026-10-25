@@ -16,11 +16,10 @@ Policy, deliberately small:
 
 from __future__ import annotations
 
-import json
 import os
 import time
 
-from . import config, db
+from . import config, db, ledger
 
 DEFAULT_KEY = "budget"
 #: Currency this ceiling is expressed in. Other currencies are not converted.
@@ -52,7 +51,15 @@ def day_start(now: float | None = None) -> float:
 
 
 def spent(now: float | None = None) -> float:
-    """CNY spent today, straight from what `_price()` wrote. No re-derivation."""
+    """CNY spent today, straight from what `_price()` wrote. No re-derivation.
+
+    The reading is `ledger.spent`, with this module's long-standing rule passed
+    in rather than assumed: a row that recorded no currency counts as CNY
+    here. Every row this workspace writes is CNY, and a ceiling that silently
+    ignores unlabelled spend would let a run through the gate it is meant to
+    close. The board tells a different truth -- an unnamed amount is not USD --
+    and the two are not the same question.
+    """
     start = day_start(now)
     conn = db.connect()
     try:
@@ -63,19 +70,7 @@ def spent(now: float | None = None) -> float:
         ).fetchall()
     finally:
         conn.close()
-    total = 0.0
-    for row in rows:
-        try:
-            usage = json.loads(row[0] or "{}")
-        except ValueError:
-            continue
-        if str(usage.get("currency") or CURRENCY).upper() != CURRENCY:
-            continue
-        try:
-            total += float(usage.get("cost") or 0.0)
-        except (TypeError, ValueError):
-            continue
-    return total
+    return ledger.spent((dict(row) for row in rows), CURRENCY, unrecorded_is=CURRENCY)
 
 
 def check(now: float | None = None) -> dict:

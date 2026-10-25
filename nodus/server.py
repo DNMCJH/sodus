@@ -23,6 +23,7 @@ from . import (
     config,
     db,
     jobs,
+    ledger,
     llm,
     memory,
     pet,
@@ -33,7 +34,6 @@ from . import (
     routes,
     runner,
     ui,
-    usage as usage_stats,
     verify,
 )
 
@@ -1852,50 +1852,20 @@ def _today(conn, start: float) -> dict:
     """Cost recorded today, straight out of `run.usage_json`.
 
     No re-derivation and no FX: `_price()` already chose the number and its
-    currency, and adding two currencies would invent an exchange rate.
+    currency, and adding two currencies would invent an exchange rate. The
+    reading and the bucketing are `ledger.by_agent`, so this page, the CLI and
+    MCP cannot drift apart on what "today, per agent" means.
     """
     rows = conn.execute(
         "SELECT agent, route, usage_json FROM run"
         " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
         (config.workspace_id(), start),
     ).fetchall()
-    by_agent: dict[str, dict] = {}
-    totals: dict[str, float] = {}
-    basis: dict[str, int] = {}
-    priced = 0
-    for row in rows:
-        usage = _usage(row["usage_json"])
-        agent = row["agent"] or "-"
-        bucket = by_agent.setdefault(
-            agent, {"agent": agent, "costs": {}, "runs": 0, "priced": 0, "routes": []}
-        )
-        bucket["runs"] += 1
-        route = row["route"] or ""
-        if route and route != agent and route not in bucket["routes"]:
-            bucket["routes"].append(route)
-        cost = usage.get("cost")
-        if not isinstance(cost, (int, float)):
-            continue
-        priced += 1
-        bucket["priced"] += 1
-        currency = str(usage.get("currency") or "USD")
-        bucket["costs"][currency] = round(bucket["costs"].get(currency, 0.0) + float(cost), 6)
-        totals[currency] = round(totals.get(currency, 0.0) + float(cost), 6)
-        key = str(usage.get("cost_basis") or "none")
-        basis[key] = basis.get(key, 0) + 1
-    ordered = sorted(by_agent.values(), key=lambda b: (-b["priced"], -b["runs"], b["agent"]))
-    return {
-        "runs": len(rows),
-        "priced": priced,
-        "unpriced": len(rows) - priced,
-        "totals": totals,
-        "by_agent": ordered,
-        "basis": basis,
-    }
+    return ledger.by_agent(dict(row) for row in rows)
 
 
 def _usage_rows(conn, start: float) -> list[dict]:
-    """Runs that started on/after `start`, in the shape `usage.summarize` wants."""
+    """Runs that started on/after `start`, in the shape `ledger.summarize` wants."""
     rows = conn.execute(
         "SELECT agent, route, provider, model, status, usage_json, started_at FROM run"
         " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
@@ -1910,8 +1880,8 @@ def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:
     cache_write)` and is null when nothing was recorded -- the page says
     "no usage yet" rather than printing a 0% that would look measured.
     """
-    day = usage_stats.summarize(_usage_rows(conn, day_start), group_by="route")
-    month = usage_stats.summarize(_usage_rows(conn, month_start), group_by="route")
+    day = ledger.summarize(_usage_rows(conn, day_start), group_by="route")
+    month = ledger.summarize(_usage_rows(conn, month_start), group_by="route")
     return {
         "tokens": day["totals"]["tokens"],
         "cache_hit_rate": day["totals"]["cache_hit_rate"],
@@ -1992,7 +1962,7 @@ def board_state(now: float | None = None) -> dict:
     _fresh_cache()
     now = time.time() if now is None else now
     start, day = _day_start(now)
-    month_start, _, _ = usage_stats.bounds("month", now)
+    month_start, _, _ = ledger.bounds("month", now)
     # Only work. The pet's small talk is hundreds of rows of chatter through
     # the same table; letting it into a 50-row window would push every real run
     # out of the board's counts (and call each utterance "unverified work"). Money is

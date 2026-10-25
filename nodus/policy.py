@@ -33,7 +33,7 @@ import statistics
 import time
 from pathlib import Path
 
-from . import config, db, decision, routes
+from . import config, db, decision, ledger, routes
 
 SCHEMA_VERSION = 2
 
@@ -795,18 +795,20 @@ def _bench_evidence() -> dict[str, dict]:
 
 
 def _usage_cost(usage_json: str | None) -> tuple[float, str, str] | None:
-    """(cost, currency, basis) when the run recorded a numeric price."""
-    try:
-        usage = json.loads(usage_json or "{}")
-    except (TypeError, ValueError):
+    """(cost, currency, basis) when the run recorded a numeric price.
+
+    Parsing is `ledger`'s: this used to be a fourth reading of `usage_json`,
+    free to disagree with the three others about a missing field. The only
+    local convention left is the word for "no currency" -- the routing
+    evidence prints "unknown", not the ledger's "-" bucket key.
+    """
+    priced = ledger.cost_of(usage_json)
+    if priced is None:
         return None
-    if not isinstance(usage, dict):
-        return None
-    cost = usage.get("cost")
-    if not isinstance(cost, (int, float)) or isinstance(cost, bool):
-        return None
-    currency = str(usage.get("currency") or "unknown").strip() or "unknown"
-    return float(cost), currency, str(usage.get("cost_basis") or "").strip()
+    cost, currency, basis = priced
+    if currency == ledger.UNKNOWN_CURRENCY:
+        currency = "unknown"
+    return cost, currency, basis
 
 
 def _run_history(route: str, limit: int = HISTORY_WINDOW) -> dict:

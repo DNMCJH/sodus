@@ -22,7 +22,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, db, memory, runner
+from . import config, db, ledger, memory, runner
 
 PROTOCOL_VERSION = "2024-11-05"
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
@@ -286,12 +286,11 @@ def _status_payload(run_id: str) -> dict:
     if not run:
         raise ToolError(f"没有这个 run：{run_id}")
 
-    usage = _json_object(run.get("usage_json"))
+    usage = ledger.parse(run.get("usage_json"))
     verify = db.verify_states([run_id]).get(run_id, "none")
     handoff = config.HOME / "runs" / run_id / "handoff.md"
     started = run.get("started_at")
     ended = run.get("ended_at")
-    cost = usage.get("cost")
     return {
         "run_id": run["id"],
         "task_id": run.get("task_id") or "",
@@ -304,14 +303,17 @@ def _status_payload(run_id: str) -> dict:
         "ended_at": ended,
         "duration_s": round(ended - started, 3) if started and ended else None,
         "error": run.get("error") or "",
+        # Same shape as always: counts are zero when unrecorded (a caller
+        # adding them up wants a number), money is None when unpriced, and an
+        # unrecorded currency stays "" rather than becoming the ledger's "-".
         "usage": {
-            "input_tokens": int(usage.get("input_tokens") or 0),
-            "output_tokens": int(usage.get("output_tokens") or 0),
-            "cache_read": int(usage.get("cache_read") or 0),
-            "cache_write": int(usage.get("cache_write") or 0),
-            "cost": cost if isinstance(cost, (int, float)) else None,
-            "currency": usage.get("currency") or "",
-            "cost_basis": usage.get("cost_basis") or "",
+            "input_tokens": int(usage.tokens.input or 0),
+            "output_tokens": int(usage.tokens.output or 0),
+            "cache_read": int(usage.tokens.cache_read or 0),
+            "cache_write": int(usage.tokens.cache_write or 0),
+            "cost": usage.cost.amount,
+            "currency": usage.cost.currency or "",
+            "cost_basis": usage.cost.basis or "",
         },
         "verify": {
             "state": verify,
@@ -428,14 +430,6 @@ def _text_result(payload: Any) -> dict:
 
 def _error_result(message: str) -> dict:
     return {"content": [{"type": "text", "text": message}], "isError": True}
-
-
-def _json_object(raw: str | None) -> dict:
-    try:
-        value = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
 
 
 def call_tool(name: Any, arguments: Any = None) -> dict:
