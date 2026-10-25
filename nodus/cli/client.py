@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import socket
@@ -152,6 +153,12 @@ def watch(rid: str, after: int = 0) -> int:
                     print(line, flush=True)
             if run.get("status") in ("completed", "failed"):
                 return 0 if run["status"] == "completed" else 1
+        except (TimeoutError, ConnectionError, http.client.HTTPException):
+            # A long tool call can leave the event connection idle past the
+            # socket timeout. That is a quiet run, not a dead one: reconnect
+            # with the last seen sequence and keep watching.
+            time.sleep(0.5)
+            continue
         except RuntimeError as exc:
             # The daemon can be restarted underneath us. Come back once; the
             # fresh daemon reaps the orphaned run, so this loop still ends.
