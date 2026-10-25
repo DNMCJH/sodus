@@ -463,6 +463,26 @@ def get_task(tid: str) -> dict:
     return dict(row) if row else {}
 
 
+def set_run_session_ref(run_id: str, session_ref: dict) -> bool:
+    """Persist the vendor session id while the run is still in flight.
+
+    A run that is killed or orphaned never reaches finalisation, and the row
+    it would have written is the only thing a retry needs to continue the
+    conversation instead of redoing it (the 2026-10-25 3.5h opus run lost
+    exactly that). Only fills an empty slot; finalisation keeps the last word.
+    """
+    if not run_id or not session_ref.get("session_id"):
+        return False
+    payload = json.dumps(session_ref, ensure_ascii=False)
+    with connect() as c:
+        cur = c.execute(
+            "UPDATE run SET session_ref_json=?"
+            " WHERE id=? AND (session_ref_json IS NULL OR session_ref_json IN ('', '{}'))",
+            (payload, run_id),
+        )
+        return cur.rowcount > 0
+
+
 def update_task(tid: str, **fields: Any) -> None:
     if not fields:
         return

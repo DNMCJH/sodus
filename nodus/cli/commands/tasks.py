@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 from ..client import call, watch
 
@@ -17,8 +19,22 @@ def add(sub) -> None:
     p = sub.add_parser("tasks", help="list tasks")
     p.set_defaults(func=tasks)
 
-    p = sub.add_parser("run", help="start a run for a task")
-    p.add_argument("task")
+    p = sub.add_parser("run", help="start (or resume) a run for a task")
+    p.add_argument("task", nargs="?")
+    p.add_argument(
+        "--continue",
+        dest="continue_run",
+        default="",
+        metavar="RUN",
+        help="resume the vendor session of a previous run (same conversation)",
+    )
+    p.add_argument(
+        "--resume",
+        dest="resume_session",
+        default="",
+        metavar="SESSION",
+        help="resume a vendor session id (needs --route/--agent)",
+    )
     p.add_argument("--agent", default="", help="route name (kept for older scripts)")
     p.add_argument("--route", default="", help="route: agent + ordered fallback chain")
     p.add_argument("--profile", default="", help="profile to run under")
@@ -92,26 +108,94 @@ def run(args) -> int:
     # `auto` is not resolved here: the daemon owns the policy layer, and doing
     # it client-side would mean two dispatchers disagreeing about the same
     # task. The run row that comes back says which route actually ran.
-    route = args.route or args.agent or "claude"
-    r = call(
-        "POST",
-        "/runs",
-        {
-            "task_id": args.task,
-            "route": route,
-            "profile": args.profile,
-            "cwd": args.cwd,
-            "parent_run_id": args.parent,
-            "note": args.note,
-            "effort": args.effort,
-            "model": args.model,
-            "wait": args.wait,
-            "verify": not args.no_verify,
-            "propose": args.propose,
-            "no_memory": args.no_memory,
-        },
-    )
-    print(f"run {r['id']} ({r.get('route') or route})")
+    route = args.route or args.agent or ""
+    body: dict = {
+        "route": route,
+        "profile": args.profile,
+        "cwd": args.cwd,
+        "parent_run_id": args.parent,
+        "note": args.note,
+        "effort": args.effort,
+        "model": args.model,
+        "wait": args.wait,
+        "verify": not args.no_verify,
+        "propose": args.propose,
+        "no_memory": args.no_memory,
+    }
+
+    if args.continue_run:
+        # Same conversation, new turn: the previous run row is the only place
+        # the vendor session id is recorded, so a killed run that persisted it
+        # early (runner does) can be continued here without redoing the work.
+        previous = call("GET", f"/runs/{args.continue_run}")
+        try:
+            ref = json.loads(previous.get("session_ref_json") or "{}")
+        except ValueError:
+            ref = {}
+        session_id = str(ref.get("session_id") or "")
+        if not session_id:
+            print(
+                f"error: {args.continue_run} 没有可续的会话（session_ref 为空）。"
+                "被强杀/孤儿化的 run 只有早期落盘的 session_id 才能续；"
+                "也可以先用 nodus debug sessions 找到会话再 --resume。",
+                file=sys.stderr,
+            )
+            return 1
+        body.update(
+            {
+                "task_id": previous["task_id"],
+                "route": route
+                or previous.get("route")
+                or previous.get("agent")
+                or "",
+                "profile": args.profile or previous.get("profile") or "",
+                "cwd": args.cwd or previous.get("cwd"),
+                "parent_run_id": previous["id"],
+                "note": args.note or f"继续 {previous['id']} 的会话",
+                "effort": args.effort or previous.get("effort") or "",
+                "model": args.model or previous.get("model") or "",
+                "session_id": session_id,
+                "session_mode": "resume",
+            }
+        )
+        print(f"继续 {previous['id']} 的会话 {session_id}")
+    elif args.resume_session:
+        if not route:
+            print(
+                "error: --resume 需要 --route/--agent 指定用哪个 harness 接续",
+                file=sys.stderr,
+            )
+            return 1
+        task_id = args.task
+        if not task_id:
+            task = call(
+                "POST",
+                "/tasks",
+                {"goal": args.note or "接续会话", "acceptance": ""},
+            )
+            task_id = task["id"]
+        body.update(
+            {
+                "task_id": task_id,
+                "route": route,
+                "cwd": args.cwd or os.getcwd(),
+                "session_id": args.resume_session,
+                "session_mode": "resume",
+            }
+        )
+        print(f"接续会话 {args.resume_session}（{route}）")
+    else:
+        if not args.task:
+            print(
+                "error: 要给一个 task id；接续旧会话用 --continue <run> 或 --resume <session>",
+                file=sys.stderr,
+            )
+            return 1
+        body["task_id"] = args.task
+        body["route"] = route or "claude"
+
+    r = call("POST", "/runs", body)
+    print(f"run {r['id']} ({r.get('route') or body.get('route') or ''})")
     return watch(r["id"])
 
 
@@ -143,4 +227,16 @@ def stop(args) -> int:
         print(call("POST", f"/pipelines/{args.run}/stop"))
         return 0
     print(call("POST", f"/runs/{args.run}/stop"))
+    # Interrupting is not losing the conversation: the runner persisted the
+    # vendor session id before the kill, so say how to pick it back up.
+    try:
+        run = call("GET", f"/runs/{args.run}")
+        ref = json.loads(run.get("session_ref_json") or "{}")
+    except (RuntimeError, ValueError):
+        ref = {}
+    if ref.get("session_id"):
+        print(
+            f"会话已保留（{ref.get('provider') or 'vendor'}:{ref['session_id']}）；"
+            f"接着聊：nodus run --continue {args.run}"
+        )
     return 0

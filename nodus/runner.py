@@ -826,6 +826,20 @@ class Runner:
                             "session_id": ev.get("session_id"),
                             "cwd": "",
                         }
+                        # Persist immediately as well as at finalisation: an
+                        # orphaned run dies before finalisation, and the retry
+                        # needs this row to resume instead of starting over.
+                        session = attempt["session_ref"].get("session_id")
+                        if session and not attempt.get("session_saved"):
+                            attempt["session_saved"] = True
+                            db.set_run_session_ref(
+                                rid,
+                                {
+                                    "provider": spec.vendor,
+                                    "session_id": session,
+                                    "cwd": "",
+                                },
+                            )
                     if kind == "message" and ev.get("text"):
                         if ev.get("final") and attempt["texts"] and ev["text"] == attempt["texts"][-1]:
                             continue  # the CLI repeats its final text
