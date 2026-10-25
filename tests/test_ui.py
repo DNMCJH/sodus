@@ -7,6 +7,12 @@ context to answer without opening anything else.
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
+
+import pytest
+
 from nodus import recover, ui
 
 
@@ -19,7 +25,7 @@ def test_the_sections_come_in_the_agreed_order():
     # the logs sit behind them.
     order = [
         "正在跑", "需要你决定", "我在处理", "已停止", "不可验证", "记忆待审",
-        "今天的钱", "用量", "最近执行", "提案", "派活",
+        "今天的钱", "用量", "终端", "最近执行", "提案", "派活",
     ]
     positions = [ui.PAGE.index(name) for name in order]
     assert positions == sorted(positions)
@@ -158,6 +164,40 @@ def test_failure_wording_lives_in_recover_not_in_the_page():
     assert "启动它的进程退出了" in recover.problem_text(
         {"error": "orphaned: the process that owned this run is gone"}
     )
+
+
+def test_the_inline_script_is_actually_javascript(tmp_path):
+    # The page *is* the product: one stray escape in the Python template turns
+    # the whole inline script into a syntax error and the board silently stops
+    # rendering. Nothing else in the suite would catch that, so parse it with
+    # node when node is present (there is no JS build step to do it first).
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed; the page script cannot be parsed")
+    scripts = re.findall(r"<script>(.*?)</script>", ui.PAGE, re.S)
+    assert scripts
+    for index, script in enumerate(scripts):
+        target = tmp_path / f"script{index}.js"
+        target.write_text(script, encoding="utf-8")
+        proc = subprocess.run([node, "--check", str(target)], capture_output=True)
+        assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+
+
+def test_the_terminals_panel_treats_every_harness_the_same():
+    # 一视同仁 is the requirement: one renderer, one set of fields, five rows.
+    # The server decides 装没装/在不在跑; the page only words the three states,
+    # so a sixth harness later needs no branch here.
+    assert "<h2>终端</h2>" in ui.PAGE
+    assert "function renderTerminals" in ui.PAGE
+    assert "renderTerminals(board.terminals)" in ui.PAGE
+    for state in ("运行中", "空闲", "未安装"):
+        assert state in ui.PAGE
+    assert "今日 <b>" in ui.PAGE and "会话" in ui.PAGE
+    assert "last_active" in ui.PAGE
+    start = ui.PAGE.index("function renderTerminals")
+    end = ui.PAGE.index("function renderRuns")
+    body = ui.PAGE[start:end]
+    assert ".key ===" not in body
 
 
 def test_the_board_refreshes_only_when_asked():

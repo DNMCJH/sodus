@@ -1900,12 +1900,59 @@ components:
           additionalProperties:
             type: integer
 
+    TerminalToday:
+      type: object
+      additionalProperties: false
+      required: [runs, sessions, cost]
+      properties:
+        runs:
+          type: integer
+          description: 今天的工作 run 数（宠物闲聊是账单，不是尝试）
+        sessions:
+          type: integer
+          description: 今天在这个终端里出现的不同会话数
+        cost:
+          type: object
+          additionalProperties:
+            type: number
+          description: 今日花费，按币种；包含闲聊（钱要记）
+
+    Terminal:
+      type: object
+      additionalProperties: false
+      required: [key, name, installed, running, state, last_active, binary, log_root, today]
+      properties:
+        key:
+          type: string
+          enum: [dsh, claude, codex, opencode, kimi]
+        name:
+          type: string
+        installed:
+          type: boolean
+          description: CLI 是否可用（shutil.which 或已知安装位置；今天有 run 也算）
+        running:
+          type: boolean
+        state:
+          type: string
+          enum: [running, idle, missing]
+        last_active:
+          type: [number, 'null']
+          description: 最近一次写 session 日志的时间（epoch 秒）；没有日志为 null
+        binary:
+          type: string
+          description: 解析到的 CLI 路径；空串表示没装
+        log_root:
+          type: string
+          description: 扫描的 session 日志根目录
+        today:
+          $ref: '#/components/schemas/TerminalToday'
+
     Board:
       type: object
       additionalProperties: false
       required: [now, day, profile, running, decisions, decision_counts, unverified_runs,
                  needs_you, auto_recovering, deterministic, history_failures,
-                 memory_candidates, today]
+                 memory_candidates, today, terminals]
       properties:
         now:
           type: number
@@ -1958,3 +2005,10 @@ components:
             $ref: '#/components/schemas/MemoryCandidate'
         today:
           $ref: '#/components/schemas/Today'
+        terminals:
+          type: array
+          description: |
+            本机五个 harness（DSH / Claude Code / Codex / OpenCode / Kimi）的只读状态，
+            一视同仁：装没装、在不在跑、今天花了多少。不启动 CLI、不联网、不轮询。
+          items:
+            $ref: '#/components/schemas/Terminal'

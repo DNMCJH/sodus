@@ -22,6 +22,7 @@ from . import (
     agents,
     config,
     db,
+    harness_status,
     jobs,
     ledger,
     llm,
@@ -1965,6 +1966,10 @@ def board_state(now: float | None = None) -> dict:
 
     `memory_candidates` is the other kind of human decision: facts harvested
     from the harnesses' own memory files, which only a person may adopt.
+
+    `terminals` is ambient status, not a decision: the five harness CLIs on
+    this machine (DSH, Claude Code, Codex, OpenCode, Kimi), each read from its
+    own session log plus the run table, one shape for all five.
     """
     _fresh_cache()
     now = time.time() if now is None else now
@@ -1999,6 +2004,14 @@ def board_state(now: float | None = None) -> dict:
         live = _live_rows(conn, now)
         today = _today(conn, start)
         today.update(_usage_snapshot(conn, start, month_start))
+        # The other terminals on this machine. Read from each harness's own
+        # session log and the run table the board already opened: nothing is
+        # started and nothing is called, so this costs one directory stat per
+        # log. A broken probe must never take the board down with it.
+        try:
+            terminals = harness_status.snapshot(conn, now=now, start=start)
+        except Exception:  # noqa: BLE001 - the board outranks this panel
+            terminals = []
     finally:
         conn.close()
     return {
@@ -2017,6 +2030,7 @@ def board_state(now: float | None = None) -> dict:
         "deterministic": deterministic,
         "history_failures": history_failures,
         "memory_candidates": _memory_board(),
+        "terminals": terminals,
         "today": {"window_start": start, "budget": budget_mod.check(now), **today},
     }
 

@@ -127,6 +127,20 @@ def test_board_contract_declares_the_recovery_fields(spec):
     )
 
 
+def test_board_contract_declares_the_terminals(spec):
+    # The board serves `terminals`; `additionalProperties: false` means an
+    # undeclared field would make the real response invalid.
+    board = spec["components"]["schemas"]["Board"]
+    assert "terminals" in board["properties"]
+    assert "terminals" in board["required"]
+    terminal = spec["components"]["schemas"]["Terminal"]
+    assert {
+        "key", "name", "installed", "running", "state", "last_active",
+        "binary", "log_root", "today",
+    } <= set(terminal["required"])
+    assert terminal["properties"]["state"]["enum"] == ["running", "idle", "missing"]
+
+
 def test_openapi_yaml_is_served_without_a_token():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     httpd.daemon_threads = True

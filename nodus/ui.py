@@ -308,6 +308,22 @@ PAGE = """<!doctype html>
   .sec-usage .money-track i { background:linear-gradient(90deg, var(--blue), var(--ok)); }
   .money-row .amt { grid-column:1 / -1; color:var(--ink); font-size:12px; overflow-wrap:anywhere; }
   .foot { color:var(--ink-4); font-size:12px; padding-top:var(--s2); border-top:1px solid var(--line); margin-top:var(--s1); line-height:1.7; }
+  /* ---------- terminals: the five harnesses, one row each, same shape ---------- */
+  .term-row { padding:var(--s2) 0; border-top:1px solid var(--line-soft); }
+  .term-row:first-child { border-top:0; padding-top:0; }
+  .term-row:last-child { padding-bottom:0; }
+  .term-top { display:flex; align-items:baseline; gap:var(--s1); min-width:0; }
+  .term-name { font:600 13px/1.5 var(--serif); letter-spacing:.04em; color:var(--ink);
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .term-state { font-size:11px; letter-spacing:.04em; padding:0 var(--s1); line-height:18px;
+                border-radius:999px; background:var(--sunk); color:var(--ink-4); white-space:nowrap; flex:none; }
+  .term-state.ok { color:var(--ok); background:var(--ok-soft); }
+  .term-state.missing { color:var(--ink-4); background:transparent; border:1px dashed var(--line-strong); }
+  .term-when { margin-left:auto; color:var(--ink-4); font-size:12px; white-space:nowrap;
+               font-variant-numeric:tabular-nums; }
+  .term-sub { margin-top:1px; color:var(--ink-4); font-size:11.5px; line-height:1.7;
+              overflow-wrap:anywhere; }
+  .term-sub b { color:var(--ink-2); font-weight:500; font-variant-numeric:tabular-nums; }
   .mem-list { max-height:480px; overflow:auto; }
   .mem-head { position:sticky; top:0; z-index:1; display:flex; align-items:center; gap:var(--s2);
               padding:0 0 var(--s2); border-bottom:1px solid var(--line); background:var(--surface);
@@ -528,6 +544,10 @@ PAGE = """<!doctype html>
       <section class="sec sec-usage">
         <div class="sec-head"><div class="sec-title"><h2>用量</h2><span class="sec-note">token 与缓存命中，按路由</span></div></div>
     <div id="usage"></div>
+  </section>
+      <section class="sec sec-terminal">
+        <div class="sec-head"><div class="sec-title"><h2>终端</h2><span class="sec-note">五个 harness 一样对待：装没装、在不在跑、今天干了多少</span></div><span class="count" id="terminal-n"></span></div>
+    <div id="terminals"></div>
   </section>
     </aside>
   </div>
@@ -1118,6 +1138,49 @@ function renderUsage(t) {
   $("usage").innerHTML = html;
 }
 
+// 终端: the five harnesses that exist on this machine, one row each. Presence
+// is each CLI's own session-log freshness plus a live Nodus run; nothing here
+// starts a process or calls a CLI. 一视同仁 is the point -- DSH and Kimi get
+// the same fields, the same words and the same width.
+const TERM_STATE = {
+  running: ["运行中", "ok"],
+  idle: ["空闲", ""],
+  missing: ["未安装", "missing"],
+};
+function renderTerminals(rows) {
+  rows = rows || [];
+  const busy = rows.filter(t => t.state === "running").length;
+  $("terminal-n").textContent = busy ? busy + " 个在跑" : "";
+  if (!rows.length) {
+    $("terminals").innerHTML = '<div class="empty">没探测到终端</div>';
+    return;
+  }
+  $("terminals").innerHTML = rows.map(t => {
+    const pair = TERM_STATE[t.state] || TERM_STATE.idle;
+    const today = t.today || {};
+    const runs = today.runs || 0;
+    const sessions = today.sessions || 0;
+    const priced = Object.keys(today.cost || {}).length > 0;
+    const cost = priced ? moneyParts(today.cost) : "—";
+    let detail;
+    if (t.state === "missing") detail = "没装这个 CLI";
+    else if (runs) detail = '今日 <b>' + esc(cost) + '</b><span class="sep">·</span><b>' + runs + "</b> 单" +
+      (sessions ? '<span class="sep">·</span><b>' + sessions + "</b> 会话" : "");
+    else if (priced) detail = '今日 <b>' + esc(cost) + "</b>（只有聊天账单，不算工作）";
+    else detail = t.state === "running" ? "正在跑，今天还没派活" : "今天还没动过";
+    const when = t.last_active ? ago(t.last_active) : (t.state === "missing" ? "—" : "没有日志");
+    const hint = "日志：" + (t.log_root || "未找到") +
+      (t.binary ? "；CLI：" + t.binary : "") +
+      (t.last_active ? "；最近写日志：" + clock(t.last_active) : "") +
+      "；今日工作 " + runs + " 单 · 会话 " + sessions + " · 花费含闲聊";
+    return '<div class="term-row" title="' + esc(hint) + '">' +
+      '<div class="term-top"><span class="term-name">' + esc(t.name) + "</span>" +
+        '<span class="term-state ' + pair[1] + '">' + pair[0] + "</span>" +
+        '<span class="term-when">' + esc(when) + "</span></div>" +
+      '<div class="term-sub">' + detail + "</div></div>";
+  }).join("");
+}
+
 function renderRuns() {
   const rows = state.runs.slice(0, 12).map(r => {
     const u = r.usage || {};
@@ -1334,12 +1397,14 @@ async function refresh() {
     state.tasks = tasks;
     renderHeader(); renderLive(); renderTodo(); renderHandling(); renderStopped();
     renderUnverifiable(); renderMemory(); renderMoney(board.today); renderUsage(board.today);
+    renderTerminals(board.terminals);
     renderRuns(); renderProposals();
   } catch (e) {
     $("todo").innerHTML = '<div class="empty bad">连不上 daemon：' + esc(e.message) + "</div>";
     $("live").innerHTML = "";
     $("money").innerHTML = "";
     $("usage").innerHTML = "";
+    $("terminals").innerHTML = "";
   } finally {
     inflight = false;
   }
