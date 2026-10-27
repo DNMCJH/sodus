@@ -2,17 +2,19 @@
 
     dsh         session.v4.jsonl.zstd files, priced into observation rows
     cc-switch   a read-only coverage probe over CC Switch's usage tables
+    magpie      a read-only coverage probe over the local router's request log
 
 Dry-run is the default so an operator can see what would change before the DB
-changes. cc-switch has no import path: its amounts are USD list-price estimates,
-not what the account was charged, so it is never written into the ledger.
+changes. cc-switch and magpie have no import path: their numbers are USD
+list-price estimates / token counts without money, not what the account was
+charged, so they are never written into the ledger.
 """
 
 from __future__ import annotations
 
-from ... import observe, observe_ccswitch
+from ... import observe, observe_ccswitch, observe_magpie
 
-HARNESSES = ("dsh", "cc-switch")
+HARNESSES = ("dsh", "cc-switch", "magpie")
 
 
 def add(sub) -> None:
@@ -25,7 +27,7 @@ def add(sub) -> None:
         nargs="?",
         default="dsh",
         choices=list(HARNESSES),
-        help="dsh: session logs -> observation rows; cc-switch: read-only coverage probe",
+        help="dsh: session logs -> observation rows; cc-switch / magpie: read-only probes",
     )
     p.add_argument(
         "--dry-run",
@@ -116,7 +118,58 @@ def _report_ccswitch(result: dict) -> None:
         print(f"note: {note}")
 
 
+def _report_magpie(result: dict) -> None:
+    print(f"harness: magpie  log: {result['path']}")
+    if not result.get("available"):
+        print(result.get("error") or "no requests in the log")
+        for note in result.get("notes", []):
+            print(f"  note: {note}")
+        return
+    print(
+        f"requests: {result['requests']:,}  failed: {result['failed']:,}  "
+        f"window: {result['start']} → {result['end']}  "
+        f"avg: {result['ms'] / max(result['requests'], 1):.0f} ms"
+    )
+    print(
+        "tokens: input %s  output %s  cache_read %s  cache_write %s"
+        % (
+            f"{result['tokens']['input']:,}",
+            f"{result['tokens']['output']:,}",
+            f"{result['tokens']['cache_read']:,}",
+            f"{result['tokens']['cache_write']:,}",
+        )
+    )
+    print("by agent:")
+    for agent, b in sorted(result["by_agent"].items(), key=lambda kv: -kv[1]["requests"])[:8]:
+        print(
+            f"  {agent:<16} {b['requests']:>6,} req  {_fmt_tokens(b['tokens']):>10}  "
+            f"failed {b['failed']}"
+        )
+    print("by provider:")
+    for provider, b in sorted(
+        result["by_provider"].items(), key=lambda kv: -kv[1]["requests"]
+    )[:6]:
+        print(
+            f"  {provider:<16} {b['requests']:>6,} req  {_fmt_tokens(b['tokens']):>10}  "
+            f"failed {b['failed']}"
+        )
+    for note in result.get("notes", []):
+        print(f"note: {note}")
+
+
 def observe_cmd(args) -> int:
+    if args.harness == "magpie":
+        if args.do_import:
+            print("error: magpie 是只读探针；日志只有 token、没有金额，不写进 observation 表")
+            return 2
+        result = observe_magpie.scan()
+        if args.as_json:
+            import json
+
+            print(json.dumps(result, ensure_ascii=False, default=str))
+            return 0
+        _report_magpie(result)
+        return 0
     if args.harness == "cc-switch":
         if args.do_import:
             print("error: cc-switch 是只读探针；金额是美元估算，不写进 observation 表")
