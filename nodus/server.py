@@ -2524,6 +2524,16 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         recover.start(log=_log)
     else:
         _log("auto-recover disabled (NODUS_AUTO_RECOVER=0)")
+    # The board's money is only as fresh as the last import. This used to be a
+    # manual step, so a weekend of conversations sat unread in DSH's session
+    # files while /board showed the previous number. A broken sweep is logged
+    # and retried, never allowed to take the daemon down.
+    try:
+        from . import observe_sync
+
+        observe_sync.start(log=_log)
+    except Exception:  # noqa: BLE001 - observation is a supplement, not the server
+        pass
     if sys.stderr.isatty():  # a detached daemon writes to the log, not the console
         print(f"nodusd listening on http://{host}:{port}", file=sys.stderr, flush=True)
     try:
