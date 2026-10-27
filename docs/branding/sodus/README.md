@@ -15,6 +15,13 @@
 | `sodus-lockup-ondark.svg` | 横版组合（深底） | 同上，字标改浅色 |
 | `sodus-mark-512.png` | 位图预览 | 512×512，透明底 |
 | `sodus-mark-ondark-512.png` | 位图预览 | 512×512，深底 |
+| `sodus-mark-16.svg` | **16px 专用** | 4 臂光学版，viewBox 256 / width 16 |
+| `sodus-mark-16.png` / `-24` / `-32` / `-48` | 小尺寸位图 | 16/24/32/48，透明底 |
+| `sodus-favicon.ico` | favicon | 16/24/32/48 四帧 |
+| `sodus-app-icon.svg` | App 图标（深底） | 圆角 58/256，深底 + 银标 + 天蓝 S |
+| `sodus-app-icon-256.png` / `-512` / `-1024` | App 图标位图 | 透明底，圆角方形 |
+| `sodus-app-icon-light.svg` / `-256.png` / `-512.png` | App 图标（浅底） | 浅纸底 + 石墨标 |
+| `sodus-icons-preview.png` | 图标一页看全 | 16–1024 与小尺寸对照 |
 | `sodus-preview.png` | 一页看全 | 四种用法对照 |
 
 ## 几何参数（可复现）
@@ -28,10 +35,14 @@
 生成器：`A:\AgentWorkspace\scripts\nodus_logo_final.py`
 `build_svg(spec, fill=..., fill2=..., rotate=16.6)` 即可复现；`g.arm(...)` 造参数。
 
-## 未完成
+## 已完成（2026-10-27 补）
 
-- **16px 专用版**（4 臂、去细节）。现在 24px 以下会糊，favicon 场景需要单独出一版。
-- 图标（App 圆角方形）这一轮没重新出，之前 nodus 时期的图标是旧几何，不能直接用。
+- **16px 专用版**：sodus-mark-16.svg（4 臂、加描边把根部补到可见、中心球放大），
+  位图 16/24/32/48，favicon.ico 四帧。16px 下已能读出「上蓝下蓝、四臂风车」。
+- **App 圆角图标**：sodus-app-icon.svg（深底银标 + 天蓝 S）与浅底变体，
+  256/512/1024 位图。几何直接取自 sodus-mark-reverse.svg / sodus-mark.svg，不重新推导。
+- 生成脚本：`A:\AgentWorkspace\scripts\sodus_mark_gen.py`（出 SVG 与渲染页）、
+  `sodus_render.py`（Playwright + Edge 透明底截图）。改主标后跑这两个即可重出。
 
 ## 相关记录
 

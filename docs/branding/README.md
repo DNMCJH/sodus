@@ -25,7 +25,10 @@
 - 阶段 1（未做）：board UI 的 title/brand 区、CLI 显示名、README 抬头、报告模板。
 - 阶段 2（未做，需单独计划、备份与回滚）：Python 包名 nodus → sodus、console script 加 sodus 别名（nodus 保留至少一个版本）、~/.nodus → ~/.sodus 迁移、DB/daemon.json/token 路径、测试与文档同步。
 
-## 未做
+## 图标（2026-10-27 补齐）
 
-- 16px 专用图标（现在 24px 以下会糊）。
-- App 圆角图标（现有那批是旧几何，不能用）。
+- 16px 光学版：sodus/sodus-mark-16.svg + 16/24/32/48 PNG + sodus-favicon.ico。
+- App 圆角图标：sodus/sodus-app-icon.svg（深底）与 sodus-app-icon-light.svg（浅底），
+  256/512/1024 PNG。
+- 生成脚本在 AgentWorkspace：scripts/sodus_mark_gen.py + scripts/sodus_render.py，
+  改主标后重跑即可；几何取自定稿 SVG，不重新推导。
