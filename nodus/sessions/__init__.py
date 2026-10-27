@@ -174,7 +174,10 @@ def list_all(
 ) -> list[model.Session]:
     sessions = attach_runs(scan(vendor))
     if include_orphans:
-        sessions.extend(orphans(sessions))
+        # An orphan is reconstructed from a run row, so it never went through
+        # scan()'s vendor filter: without this, `--vendor dsh` would list a
+        # claude run whose file is gone next to the dsh sessions it asked for.
+        sessions.extend(s for s in orphans(sessions) if not vendor or s.vendor == vendor)
     if source:
         sessions = [s for s in sessions if s.source == source]
     if query:

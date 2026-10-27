@@ -250,6 +250,19 @@ def test_a_run_whose_session_file_is_gone_still_appears(world):
     assert "已经不在了" in sessions.transcript("dead-9999")
 
 
+def test_orphans_obey_the_vendor_filter(world):
+    """`--vendor dsh` is a promise about every row, including reconstructed runs."""
+    task = db.create_task("t")
+    run = db.create_run(task["id"], "claude", "D:\\gone")
+    db.update_run(
+        run["id"],
+        session_ref_json=json.dumps({"provider": "claude", "session_id": "dead-9999"}),
+    )
+    rows = sessions.list_all(vendor="dsh")
+    assert rows and {s.vendor for s in rows} == {"dsh"}
+    assert "dead-9999" not in {s.id for s in rows}
+
+
 # ---- the read whitelist ------------------------------------------------
 
 
