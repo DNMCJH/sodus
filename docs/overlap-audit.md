@@ -10,6 +10,8 @@
 >
 > **2026-11-03 第二批收口**：C6（`recover` 三处自己解析 `usage_json`）与 C7（`usage --days`
 > 的费用依据缺省词）已修，见 1.2。C6 是这轮扫描新发现的条目，不在上面的 20 条里。
+>
+> **2026-11-03 第三批收口**：S1（`stalled` 没有任何 writer）已修，见 1.3。
 
 目的：过去几周新加的模块各自把"状态""成本""失败原因"算了一遍，`docs/architecture.md` 第 2 节
 只列模块名，不解释谁和谁在抢同一件事。这份清单把重复算的地方钉到行号，给出"留谁 / 退谁 / 合并到哪"，
@@ -21,8 +23,8 @@
 - 其中 **1 条是今天的真实矛盾**（C1：缺货币时 `ledger` 记 `"-"`，`telemetry` 记 `"USD"`），
   **1 条是同一页面上三个不同的"失败数"**（S3），**1 条是同一段报错被四套词表各分一次类**（F1）。
   C1、F1 与 S3 已在 2026-11-03 收口，见 1.1。
-- 状态机的结构性问题（S1：没有任何 writer 会写 `stalled`，但 900 秒无输出事实上就是 stalled）
-  今天是"规则散落"而不是"答案冲突"；`lifecycle` 把目标状态写出来了，迁移仍是单独的行为改动。
+- 状态机（S1）2026-11-03 已收口：`watchdog` 是第一个写 `stalled` 的模块，见 1.3。其余状态读取方仍在
+  各自判断，迁移仍是单独的行为改动。
 
 ### 1.1 收口记录（2026-11-03）
 
@@ -103,6 +105,30 @@
 `cli/commands/system.py cost` 这六处仍是自己读 `usage_json` 算钱。每处改完都会动用户
 可见数字（`report`/`pet` 的缺币种默认 `USD` 就是 C1 修掉的同一个 7 倍错误），留作单独的
 行为改动，不混进这次"口径不变"的收口。
+
+### 1.3 收口记录（2026-11-03，第三批）
+
+- **S1 已收口**，提交 `b5ef809`。新模块 `nodus/watchdog.py` 是 `running -> stalled` 的
+  第一个 writer：daemon 每 60 秒扫一次 `running` 行，把最后一条实质事件（tool_call / artifact /
+  状态变化）的 ts 交给 `lifecycle.needs_attention`，只有它答 `stalled` 才动手。默认窗口 600 秒
+  （`NODUS_STALL_SECONDS`），比 `runner.IDLE_TIMEOUT` 的 900 秒早：十分钟先让看板说"没在动"。
+  写入顺序是 `db.release_write` → `UPDATE ... WHERE status='running'`（先过
+  `lifecycle.can_transition`，晚到的完成/失败只记日志、不改）→ 一条 `run.stalled` 事件，写明最后
+  事件和 idle 时长。已经是 `stalled` 的行不再处理，重启不重复；同一个 run 只标一次。
+  看板把 `stalled` 放进"已停止"（`stop_reason="stalled"`），不新增计数：`stopped` 行数 +1，
+  `failed` 不变，`attention()`/状态灯不变（宠物不会为卡住说话）。
+  worker：本 daemon 拥有且已经有过 tool_call 的进程树会被 kill；没有 tool_call 的留给 runner 的
+  900 秒 idle kill（提前杀会命中 fallback：无 tool_call + 非零退出 → 换 endpoint 再花钱）；
+  别的进程拥有的不碰。后两种如实写进事件的 `worker` 字段。
+  被 kill 的那一种会由 runner 的收尾写成 `failed`（合法边），`stalled` 只活到收尾为止；事件流里
+  `run.stalled` 在 `run.failed` 之前，卡住原因不丢。另外两种才让 `stalled` 持续存在。
+  验收：`tests/test_watchdog.py` 17 条全绿；另做了真实验——临时 `NODUS_HOME` 里起两个真 worker
+  （一个只输出 init 后挂住，一个正常完成），另一个进程跑 watchdog，`NODUS_STALL_SECONDS=30`。
+  第 0 秒 sweep 时挂住的 run idle 29 秒、不动；第 2 秒 idle 31 秒时标 `stalled`，写锁释放
+  （`active_locks=[]`），事件是「无实质进展：最后事件是 run.attempt，距今 31 秒」
+  （`idle_seconds=30.7`、`window_seconds=30`、`worker="not-owned"`）；正常 run 保持 `completed`，
+  没有 `run.stalled` 事件。看板 `stopped` 出现该行，`decision_counts.stopped` 从 0 变 1，
+  `failed` 仍为 0，`attention()` 为 `{waiting:0, running:0, failed:0}`。
 
 ## 2. 最强的三条
 
@@ -186,7 +212,7 @@ board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_
 
 | 编号 | 谁在算同一件事 | 证据（文件:行） | 差异 / 风险 | 建议 |
 |---|---|---|---|---|
-| S1 ★ | run 状态由谁定义 / 谁写 | `nodus/db.py:44`（默认 `queued`）、`:637`（终态判断）、`:757`（live）、`:771`（stale）；`nodus/runner.py:956`（唯一 writer）、`:796`（900s 无输出→failed）、`:1123`（wait 终态）、`:1184-1186`（reconcile 900s）；`nodus/server.py:119`；`nodus/recover.py:809`；`nodus/harness_status.py:49`；`nodus/pet.py:74` | `stalled` 没有任何 writer；900s 无输出被记成 `failed(timeout)`，语义上就是 stalled；7 处各自写 `IN ('queued','running')` / `("completed","failed")` | `lifecycle` 是状态表；读方逐批迁移；写 `stalled` 是单独的行为改动 |
+| S1 ★ **已收口** | run 状态由谁定义 / 谁写 | `nodus/db.py:44`（默认 `queued`）、`:637`（终态判断）、`:757`（live）、`:771`（stale）；`nodus/runner.py:956`（唯一 writer）、`:796`（900s 无输出→failed）、`:1123`（wait 终态）、`:1184-1186`（reconcile 900s）；`nodus/server.py:119`；`nodus/recover.py:809`；`nodus/harness_status.py:49`；`nodus/pet.py:74` | `stalled` 没有任何 writer；900s 无输出被记成 `failed(timeout)`，语义上就是 stalled；7 处各自写 `IN ('queued','running')` / `("completed","failed")` | **已收口（提交 `b5ef809`）**：`nodus/watchdog.py` 是 `running -> stalled` 的 writer，判据调 `lifecycle.needs_attention`，写前过 `can_transition`、先释放写锁；看板进"已停止"。其余读方的状态字面量仍未收敛 |
 | S2 | "这个任务还有没有在跑"两份 SQL | `nodus/recover.py:787-799`（`_has_retry_child`）、`:802-814`（`_task_has_live_run`） | 与 `db.live_runs` 同源不同写法，状态字面量再抄一遍 | 留 recover 的 gate；liveness 查询收敛到 db/一处 |
 | S3 ★ **已收口** | "失败"的计数口径 | `nodus/lineage.py:284-293`、`:338`；`nodus/server.py:1798-1799`、`:1813-1814`、`:1643-1741`；`nodus/statuslight.py:35-38` | 见第 2 节：completed+red 在 lineage 算 failed、在 server 算 red、在 statuslight 不可见；statuslight 还漏了 `kind="work"` | **已收口（提交 `b4568cd`）**：`decision_counts["failed"]` 含测试红（`red` 为子集、不相加）；`statuslight` 读 `server.attention()`；`lineage` 只改"本任务历史"标签与分母 |
 | S4 | `ok` / `unverified` 的定义抄了四份 | `nodus/lineage.py:250-275`；`nodus/policy.py:855-860`、`:894`、`:914-915`；`nodus/desk.py:83`；`nodus/server.py:188-216`、`:1833-1837` | 今天四处一致（completed+ok=成功，completed+none=未验证）；但口径散着，改一处就漂 | 留 `lineage` 的三桶；policy/desk/server 调它或调 `lifecycle` 传出来的 facts |
@@ -221,10 +247,12 @@ board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_
 
 这些不是 bug，是必须知道才能读懂 `needs_attention` 的前提。都记在这里，不在本提交改：
 
-1. **`stalled` 是目标状态，不是现状。** 900 秒无输出时 runner 直接 kill 并写 `failed`，cause 是 `timeout`
-   （`nodus/runner.py:795-800`）；`reconcile` 对死掉的 owner 也是写 failed（`nodus/runner.py:1184-1186`）。
-   `lifecycle` 给出 `running → stalled` 这条边，但没有任何 writer。回归里 20 条真实 run 没有一条
-   `status="stalled"`，所以测试只断言"认这个状态"，不断言"能观察到它"。
+1. **`stalled` 从 2026-11-03 起是现状，之前只是目标状态。** 900 秒无输出时 runner 直接 kill 并写
+   `failed`，cause 是 `timeout`（`nodus/runner.py:795-800`）；`reconcile` 对死掉的 owner 也写 failed
+   （`nodus/runner.py:1184-1186`）。`lifecycle` 早给出了 `running → stalled` 这条边，但直到 `watchdog`
+   （见 1.3）才有人写：默认 600 秒无实质事件先标 `stalled`，runner 的 900 秒 idle kill 仍是后手。
+   回归样本是收口前的快照，20 条真实 run 里没有 `status="stalled"`，所以旧测试只断言"认这个状态"，
+   不断言"能观察到它"；`tests/test_watchdog.py` 补上了后者。
 2. **确定性失败在 lifecycle 里是 `done`，不是 `awaiting-human`。** 看板的 `_needs_you` 明确跳过
    deterministic（`nodus/server.py:1469-1470`），把它放进 `stopped`；`lifecycle` 跟随这个规则。
    "换密钥"是人的动作，但不属于"这条 run 还需要谁"的分类——如果把 deterministic 算成 awaiting-human，
@@ -255,7 +283,8 @@ board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_
 - 不改 `telemetry.usage_summary` 的 USD 默认值：当时会改 `nodus status`/报表的输出；
   2026-11-03 已按 `ledger` 收口，见 1.1。
 - 不给 `close_proposal` 加校验：会让现有写者之外的手工 `UPDATE` 失败，需要单独评估。
-- 不把 `stalled` 写进 `run.status`：需要 runner、`recover`、看板三处同时理解它，是一次迁移。
+- ~~不把 `stalled` 写进 `run.status`~~：2026-11-03 已由 `watchdog` 收口（见 1.3）；还剩 `recover` /
+  `lineage` 等读方没有迁到 `lifecycle`，是下一批。
 - 不给看板换新的计数口径：`decision_counts` 仍被 MCP 与桌面宠物读（`nodus/mcp.py`、`nodus/pet.py`），
   先保留形状；2026-11-03 S3 收口时只把 `failed` 的含义收紧成"结束且不算成功"（含测试红，
   `red` 为子集），键与形状没变，见 1.1。

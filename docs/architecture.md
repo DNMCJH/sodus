@@ -30,6 +30,7 @@ Nodus 是**任务验收层**：它不训练模型、不代理请求、不写 age
 nodus/cli/            argparse + 每个命令一个 handler（不碰业务）
   client.py        HTTP 客户端：唯一知道 daemon 地址的地方
 nodus/server.py       HTTP + SSE，状态所有者；看板把行分成 needs_you / handling / stopped
+                      （watchdog 标的 stalled 在 stopped）
 nodus/daemon.py       daemon 自身：`nodus up/down`，分离进程的生命周期
 nodus/jobs.py         daemon 作业：tdd/review/fix 的线程与持久化状态（pipeline 表）
 nodus/tdd.py          流水线：红→绿→（可选）审查
@@ -53,6 +54,7 @@ nodus/usage.py        `nodus stats usage` 的薄壳：选行 + JSON 信封，算
 nodus/telemetry.py    端点探活 + 旧的 per-route 汇总（自解析 usage_json，见 overlap-audit）
 nodus/budget.py       机器级日额度：CNY 上限、拒绝新 run、不杀在跑的
 nodus/lifecycle.py    run/proposal 状态机 + needs_attention，纯函数，不碰 db/网络
+nodus/watchdog.py     卡住检测：running 但 N 分钟没有实质事件 → stalled（这条边的第一个 writer）
 nodus/recover.py      自动恢复：gate 决定重试/退避/停下，按价值而不是次数
 nodus/policy.py       派活前判断：难度、类型、所需能力 → 推荐路由（规则优先，Jev 复核）
 nodus/observe.py      DSH 会话观察：读 session 日志、定价、写 observation
@@ -76,9 +78,39 @@ config → providers → agents → routes → profiles → runner
 `adapters` 和 `verify` 不依赖上层；`db` 是基础设施，被所有层使用，但不反向 import 业务；
 `meter` 只依赖 config + providers。
 
-0.4.0 之后新加的模块按"只读/纯函数"摆在链外，这是有意的：`ledger` 只读 `usage_json`，
+0.4.0 之后新加的模块大多按"只读/纯函数"摆在链外，这是有意的：`ledger` 只读 `usage_json`，
 `lifecycle` 不 import 任何内部模块（纯函数，测试可以只喂字典），`observe`/`harness_status` 只读别人的日志和
-run 表，`recover`/`policy`/`budget` 只读 run/task/event。谁都不写别人的状态，所以它们可以独立测试。
+run 表，`recover`/`policy`/`budget` 只读 run/task/event。唯一的例外是 `watchdog`：它要写 `run.status`，
+但只写 `running -> stalled` 这一条边，而且先过 `lifecycle.can_transition`，不是第二个状态判断。
+
+### watchdog：没失败，但没在动
+
+`recover` 回答"失败了要不要再试"；watchdog 回答另一件事：状态还是 `running`，但最近 N 分钟没有新的
+实质事件（tool_call / artifact / 状态变化）。N 由 `NODUS_STALL_SECONDS` 给，默认 600 秒，比
+`runner.IDLE_TIMEOUT` 的 900 秒早：十分钟先让看板说"没在动"，不是等它被记成一条超时失败。
+
+判据不新写一遍：它把最后一条实质事件的 ts 交给 `lifecycle.needs_attention`，只有答案是 `stalled`
+才动手。写入顺序是固定的：先 `db.release_write`（和 runner 一样，释放先于状态写入，目录先可用），
+再 `UPDATE run SET status='stalled' WHERE status='running'`（先过 `lifecycle.can_transition`，晚到的
+完成/失败只记日志、不改），最后追加一条 `run.stalled` 事件，写明最后事件和 idle 时长。
+
+同一条 run 只标一次：sweep 只看 `running`，已经是 `stalled` 的行（包括上一个 daemon 留下的）不会再处理，
+所以重启不重复。daemon 里隔 60 秒扫一次（`NODUS_WATCHDOG=0` 关掉），只查 live 行。
+
+worker 分三种处理：本 daemon 拥有且已经有过 tool_call 的进程树会被 kill；没有 tool_call 的不杀，交给
+runner 自己的 900 秒 idle kill；别的进程拥有的不碰。后两种如实写进事件的 `worker` 字段，不假装已经停掉。
+没有 tool_call 不杀的原因很具体：runner 的 fallback 规则把"没 tool_call + 非零退出"当成上游故障，会换
+下一个 endpoint 再花一笔钱——那正好是 watchdog 要避免的。
+
+被 kill 的那一种有个代价，写在明处：runner 会按自己的收尾把 run 写成 `failed`（`stalled -> failed` 是
+状态表里的合法边），所以这条 `stalled` 只活到 runner 收尾为止，最终态是 failed，后面的重试判断交给
+`recover`。事件流里 `run.stalled` 在 `run.failed` 之前，卡住的原因不会丢。另外两种 worker 才会让
+`stalled` 一直留到人或 runner 的 900 秒 kill。
+
+看板上还在 `stalled` 的行进"已停止"：它不是失败（没有 error、exit code 或 failure class），也不该进
+"需要你决定"（决策只有合并、花钱、方向三类）或"我在处理"（那是机器正在做的事，卡住是没人在做）。它只加
+`stopped` 的行数，不新增计数，`failed` 仍是终态失败的数；`attention()` 与状态灯因此不变，宠物不会为
+一次卡住说话。
 
 **这条依赖链是这次重构的判据。** 0.3.0 里 `meter._relay()` 要反读 `AgentSpec.config_home` 下的
 `settings.json` 才能拿到 base URL 和 token——那说明"端点"这个概念不存在，事实寄居在别处。
@@ -250,14 +282,15 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 理由：纯函数可以在测试里把 recover 的 gate、lineage 的 ok/unverified、看板的三组行都抄出来对照，
 四个模块互相矛盾时测试会红；而如果把判断做成服务或在各模块里继续加 if，矛盾只会更深。
 代价：本提交只建立定义，**没有迁移任何调用方**，现有行为一字未改；`docs/overlap-audit.md` 记录了
-谁还在自己算、以及建议留谁退谁。`stalled` 这个状态目前没有任何 writer——900 秒无输出仍被 runner 记为
-`failed`（cause=timeout），把它变成真状态是一次行为改动，必须单独做。
+谁还在自己算、以及建议留谁退谁。当时 `stalled` 没有任何 writer——900 秒无输出仍被 runner 记为
+`failed`（cause=timeout）。2026-11-03 的 `watchdog` 补上了这条边（见第 2 节），但 recover/server/lineage
+仍各自判断状态，迁移没有发生。
 
 ## 6. 质量门槛
 
-- `python -m pytest -q`：789 条（2026-11-03；此前主干是 724，新增 `tests/test_lifecycle.py` 65 条），
+- `python -m pytest -q`：835 条（2026-11-03；新增 `tests/test_watchdog.py` 17 条），
   覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、成本标定、报告、计费表、
-  端点/路由/配置物化、自动恢复、状态机与真实历史回归，以及回退规则（真起子进程，不是 mock）。
+  端点/路由/配置物化、自动恢复、状态机与真实历史回归、卡住检测，以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
 - 每个新能力都要有一次真实调用记录：0.4.0 的四条 route（relay / minimax / relay-openai / deepseek）
   各跑过一次真任务，failover 用一条指向死端口的 route 实测过（`run-90c6a47c9bae`）。
@@ -271,6 +304,8 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 - UI / SSE —— 已实现：`server._sse`（`text/event-stream`）+ `ui.py` 的看板；CLI 侧 `pipeline.py` 仍轮询（0.5s），
   这是客户端选择，不是缺 SSE。
 - 多写者 propose/merge —— ADR-015 已实现：`propose.py` + `proposal` 表 + `git worktree` 分支，merge 在主树写锁下做。
+- 卡住检测 —— `watchdog.py` 已实现：`running` 且 N 分钟没有实质事件 → `stalled`，看板进"已停止"；
+  默认 600 秒，`NODUS_WATCHDOG=0` 关闭。
 
 还没做：
 
@@ -278,5 +313,4 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 - 多租户鉴权（现在只有 workspace 字段）。
 - dsh 的 `DSH_HOME` 隔离：profile 层已经在了，缺的是 dsh 认哪个环境变量。
 - 把现有调用方迁到 `lifecycle`：`recover` / `server` / `lineage` 仍在各自判状态，清单见 `docs/overlap-audit.md`。
-- 让 `stalled` 真的被写进 `run.status`（现在只有 900s 无输出 → killed → failed(timeout)）。
 - 退役 `telemetry.usage_summary` 的独立 `usage_json` 解析，统一走 `ledger`。
