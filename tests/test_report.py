@@ -232,6 +232,28 @@ def test_collect_finds_verify_event_after_many_events(tmp_path, monkeypatch):
     assert [v["phase"] for v in data["verifies"]] == ["red"]
 
 
+def test_collect_reads_the_decisions_log_and_skips_broken_lines(tmp_path, monkeypatch):
+    """Regression: a refactor dropped report's json import, so every home with a
+    decisions log made `nodus report` crash before it printed anything."""
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    task = db.create_task("demo", "pytest green")
+    (tmp_path / "decisions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"task_id": task["id"], "kind": "policy.assess"}),
+                "{not json",
+                json.dumps({"task_id": "task-other", "kind": "policy.assess"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    data = report.collect(task["id"])
+
+    assert [row["kind"] for row in data["decisions"]] == ["policy.assess"]
+
+
 def test_write_report_creates_file_and_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
     task = db.create_task("demo", "pytest green")
