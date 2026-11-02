@@ -19,7 +19,7 @@ def add(sub) -> None:
     p.add_argument("--query", default="", help="substring of title, cwd or text")
     p.add_argument("--vendor", default="", choices=["", "claude", "codex", "dsh"])
     p.add_argument("--source", default="", choices=["", "run", "user"],
-                   help="run = produced by a Nodus run, user = your own")
+                   help="run = produced by a Sodus run, user = your own")
     p.add_argument("--no-orphans", action="store_true", help="hide runs whose session file is gone")
     p.set_defaults(func=sessions_cmd, needs_daemon=False)
 

@@ -45,7 +45,7 @@ def _help(capsys, argv: list[str]) -> str:
 def test_parser_is_named_nodus():
     parser = build_parser()
     assert parser.prog == "nodus"
-    assert "Nodus" in (parser.description or "")
+    assert "Sodus" in (parser.description or "")
 
 
 def test_every_advertised_command_has_a_handler():
@@ -78,7 +78,7 @@ def test_help_flags_do_not_need_a_daemon():
 def test_top_level_help_lists_exactly_the_curated_names(capsys):
     text = _help(capsys, ["--help"])
     assert _listed_in_help(text) == list(TOP_LEVEL)
-    assert len(TOP_LEVEL) == 17
+    assert len(TOP_LEVEL) == 18
     assert len(text.splitlines()) <= 30
     for namespace in ("lineage", "reconcile", "triage", "handoff"):
         assert f"    {namespace} " not in text

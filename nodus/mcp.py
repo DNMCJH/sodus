@@ -26,7 +26,9 @@ from . import config, db, ledger, memory, runner
 
 PROTOCOL_VERSION = "2024-11-05"
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
-SERVER_NAME = "nodus"
+#: What clients see as `serverInfo.name`. The product name; the tool names stay
+#: `nodus_*` on purpose (renaming them would break every saved client config).
+SERVER_NAME = "sodus"
 
 #: `wait=true` blocks until the run leaves queued/running. A client-side tool
 #: timeout is usually shorter, so this is configurable and bounded.
@@ -51,7 +53,7 @@ TOOLS: list[dict] = [
     {
         "name": "nodus_task_create",
         "description": (
-            "在 Nodus 建一个任务：目标（description）+ 可选验收标准（acceptance）。"
+            "在 Sodus 建一个任务：目标（description）+ 可选验收标准（acceptance）。"
             "返回 task_id，随后用 nodus_run 派给某个 agent。"
         ),
         "inputSchema": _schema(
@@ -475,7 +477,7 @@ def _initialize(params: dict) -> dict:
         "capabilities": {"tools": {"listChanged": False}},
         "serverInfo": {"name": SERVER_NAME, "version": config.VERSION},
         "instructions": (
-            "Nodus 把任务交给多个 agent，并用可执行证据验收。"
+            "Sodus 把任务交给多个 agent，并用可执行证据验收。"
             "先 nodus_task_create，再 nodus_run，用 nodus_run_status 看成本与 verify；"
             "nodus_proposals 列待人工处理的提案，nodus_cost_today 看今日花费。"
         ),

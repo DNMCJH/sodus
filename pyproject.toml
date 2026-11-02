@@ -1,6 +1,6 @@
 [project]
 name = "nodus"
-version = "0.4.0"
+version = "0.5.0"
 description = "Task acceptance layer for multi-agent work"
 requires-python = ">=3.11"
 # DSH sessions are stored as multi-frame zstd JSONL; reading them is core.
@@ -11,16 +11,16 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 nodus = "nodus.cli:main"
-# Phase A of the rename: a second name for the same entry point, same daemon
-# and same database. The package and state directory stay nodus.
-sodus = "nodus.cli:main"
+# The product name. Same parser, same daemon, same database: `sodus/cli.py`
+# forwards to `nodus.cli:main`. `nodus` stays the implementation name on disk.
+sodus = "sodus.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["nodus*"]
+include = ["nodus*", "sodus*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

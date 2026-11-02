@@ -266,7 +266,7 @@ def transcript(ref: str, tail: int = 40, include_reasoning: bool = False) -> str
         f"- 端点：{session.origin}",
         f"- 工作目录：{session.cwd}",
         f"- 时间：{_fmt_time(session.created_at)} → {_fmt_time(session.updated_at)}",
-        f"- 来源：{'Nodus run ' + session.run_id if session.run_id else '你自己的会话'}",
+        f"- 来源：{'Sodus run ' + session.run_id if session.run_id else '你自己的会话'}",
         f"- 消息：{sum(1 for m in msgs if m['role'] == model.USER)} user / "
         f"{sum(1 for m in msgs if m['role'] == model.ASSISTANT)} assistant（本页）",
         "",
@@ -431,7 +431,7 @@ def plan(
     if session.vendor in NEEDS_KNOWN_HOME and not session.provider:
         raise ValueError(
             f"{session.vendor}:{session.id} 在 {session.path.parent.parent} 下，"
-            "不是 Nodus 建的（没有记录的端点）。"
+            "不是 Sodus 建的（没有记录的端点）。"
             f"直接用它自己的 CLI 接：`{'claude --resume' if session.vendor == 'claude' else 'codex exec resume'} "
             f"{session.id}`"
         )

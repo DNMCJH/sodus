@@ -1,7 +1,7 @@
 # Sodus
 
-> 名字来自拉丁语 *nodus*（结、节点）。产品名是 **Sodus**，实现名仍是 **nodus**——CLI、Python 包、仓库目录、状态目录都叫 `nodus`（`~/.nodus`）。
-> 2026-10-21 之前它叫 `wb`／`workbench`，旧状态目录会在首次运行时自动迁移。
+> 名字来自拉丁语 *nodus*（结、节点）。产品名是 **Sodus**，实现名仍是 **nodus**——CLI 命令、Python 包、仓库目录、默认状态目录都叫 `nodus`（`~/.nodus`）。两个命令是同一条 CLI：`nodus` 和 `sodus`（`sodus --help` 的 usage 行显示 sodus），同一个 daemon、同一个数据库。
+> 2026-10-21 之前它叫 `wb`／`workbench`，旧状态目录会在首次运行时自动迁移。改名阶段与 `SODUS_HOME`／`migrate-home` 见 [docs/sodus-migration.md](docs/sodus-migration.md)。
 
 本地多 agent 任务编排器。不重写 agent loop，把 Claude Code / Codex / DSH / MiniMax 当 worker 驱动，
 自己只管任务、会话、产物、交接和审计。产品原则见 [docs/vision.md](docs/vision.md)。
@@ -41,9 +41,10 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 | `nodus profiles list\|show\|use\|new\|rm` | 配置快照：切一套环境 |
 | `nodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
 | `nodus mcp` | MCP server over stdio（接 Claude Code / DSH，见 [docs/mcp.md](docs/mcp.md)） |
+| `nodus migrate-home` | 把 `~/.nodus` 复制到 `~/.sodus` 并校验；默认 dry-run，`--apply` 才落地 |
 | `nodus --version` | 版本 |
 | `nodus task "goal" --accept "..."` | 建任务，返回 task-id |
-| `nodus sessions [--vendor] [--query] [--source]` | 三家会话 + Nodus run，一张表 |
+| `nodus sessions [--vendor] [--query] [--source]` | 三家会话 + Sodus run，一张表 |
 | `nodus session <id>` | 统一格式的对话记录 |
 | `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
 | `nodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
@@ -178,7 +179,7 @@ nodus profiles use work
 交接单里写 `回退：relay-dead → minimax`，`nodus runs` 显示最终 provider，`nodus usage` 数回退次数。
 
 实测一次（`run-90c6a47c9bae`）：第一段指向死端口，Claude Code 自己重试到放弃并打出
-`Connection refused (ECONNREFUSED)`，Nodus 判定无副作用、换到 minimax，任务完成，花费 ¥0.013476。
+`Connection refused (ECONNREFUSED)`，Sodus 判定无副作用、换到 minimax，任务完成，花费 ¥0.013476。
 代价是**慢**：CLI 自己的重试预算先耗掉了，整轮 187 秒。回退救的是结果，不是时间。
 
 
@@ -206,7 +207,7 @@ A 完成后 `nodus locks` 回到 `(no directory is locked)`。
 
 ## 会话：查询、读取、接续、分支
 
-三家 CLI 各有一套自己的会话存储，Nodus 现在把它们当同一件事处理：
+三家 CLI 各有一套自己的会话存储，Sodus 现在把它们当同一件事处理：
 
 | | claude | codex | dsh |
 |---|---|---|---|
@@ -215,7 +216,7 @@ A 完成后 `nodus locks` 回到 `(no directory is locked)`。
 | 分支 | `--resume <id> --fork-session` | `exec fork <id>` | **没有原生 fork**，用 brief 播种 |
 
 ```powershell
-nodus sessions                      # 三家会话 + Nodus run，一张表
+nodus sessions                      # 三家会话 + Sodus run，一张表
 nodus sessions --vendor claude --query 水印
 nodus session claude:be6acd2c       # 统一格式，工具调用和系统噪音都滤掉
 nodus resume  claude:be6acd2c --note "接着改"      # 同一会话加一轮
@@ -233,7 +234,7 @@ nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话�
 
 | 会话归属 | 默认 | 为什么 |
 |---|---|---|
-| Nodus 的 run 建的（`source=run`） | **原地接续** | 这是我们的记录，没有人在读它 |
+| Sodus 的 run 建的（`source=run`） | **原地接续** | 这是我们的记录，没有人在读它 |
 | 你自己建的（`source=user`） | **改成从它分叉** | 它就在你自己 CLI 读的存储里；DSH 更直接——GUI 里会多出一轮 |
 
 对 DSH 这条尤其重要：`resume` 写的是 `A:\dsh\home\sessions`，和你 GUI 是同一个存储。
@@ -242,7 +243,7 @@ nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话�
 ```powershell
 nodus resume dsh:session-efa2394b --note "..."            # 你自己的 → 分叉
 nodus resume dsh:session-efa2394b --note "..." --in-place  # 真的追加进原对话
-nodus session dsh:session-efa2394b                        # 看它现在长什么样（含 Nodus 加的轮次）
+nodus session dsh:session-efa2394b                        # 看它现在长什么样（含 Sodus 加的轮次）
 ```
 
 接续时 CLI 会把**将要发送的原文**打出来，再告诉你它会出现在哪里，不用猜。
@@ -273,7 +274,7 @@ nodus branch claude:63ff6726 --into dsh --note "总结这段对话在做什么"
 
 接续和分支都会回到**写这个会话的那个端点**：`--resume` 是在那个 endpoint 的配置目录里查 id 的，
 换一个 home 就会变成 "No conversation found"。所以 `resume` 会从会话路径反推出 `profile` 和 `provider`，
-用 `--route` 显式覆盖才换端。不是 Nodus 建的会话（比如你 `~/.claude` 里的）只能读，接续会被拒绝并告诉你该用什么命令。
+用 `--route` 显式覆盖才换端。不是 Sodus 建的会话（比如你 `~/.claude` 里的）只能读，接续会被拒绝并告诉你该用什么命令。
 
 分支有两种质地，`branch` 会明说给的是哪一种：claude/codex 是**真 fork**（新 session id，历史原样搬过去），
 dsh 是**播种**（新会话从一份 brief 开始，不是原历史的副本）。
@@ -329,7 +330,7 @@ branches: 只剩 main      worktrees: 只剩主树
 
 ## 桌宠：把状态挂到桌面上
 
-不用命令行的人不会去看看板，但会看到桌面上那只东西。所以 Nodus 暴露一个**中立的**状态端点，
+不用命令行的人不会去看看板，但会看到桌面上那只东西。所以 Sodus 暴露一个**中立的**状态端点，
 任何小组件都能轮询：
 
 ```
@@ -360,7 +361,7 @@ POST /broadcast?pet=main&lock= → {"text": "claude 测试通过，¥0.0177"}
 POST /lock/release?pet=main
 ```
 
-桥不是只会说话。宠物自己的动画池里有一组「工作状态」动作，Nodus 直接点播它们：
+桥不是只会说话。宠物自己的动画池里有一组「工作状态」动作，Sodus 直接点播它们：
 
 | 时机 | 动画 | 气泡 |
 |---|---|---|
@@ -400,7 +401,7 @@ dsh plugin --profile web remove dsh-pet   # 撤销
 | `none` | 一次都没跑 —— **`completed` 只代表进程退出码 0** |
 
 为什么要单独一列：2026-10-21 有一次真实事故，派给 dsh 的任务被 Windows 沙箱挡在启动前，
-worker 什么都没干、把"被阻断"写进结论、进程照样退出 0，Nodus 记成 `completed`。
+worker 什么都没干、把"被阻断"写进结论、进程照样退出 0，Sodus 记成 `completed`。
 状态不会骗人，但它回答的是"进程活下来了吗"，不是"事情做成了吗"。
 现在 `none` 会把这句话直接印在交接单和列表里，下一个 agent 和人都不会读错。
 
@@ -420,7 +421,7 @@ agent（同一份 CLI、同一份 stream-json、同一个 parser），区别只�
 现在这件事在 `providers.json` 里是明写的，不再靠"另一个 AgentSpec"暗示。
 
 那个 190 秒的坑还在，但结构变了：`~/.claude/settings.json` 的 `env` 块优先级高于进程环境变量。
-Nodus 的做法是让生成的 settings.json **永远不含 `env`**，端点全从进程环境注入
+Sodus 的做法是让生成的 settings.json **永远不含 `env`**，端点全从进程环境注入
 （`profiles.materialize` 里有测试盯着这一条）。所以换端点不需要换 `CLAUDE_CONFIG_DIR`，
 只需要换 provider——虽然配置目录仍然按 provider 分开，那是为了并发安全，不是为了隔离凭据。
 
@@ -656,7 +657,7 @@ dsh 只改了一行：`re.sub(r" +", ...)` → `re.sub(r"\s+", ...)`，测试文
 
 ## 跨会话：读、交接、续跑
 
-DSH 把每个会话存成 `$DSH_HOME/sessions/<project>/<id>/session.v4.jsonl.zstd`，append-only、zstd 压缩。DSH 的 CLI 只负责启动 profile，没有跨会话 API，所以 Nodus 直接读这个存储（只读，不写、不重压、不注入）。
+DSH 把每个会话存成 `$DSH_HOME/sessions/<project>/<id>/session.v4.jsonl.zstd`，append-only、zstd 压缩。DSH 的 CLI 只负责启动 profile，没有跨会话 API，所以 Sodus 直接读这个存储（只读，不写、不重压、不注入）。
 
 能力边界，全部实测过：
 
@@ -674,7 +675,7 @@ nodus sessions --limit 3
 → session-5711924e… 沐曦训练营课程截止时间查询  user=4
 
 nodus resume 8bb738b6 --force --note "最后确认一次：我让你记的数字是多少？"
-→ 7391   （会话是另一个进程建的，这次是 turn 3；Nodus 只负责续一轮）
+→ 7391   （会话是另一个进程建的，这次是 turn 3；Sodus 只负责续一轮）
 ```
 
 交接文件是机械抽取，不是总结：任务 + 来源会话原话 + 提取到的链接/本地路径，标注「未改写」。目标会话拿到的是证据，不是转述。
@@ -760,7 +761,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - fix 回路只认最新一次审查；审查误报时没有自动驳回，只能靠 fixer 在回复里说明"不成立"。
 - 跨会话续跑只支持 dsh；claude/codex 的会话 ID 体系不同，没接。
 - DSH 会话文件没有"正在被 GUI 使用"的标记，只能按最近写入时间猜；`--force` 有双写风险。
-- 读会话依赖 `zstandard`（本机已装）；会话是 append-only，Nodus 只读不写。
+- 读会话依赖 `zstandard`（本机已装）；会话是 append-only，Sodus 只读不写。
 - ~~流水线命令在 CLI 进程里执行（ADR-004）：关终端会中断~~ —— 2026-10-21 已改成 daemon 作业：`nodus tdd/review/fix` 提交给 daemon，CLI 只跟随；实测杀掉客户端进程后流水线照常跑完。
 - `nodus run` 不会自动跑验收：`completed` 只等于 exit 0，要不要验证得显式调 `nodus tdd` 或 `nodus verify`。`verify=none` 就是这个意思，别把它读成通过。
 - 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.nodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。

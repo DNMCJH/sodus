@@ -1,8 +1,10 @@
-# Nodus 产品原则
+> 产品名 Sodus，实现名 nodus。
+
+# Sodus 产品原则
 
 名字来自拉丁语 *nodus*：结、节点。多个 agent 在这里交汇、交接、被验收。
 
-一句话：**Nodus 把任务分给多个 agent，并用可执行证据验收结果。**
+一句话：**Sodus 把任务分给多个 agent，并用可执行证据验收结果。**
 
 ## 四个不是
 
@@ -53,4 +55,7 @@
 
 ## 命名过渡
 
-对外叫 Nodus；CLI 前缀、Python 包、状态目录（`~/.nodus`）已于 2026-10-21 统一改名，旧的 `~/.workbench` 首次运行会自动迁过去。
+对外叫 **Sodus**，实现名是 **nodus**：CLI 命令、Python 包、仓库目录、状态目录（`~/.nodus`）都还是 nodus。
+
+- 2026-10-21：旧的 `~/.workbench` 统一到 `~/.nodus`，首次运行自动迁。
+- 2026-11：显示名、`sodus` 入口、`SODUS_HOME`/`~/.sodus` 支持落地；目录搬迁和仓库改名还没做，见 [sodus-migration.md](sodus-migration.md)。

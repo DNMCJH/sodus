@@ -1,6 +1,8 @@
-# Nodus CLI
+> 产品名 Sodus，实现名 nodus。命令一律仍写 `nodus`；`sodus` 是同一份 CLI 的第二个入口（切换见 [sodus-migration.md](sodus-migration.md)）。
 
-> 17 个顶层命令，`nodus --help` 一屏读完。低频命令和诊断命令收在 `nodus debug` 下，
+# Sodus CLI
+
+> 18 个顶层命令，`nodus --help` 一屏读完。低频命令和诊断命令收在 `nodus debug` 下，
 > 统计报表收在 `nodus stats` 下。旧名字都还能用（隐藏别名），只是不列在帮助里。
 
 ## 顶层命令
@@ -23,6 +25,7 @@
 | `nodus stats` | 今日概览：花费、用量、缓存命中 | `nodus stats` |
 | `nodus mcp` | stdio MCP server（Claude Code / DSH 接） | `nodus mcp` |
 | `nodus serve` | 前台跑 HTTP daemon | `nodus serve --port 4199` |
+| `nodus migrate-home` | 把 `~/.nodus` 复制到 `~/.sodus` 并校验；默认 dry-run，`--apply` 才落地 | `nodus migrate-home` |
 | `nodus debug <name>` | 31 个低频/诊断命令，见下 | `nodus debug lineage ses-abc123` |
 
 ## stats 明细

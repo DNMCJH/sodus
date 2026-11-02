@@ -98,7 +98,7 @@ def render(rows: list[dict], generated_at: float | None = None) -> str:
     stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(generated_at or time.time()))
     pending = todos(rows)
     lines = [
-        "# Nodus 项目进度",
+        "# Sodus 项目进度",
         "",
         f"> 由 `nodus desk` 生成于 {stamp}。手改会被下一次覆盖；要留意见就写在这份文件之外。",
         "",

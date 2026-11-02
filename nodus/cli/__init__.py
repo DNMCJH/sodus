@@ -1,6 +1,6 @@
 """CLI assembly: one parser, one handler per command, no shared globals.
 
-The surface is deliberately small: seventeen top-level names, each one worth
+The surface is deliberately small: eighteen top-level names, each one worth
 remembering. Everything else still exists, one level down -- the long tail lives
 under `nodus debug <name>`, and the four report commands under
 `nodus stats <name>`. Old names keep working as hidden aliases, so an existing
@@ -39,6 +39,8 @@ TOP_LEVEL = (
     # integration
     "mcp",
     "serve",
+    # rename chores: one-time, dry-run by default
+    "migrate-home",
     # the long tail
     "debug",
 )
@@ -157,11 +159,12 @@ class _Surface:
         return getattr(self._action, item)
 
 
-def build_parser():
+def build_parser(prog: str | None = None):
     from .commands import (
         bench,
         decisions,
         memory,
+        migrate,
         observe,
         pipeline,
         proposals,
@@ -173,14 +176,15 @@ def build_parser():
 
     modules = (
         system, tasks, pipeline, sessions, decisions, topology, proposals,
-        bench, memory, observe,
+        bench, memory, migrate, observe,
     )
 
+    name = prog or _prog()
     parser = argparse.ArgumentParser(
-        prog=_prog(),
-        description="Nodus — task acceptance layer for agents",
+        prog=name,
+        description="Sodus — task acceptance layer for agents（实现名 nodus）",
     )
-    parser.add_argument("--version", action="version", version=f"nodus {config.VERSION}")
+    parser.add_argument("--version", action="version", version=f"{name} {config.VERSION}")
     sub = parser.add_subparsers(dest="cmd", metavar="<command>", required=True)
 
     # The curated top level: every command is registered here, so old names
@@ -223,9 +227,10 @@ def build_parser():
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, prog: str | None = None) -> int:
+    """Run the CLI. `prog` lets `sodus.cli` print its own name in the usage line."""
     _utf8()
-    parser = build_parser()
+    parser = build_parser(prog)
     args = parser.parse_args(argv)
 
     # One-time upgrade of a pre-0.4 home. Cheap no-op once done, and it has to

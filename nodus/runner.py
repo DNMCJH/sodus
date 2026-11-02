@@ -127,7 +127,7 @@ def build_prompt(
     # Only when there is something to say. An empty section would teach the
     # worker that this part of the brief is noise.
     known = f"\n{memory.strip()}\n" if memory.strip() else ""
-    return f"""你是 Nodus 里负责执行任务的 agent（{agent}）。
+    return f"""你是 Sodus 里负责执行任务的 agent（{agent}）。
 
 ## 任务
 {task.get('goal', '')}

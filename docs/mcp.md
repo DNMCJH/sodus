@@ -1,6 +1,8 @@
+> 产品名 Sodus，实现名 nodus。
+
 # MCP over stdio
 
-Nodus 的第三个接口（另两个是 HTTP/OpenAPI 和 CLI）。实现的是 MCP **2024-11-05**
+Sodus 的第三个接口（另两个是 HTTP/OpenAPI 和 CLI）。实现的是 MCP **2024-11-05**
 的 stdio transport：**一行一个 JSON-RPC 2.0 消息**，不用 LSP 的 `Content-Length`
 分帧。规范原文：*"Messages are delimited by newlines, and MUST NOT contain
 embedded newlines."*（[Transports](https://modelcontextprotocol.io/specification/2024-11-05/basic/transports)）
@@ -72,7 +74,7 @@ SQLite 连接、自己起 worker，**不需要 `nodus up`**，也不经过 HTTP�
 
 重启 DSH 后工具会以 `mcp__nodus__nodus_task_create` 这样的名字出现。
 `toolCallTimeoutMs` 要覆盖 `wait=true` 的等待时间；DSH 启动子进程时会清掉
-`*_KEY` / `*_TOKEN` / `*_SECRET` 环境变量，但 Nodus 不需要任何密钥。
+`*_KEY` / `*_TOKEN` / `*_SECRET` 环境变量，但 Sodus 不需要任何密钥。
 
 ## 手动验证
 

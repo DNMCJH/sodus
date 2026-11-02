@@ -49,9 +49,11 @@ nodus/sessions/       会话层：三家存储统一读取 + 接续/分支（DSH
 nodus/lineage.py      会话血缘：一次任务的所有 sitting / run / 成功与未验证（ok/unverified）
 nodus/meter.py        计费表：run 前后读端点的账
 nodus/pricing.py      标定单价：token → 钱（basis=list_price，峰值/空闲两档）
-nodus/ledger.py       usage_json 的唯一读法：解析、求和、分币种、缓存命中率
+nodus/ledger.py       usage_json 的唯一读法：解析、求和（含跑着的行的事件流）、分币种、缓存命中率
 nodus/usage.py        `nodus stats usage` 的薄壳：选行 + JSON 信封，算术在 ledger
-nodus/telemetry.py    端点探活 + 旧的 per-route 汇总（自解析 usage_json，见 overlap-audit）
+nodus/diagnosis.py    失败分类的唯一词表：13 cause / 4 class / 13 kind，以及每个 cause 的
+                      problem / suggestion / advice / fix（建议句和停下的行的名词短语都从这里取）
+nodus/telemetry.py    端点探活 + 旧的 per-route 汇总（token/金额已交 ledger，形状未变）
 nodus/budget.py       机器级日额度：CNY 上限、拒绝新 run、不杀在跑的
 nodus/lifecycle.py    run/proposal 状态机 + needs_attention，纯函数，不碰 db/网络
 nodus/watchdog.py     卡住检测：running 但 N 分钟没有实质事件 → stalled（这条边的第一个 writer）
@@ -64,7 +66,8 @@ nodus/harness_status.py 五个终端：装没装、在不在跑、今天多少�
 nodus/memory.py       记忆摘要：读各 harness 已有的 AGENTS/CLAUDE 文件，等人采纳
 nodus/bench.py        任务级评测：hidden_tests 打分，不看 agent 自述
 nodus/llm.py          宠物的一句话聊天：按 agent 走路由，限 400 token / 10 次每分钟
-nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁
+nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁；`runs_in_window`
+                      是「今天取哪些行」的唯一 SQL（看板、stats、预算闸、终端面板共用）
 nodus/config.py       路径、token、secrets、用户配置、当前 profile
 ```
 
@@ -82,6 +85,16 @@ config → providers → agents → routes → profiles → runner
 `lifecycle` 不 import 任何内部模块（纯函数，测试可以只喂字典），`observe`/`harness_status` 只读别人的日志和
 run 表，`recover`/`policy`/`budget` 只读 run/task/event。唯一的例外是 `watchdog`：它要写 `run.status`，
 但只写 `running -> stalled` 这一条边，而且先过 `lifecycle.can_transition`，不是第二个状态判断。
+
+**同一件事只剩一个定义**，这是 0.5.0 的主干判据（对应 `docs/overlap-audit.md` 的收口）：
+
+- 金额：只经 `ledger.parse` / `cost_of` / `summarize` / `Money`；缺币种进 `"-"` 桶，按来源展示，不跨币种相加。
+- 跑着的行的用量：`ledger.sum_events`；落盘的用量：`ledger.parse`。`server._live_rows` 不再自己求和。
+- "今天取哪些行"：`db.runs_in_window`。各面板在它上面保留自己的口径（预算闸把无币种当 CNY、看板和 CLI
+  叠加观察账、终端面板含跨午夜的 live 行），但不再各写一条 WHERE。
+- 失败是什么：`diagnosis`。cause → kind / label / problem / suggestion / advice / fix 是同一行的投影，
+  渲染句经 `CAUSE_BY_LABEL` 找回同一行，没有第二张文案表。
+- 失败计数：`server.board_state()["decision_counts"]`；状态灯读 `server.attention()`，不自己查库。
 
 ### watchdog：没失败，但没在动
 
@@ -288,7 +301,7 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 
 ## 6. 质量门槛
 
-- `python -m pytest -q`：835 条（2026-11-03；新增 `tests/test_watchdog.py` 17 条），
+- `python -m pytest -q -o addopts=""`：880 条（2026-11-03，0.5.0；仓库 addopts 已含 `-q`，必须覆盖 addopts 才看得到摘要），
   覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、成本标定、报告、计费表、
   端点/路由/配置物化、自动恢复、状态机与真实历史回归、卡住检测，以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
@@ -313,4 +326,5 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 - 多租户鉴权（现在只有 workspace 字段）。
 - dsh 的 `DSH_HOME` 隔离：profile 层已经在了，缺的是 dsh 认哪个环境变量。
 - 把现有调用方迁到 `lifecycle`：`recover` / `server` / `lineage` 仍在各自判状态，清单见 `docs/overlap-audit.md`。
-- 退役 `telemetry.usage_summary` 的独立 `usage_json` 解析，统一走 `ledger`。
+  已收口的是「谁写状态」（watchdog）和「失败是多少」（board 唯一计数），读方的迁移还没做。
+- `sodus` 包接管各模块（现在只是入口面，模块仍在 `nodus/`）；仓库目录改名是阶段 D，单独立项。

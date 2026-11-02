@@ -302,7 +302,7 @@ def test_continue_refuses_a_session_outside_our_profiles(tmp_path, monkeypatch):
     user_projects = home / "user-projects"
     monkeypatch.setattr(claude, "roots", lambda: [(user_projects, "", "")])
     make_claude(user_projects, "x", "ffff6666-0000-7000-8000-000000000006", "D:\\mine")
-    with pytest.raises(ValueError, match="不是 Nodus 建的"):
+    with pytest.raises(ValueError, match="不是 Sodus 建的"):
         sessions.plan("claude:ffff6666")
 
 
@@ -350,7 +350,7 @@ def test_a_seed_needs_no_endpoint_for_the_source(world, monkeypatch, tmp_path):
     make_claude(home, "x", "ffff7777-0000-7000-8000-000000000007", "D:\\mine")
     plan = sessions.plan("claude:ffff7777", fork=True, into="dsh")
     assert plan["mode"] == "seed"
-    with pytest.raises(ValueError, match="不是 Nodus 建的"):
+    with pytest.raises(ValueError, match="不是 Sodus 建的"):
         sessions.plan("claude:ffff7777")
 
 

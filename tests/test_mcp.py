@@ -63,7 +63,7 @@ def test_initialize_handshake(home):
     result = reply["result"]
     assert result["protocolVersion"] == "2024-11-05"
     assert result["capabilities"]["tools"] == {"listChanged": False}
-    assert result["serverInfo"]["name"] == "nodus"
+    assert result["serverInfo"]["name"] == "sodus"
     assert result["serverInfo"]["version"] == config.VERSION
 
 

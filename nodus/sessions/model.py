@@ -74,6 +74,9 @@ def first_line(text: str, limit: int = 80) -> str:
 #: Lines a session's first user turn often starts with, which say nothing
 #: about what the conversation was for.
 NOISE_PREFIXES = (
+    "你是 Sodus 里负责执行任务的 agent",
+    # Prompts written before the 0.5.0 rename. Old sessions still open with it;
+    # their titles must not turn into the template line either.
     "你是 Nodus 里负责执行任务的 agent",
     "<environment_context>",
     "<user_instructions>",
@@ -84,7 +87,7 @@ NOISE_PREFIXES = (
 def title_of(text: str, limit: int = 80) -> str:
     """A label that describes the conversation, not the harness around it.
 
-    A Nodus run's first user turn is a template whose first line is identical
+    A Sodus run's first user turn is a template whose first line is identical
     in every run; the task itself is under `## 任务`. Showing the template line
     makes every row look the same, which is worse than no title at all.
     """

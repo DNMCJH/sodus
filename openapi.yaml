@@ -1,9 +1,10 @@
 openapi: 3.1.0
 info:
-  title: Nodus HTTP API
+  title: Sodus HTTP API
   version: 0.4.0
-  summary: Nodus daemon 的 HTTP + SSE 接口
+  summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
+    产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
     这份契约对应 `nodus/server.py` 里实际存在的每一条路由，默认地址
     `http://127.0.0.1:4199`（`nodus up` 或 `python -m nodus serve`）。
 
@@ -28,7 +29,7 @@ info:
     安全边界：daemon 默认只绑定环回地址，非环回绑定需要
     `NODUS_ALLOW_REMOTE=1`。HTTP 层只有这一枚本地 token，没有多用户/RBAC。
   contact:
-    name: Nodus
+    name: Sodus
 servers:
   - url: http://127.0.0.1:4199
     description: 默认 daemon 地址（端口可用 --port 改）
@@ -1049,7 +1050,7 @@ components:
           description: 写进这次 run 的 note（桌宠传「碎碎念」「对话」），只用于看板显示
         cwd:
           type: string
-          description: 写进这次 run 的 cwd；不传则用 Nodus home
+          description: 写进这次 run 的 cwd；不传则用状态目录（默认 ~/.nodus）
 
     LlmMessage:
       type: object

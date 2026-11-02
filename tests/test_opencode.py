@@ -91,7 +91,7 @@ def test_the_prompt_reaches_opencode_as_an_argument(fake_opencode):
     assert finished["status"] == "completed", finished.get("error")
     # the fake echoes the argument it received; stdin was refused (exit 3)
     final = (config.HOME / "runs" / run["id"] / "final.md").read_text(encoding="utf-8")
-    assert "你是 Nodus 里负责执行任务的 agent（fake-opencode）" in final
+    assert "你是 Sodus 里负责执行任务的 agent（fake-opencode）" in final
     assert "写一个 hello" in final
 
 

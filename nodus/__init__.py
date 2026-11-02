@@ -1,3 +1,5 @@
-"""Nodus: local multi-agent task acceptance layer."""
+"""Sodus (product name) / nodus (implementation name): local multi-agent task acceptance layer."""
 
-__version__ = "0.2.0"
+#: One literal, one place. `pyproject.toml`, `config.VERSION` and both console
+#: scripts read this value; tests/test_sodus_compat.py fails if they drift.
+__version__ = "0.5.0"

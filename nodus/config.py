@@ -11,12 +11,35 @@ import os
 import secrets
 from pathlib import Path
 
+from . import __version__ as VERSION
+
+#: The implementation-name home. Still the default: phase C1 renamed nothing on
+#: disk, so `nodus` and `sodus` keep reading one database until a migration runs.
 DEFAULT_HOME = Path.home() / ".nodus"
+#: The product-name home. Only used once it exists AND no env var overrides it.
+SODUS_HOME_DEFAULT = Path.home() / ".sodus"
 LEGACY_HOME = Path.home() / ".workbench"
-HOME = Path(os.environ.get("NODUS_HOME") or DEFAULT_HOME).expanduser()
+
+
+def _resolve_home() -> Path:
+    """SODUS_HOME > NODUS_HOME > an existing ~/.sodus > ~/.nodus.
+
+    The order is what keeps the two console scripts on one database: without
+    `~/.sodus` on disk, `sodus` reads the same `~/.nodus` `nodus` always used.
+    Nothing is created here -- `migrate-home` is the only thing that writes a
+    `~/.sodus`, and it is never run automatically.
+    """
+    override = os.environ.get("SODUS_HOME") or os.environ.get("NODUS_HOME")
+    if override:
+        return Path(override).expanduser()
+    if SODUS_HOME_DEFAULT.exists():
+        return SODUS_HOME_DEFAULT
+    return DEFAULT_HOME
+
+
+HOME = _resolve_home()
 #: Pre-0.4 per-agent config dirs. Read once by the provider/profile migration.
 LEGACY_AGENTS_DIR = HOME / "agents"
-VERSION = "0.4.0"
 
 
 #: Pass to every subprocess so a console-less daemon does not flash a black
@@ -44,7 +67,12 @@ def _absorb_legacy_home() -> None:
     Only when the caller did not pick a home explicitly: an operator who sets
     NODUS_HOME is pointing at a specific place on purpose.
     """
-    if os.environ.get("NODUS_HOME") or HOME.exists() or not LEGACY_HOME.exists():
+    if (
+        os.environ.get("SODUS_HOME")
+        or os.environ.get("NODUS_HOME")
+        or HOME.exists()
+        or not LEGACY_HOME.exists()
+    ):
         return
     try:
         LEGACY_HOME.rename(HOME)
