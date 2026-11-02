@@ -1719,8 +1719,37 @@ def _deterministic(
     return rows
 
 
+def _unsuccessful(run: dict, states: dict[str, str]) -> bool:
+    """A run that ended without success: process failed, or acceptance red.
+
+    This is the one `failed` bucket the board reports and the status light
+    quotes. A live run is not a failure yet, and a completed run with no test
+    evidence is `unverified`, not a failure. `lineage` draws the same ok /
+    unverified boundary, but its bucket covers every run a task ever had and
+    says so in its render; the denominator is the difference, not the rule.
+    """
+    status = str(run.get("status") or "")
+    if status == "failed":
+        return True
+    return status == "completed" and states.get(str(run.get("id") or "")) == "red"
+
+
 def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], dict]:
-    """Everything on this board that cannot move without a human."""
+    """Everything on this board that cannot move without a human.
+
+    The counts are the page's numbers. Each says what it counts and over which
+    denominator:
+
+    - `failed`: terminal runs in `runs` (the board's 50 newest *work* runs)
+      that ended without success — process failed, or completed with red
+      tests. Live runs are not counted yet, so a retry in flight cannot look
+      like a new failure.
+    - `red`: the completed-with-red-tests subset of `failed`. The two keys
+      overlap on purpose; never add them.
+    - `unverified`: completed runs in the same window with no test evidence.
+      Not a failure, and not added to it.
+    - `proposal`: every open proposal in this workspace; not a run count.
+    """
     items: list[dict] = []
     counts = {"proposal": 0, "red": 0, "failed": 0, "unverified": 0}
 
@@ -1740,7 +1769,13 @@ def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], di
             }
         )
 
-    red = [r for r in runs if states.get(r["id"]) == "red"]
+    # Only completed runs can be "red but finished"; a failed process is
+    # already in the failed bucket, and the red card's copy says 跑完了.
+    red = [
+        r
+        for r in runs
+        if states.get(r["id"]) == "red" and str(r.get("status") or "") != "failed"
+    ]
     counts["red"] = len(red)
     for r in red[:3]:
         items.append(
@@ -1755,9 +1790,9 @@ def _decisions(runs: list[dict], states: dict[str, str]) -> tuple[list[dict], di
             }
         )
 
-    failed = [r for r in runs if r.get("status") == "failed"]
-    counts["failed"] = len(failed)
-    for r in failed[:3]:
+    process_failed = [r for r in runs if r.get("status") == "failed"]
+    counts["failed"] = sum(1 for r in runs if _unsuccessful(r, states))
+    for r in process_failed[:3]:
         # The old title here was "执行失败，要不要重跑由你定" — the exact
         # sentence this board exists to replace. MCP and the pet read this
         # list, so it gets the same class sentence as the page.
@@ -1909,6 +1944,15 @@ def board_state(now: float | None = None) -> dict:
     `history_failures` keep their old shape because MCP and the desktop pet
     read them; the new fields are additive.
 
+    `decision_counts` is the one counter for "how many failures". `failed`
+    counts terminal runs in the same 50-work-run window the sections were
+    built from: the process failed, or it completed with red tests. `red` is
+    the completed-red subset of that number, so the two overlap and must never
+    be added. `needs_you`, `handling`, `stopped` and `unverifiable` are the
+    lengths of the lists in this dict, not separate queries; `stopped` can
+    still name a retry's failed parent while `handling` names the live child,
+    so neither section is a failure total — `failed` is.
+
     `memory_candidates` is the other kind of human decision: facts harvested
     from the harnesses' own memory files, which only a person may adopt.
 
@@ -1977,6 +2021,34 @@ def board_state(now: float | None = None) -> dict:
         "memory_candidates": _memory_board(),
         "terminals": terminals,
         "today": {"window_start": start, "budget": budget_mod.check(now), **today},
+    }
+
+
+def attention(now: float | None = None) -> dict:
+    """The status light's three numbers, read off `board_state` — not recounted.
+
+    One source, one denominator. `waiting` and `failed` come from the board's
+    `decision_counts`; `running` is the same live-run list the page shows.
+
+    - `waiting`: decisions a person owns (open proposals + a spend gate past
+      the budget), over the board's 50-newest *work* runs and every open
+      proposal. A failure never lands here.
+    - `failed`: terminal runs in that same 50-work-run window whose outcome is
+      not a success — process failed, or completed with red tests. `red` is a
+      subset; live retries are not failures yet. Chat utterances are never in
+      this window (`board_state` asks for `kind="work"`).
+    - `running`: live work runs.
+
+    `statuslight.snapshot` used to count `status == "failed"` itself from a
+    50-row *all kinds* window: chat failures spoke, and a spend decision never
+    did. That second counter is gone.
+    """
+    board = board_state(now)
+    counts = board.get("decision_counts") or {}
+    return {
+        "waiting": int(counts.get("needs_you") or 0),
+        "running": len(board.get("running") or []),
+        "failed": int(counts.get("failed") or 0),
     }
 
 

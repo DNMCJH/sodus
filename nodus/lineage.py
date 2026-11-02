@@ -479,10 +479,28 @@ def _render_task(data: dict) -> list[str]:
     task = data.get("task") or {}
     if not task:
         return ["(no task)"]
+    runs = data.get("runs") or []
+    red = sum(1 for run in runs if run.get("verify") == "red")
+    live = sum(1 for run in runs if run.get("status") in ("queued", "running"))
     lines = [
         f"task     {task.get('id')}  {task.get('status') or '?'}  {_title(task, 60)}",
-        f"attempts {data.get('attempts', 0)}  ok {data.get('ok', 0)}  failed {data.get('failed', 0)}",
+        # Scope, not a second total: this is every run this task ever had, while
+        # the board's failure number is its 50 newest work runs. A task count of
+        # 2 and a board count of 9 answer two different questions.
+        f"history  本任务历史：该任务全部 {data.get('attempts', 0)} 条 run"
+        "（不是看板的失败总数；看板只数最近 50 条工作 run）",
+        f"attempts {data.get('attempts', 0)}  ok {data.get('ok', 0)}  "
+        f"failed {data.get('failed', 0)}  unverified {data.get('unverified', 0)}",
     ]
+    if red or live:
+        parts = []
+        if red:
+            parts.append(f"测试红 {red} 条")
+        if live:
+            parts.append(f"还在跑的重试 {live} 条")
+        lines.append(
+            "scope    failed 含" + "、".join(parts) + "；这是本任务自己的历史，不和看板数字相加"
+        )
     chain_rows = data.get("sessions") or []
     if chain_rows:
         lines.append("sessions " + " → ".join(s["id"] for s in chain_rows))

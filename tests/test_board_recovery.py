@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from nodus import config, db, server, ui
+from nodus import config, db, lineage, server, statuslight, ui
 
 ORPHAN = "orphaned: the process that owned this run is gone"
 
@@ -852,4 +852,87 @@ def test_the_board_still_counts_the_money_a_pet_spends(home):
     # 1 work + 6 chat rows started today: the money page does not filter chat.
     assert today["runs"] == 7
     assert today["totals"]["CNY"] == pytest.approx(0.12)
+
+
+# ---- one failure counter, three readers --------------------------------
+
+
+def test_one_failure_number_feeds_board_light_and_task_history(home):
+    """2 failed (one retrying) + 1 completed: every reader quotes the same 2.
+
+    - board: `decision_counts["failed"]` counts terminal failures in the
+      50-work-run window. The deterministic 401 is in `stopped`, the timeout is
+      in `handling` because it is waiting out its backoff; both are counted
+      once.
+    - statuslight: reads that number off the board, not from its own query.
+    - lineage: same task, but its own history — the render says 本任务历史 and
+      the denominator, so a 2 here is not offered as the board's total.
+    """
+    now = time.time()
+    task, broken = seed(
+        home, error="401 Unauthorized", title="密钥坏了",
+        ended=now - 600, started=now - 640,
+    )
+    seed(
+        home, error="Command timed out after 60s", task=task, title="密钥坏了",
+        ended=now - 30, started=now - 70,
+    )
+    done = seed(home, error="", status="completed", task=task, title="密钥坏了")[1]
+    add_event(
+        done,
+        "verify.green",
+        {"phase": "green", "ok": True, "exit": 0, "duration_ms": 40,
+         "cmd": ["python", "-m", "pytest", "-q"], "tail": "1 passed"},
+    )
+
+    board = server.board_state()
+    counts = board["decision_counts"]
+    assert counts["failed"] == 2
+    assert counts["red"] == 0
+    assert counts["handling"] == 1
+    assert counts["stopped"] == 1
+    assert counts["unverified"] == 0
+    assert broken["id"] in {item["run"] for item in board["stopped"]}
+
+    snap = statuslight.snapshot()
+    assert snap == {
+        "waiting": counts["needs_you"],
+        "running": len(board["running"]),
+        "failed": counts["failed"],
+    }
+    assert snap["failed"] == 2
+    # The same board says the same thing twice: no second bubble.
+    assert statuslight.line(snap, statuslight.snapshot()) == ("", "")
+
+    hist = lineage.for_task(task["id"])
+    assert hist["attempts"] == 3
+    assert hist["ok"] == 1
+    assert hist["failed"] == counts["failed"]
+    text = lineage.render({"kind": "task", **hist})
+    assert "本任务历史" in text
+    assert "不是看板的失败总数" in text
+    assert "attempts 3  ok 1  failed 2" in text
+
+
+def test_a_red_test_is_one_failure_for_board_light_and_history(home):
+    """The audit's exact case: completed + red used to be failed/red/invisible.
+
+    Now the board's `failed` includes it (and `red` is that subset), the light
+    quotes the same number, and lineage's task history counts it once with the
+    scope label next to it.
+    """
+    task, run = seed(home, error="", status="completed", title="红测试")
+    red_event(run)
+
+    board = server.board_state()
+    counts = board["decision_counts"]
+    assert counts["failed"] == 1
+    assert counts["red"] == 1  # subset, not a second failure
+    assert statuslight.snapshot()["failed"] == 1
+
+    hist = lineage.for_task(task["id"])
+    assert hist["failed"] == 1
+    text = lineage.render({"kind": "task", **hist})
+    assert "本任务历史" in text
+    assert "failed 含测试红 1 条" in text
 

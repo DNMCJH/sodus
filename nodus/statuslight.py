@@ -5,44 +5,42 @@ when the state *changed for the worse* — a new thing waiting on you, a new
 failure. Saying "3 waiting" every two minutes is how a pet becomes noise and
 gets turned off, which is the failure mode the reference projects all hit.
 
-Pure decisions live here (`line`, `calm`) so they can be tested without a
-database or a desktop pet; only `snapshot` touches sqlite.
+The numbers are not counted here. `snapshot` reads `server.board_state()` via
+`server.attention()`: one failure counter, one window, the same number the page
+quotes. The speaking rule (`line`) stays pure so it can be tested without a
+database or a desktop pet.
 """
 
 from __future__ import annotations
 
 import time
 
-from . import db, pet
+from . import pet, server
 
-#: How often the daemon looks. Cheap (a few sqlite reads), so it can be short;
-#: the pet still only speaks when a count goes *up*.
+#: How often the daemon looks. One board refresh per interval, so it stays in
+#: step with the page; the pet still only speaks when a count goes *up*.
 INTERVAL = 120.0
 
 
 def snapshot() -> dict:
-    """Current counts the pet cares about."""
-    conn = db.connect()
-    try:
-        waiting = int(
-            (conn.execute("SELECT COUNT(*) FROM proposal WHERE status = 'open'").fetchone() or [0])[0]
-        )
-    except Exception:  # a fresh database may not have the table yet
-        waiting = 0
-    finally:
-        conn.close()
+    """Current counts the pet cares about, taken from the board.
 
-    live = db.live_runs()
-    runs = db.list_runs(limit=50)
-    failed = sum(1 for r in runs if r.get("status") == "failed")
-    return {"waiting": waiting, "running": len(live), "failed": failed}
+    Scope is `server.attention`'s scope, deliberately: `waiting` is the board's
+    `needs_you` (proposals + spend gates), `failed` is the board's failed count
+    over the 50 newest work runs (process failed or completed with red tests),
+    and `running` is the board's live list. A chat row cannot inflate `failed`,
+    and an open spend decision cannot be invisible to `waiting`.
+    """
+    return server.attention()
 
 
 def line(prev: dict, cur: dict) -> tuple[str, str]:
     """What to say (and in which mood), or ("", "") when nothing got worse.
 
     Only increases speak. A count going down is good news and does not deserve
-    a bubble; a count staying put is not news at all.
+    a bubble; a count staying put is not news at all. `prev` and `cur` are
+    `snapshot()` dicts, so rows moving between board sections do not make the
+    pet repeat itself as long as the board's numbers stay the same.
     """
     if cur["waiting"] > prev["waiting"]:
         return f"有 {cur['waiting']} 件等你决定", "waiting"
