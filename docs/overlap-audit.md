@@ -4,8 +4,9 @@
 > 口径：全文的 `文件:行` 都是这个基线上的行号；结论来自逐处读实现，不是跑统计。
 > 例外：第 4 节第 5 点引用了 `~/.nodus/nodus.sqlite3` 的只读取样（319 条 run，`ws-default`，2026-11-03 03:15 前后）。
 >
-> **2026-11-03 收口**：F1（提交 `8717a3b`）与 C1（本提交）已修，见 1.1。下面第 1–5 节
-> 保持 `041d0f9` 基线的原文与行号，不再回改；新增的收口记录单独成节。
+> **2026-11-03 收口**：F1（提交 `8717a3b`）、C1（提交 `af659e7`）与 S3（提交
+> `b4568cd`）已修，见 1.1。下面第 1–5 节保持 `041d0f9` 基线的原文与行号，不再
+> 回改；新增的收口记录单独成节。
 
 目的：过去几周新加的模块各自把"状态""成本""失败原因"算了一遍，`docs/architecture.md` 第 2 节
 只列模块名，不解释谁和谁在抢同一件事。这份清单把重复算的地方钉到行号，给出"留谁 / 退谁 / 合并到哪"，
@@ -16,7 +17,7 @@
 - 共 **20 条**重叠（成本 5、状态 5、失败分类 4、观察 2、其它 4）。
 - 其中 **1 条是今天的真实矛盾**（C1：缺货币时 `ledger` 记 `"-"`，`telemetry` 记 `"USD"`），
   **1 条是同一页面上三个不同的"失败数"**（S3），**1 条是同一段报错被四套词表各分一次类**（F1）。
-  C1 与 F1 已在 2026-11-03 收口，见 1.1；S3 仍是待办。
+  C1、F1 与 S3 已在 2026-11-03 收口，见 1.1。
 - 状态机的结构性问题（S1：没有任何 writer 会写 `stalled`，但 900 秒无输出事实上就是 stalled）
   今天是"规则散落"而不是"答案冲突"；`lifecycle` 把目标状态写出来了，迁移仍是单独的行为改动。
 
@@ -30,13 +31,25 @@
   `unknown`，上下文并入 `bad-request`，目标服务没起并入 `network`；四个 deterministic cause
   （auth / bad-request / model-missing / content-policy）和重试门保持原样。F3（同一批正则）
   也随之消失：现在只有 `diagnosis.py` 一张匹配表；F2（中文文案两套）仍在。
-- **C1 已收口**，本提交。`telemetry.usage_summary` 不再自己解析 `usage_json`，改用
+- **C1 已收口**，提交 `af659e7`。`telemetry.usage_summary` 不再自己解析 `usage_json`，改用
   `ledger.parse/currency_of`；缺币种的金额统一进 `ledger.UNKNOWN_CURRENCY`（`"-"`），
   不再写成 `USD`。`usage.py` 和 `server._today` 在 `439f40b` 时已经调用 `ledger`，本轮核对
   没有第二份解析。缺币种选择 `unknown` 而不是按 provider 推导：provider 不唯一、历史行没有
   provider，且 `ledger` 已经用 `"-"` 保留了 12 条真实记录；按 provider 猜会把 4.7 元说成
   4.7 美元。`tests/test_telemetry.py` 用同一批 run 对比 `ledger` / `usage.summary` /
   `server._today` 三个读法。
+- **S3 已收口**，提交 `b4568cd`。唯一失败计数器是 `server.board_state()` 的
+  `decision_counts`：`failed` = 最近 50 条**工作** run 里已经结束且不算成功的（进程失败，
+  或跑完但测试红），`red` = 其中"跑完测试红"的子集，两个键故意重叠、不能相加；
+  `needs_you` / `handling` / `stopped` / `unverifiable` 是同一份 board 的行数，不再各查
+  一次。新增 `server.attention()` 只从 board 取 `needs_you`、`failed` 和 live 行，
+  `statuslight.snapshot` 直接调它，不再自己 `db.list_runs(limit=50)`（旧实现数的是 50 条
+  **所有 kind** 的 `status == "failed"`：chat 行的失败会说话，花钱项反而看不见）。`lineage.for_task` 保留"该任务全部 run"的口径，`nodus debug lineage` 的标题行改成
+  本任务历史并写明分母，`failed` 桶含测试红或还在跑的重试时逐条标出。测试
+  `tests/test_board_recovery.py::test_one_failure_number_feeds_board_light_and_task_history`
+  用 2 失败（1 条在重试）+ 1 完成断言 board / statuslight / lineage 三个读法同数；
+  `::test_a_red_test_is_one_failure_for_board_light_and_history` 钉住 completed+red 这个
+  原始矛盾；数字没变时 `statuslight.line` 仍返回空串，不重复说话。
 
 ## 2. 最强的三条
 
@@ -52,12 +65,12 @@
 建议：留 `ledger.parse/cost_of/summarize`；`telemetry.usage_summary` 的统计部分退成
 `ledger.summarize(db.list_runs(...))`，`telemetry` 只保留探活（`probe`/`last_probes`/`balance`）。
 
-**已收口（本提交）**：`telemetry.usage_summary` 保留旧形状（CLI 还在读），但每个 run 的
+**已收口（提交 `af659e7`）**：`telemetry.usage_summary` 保留旧形状（CLI 还在读），但每个 run 的
 token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺币种进 `"-"`。没有把统计
 整体换成 `ledger.summarize`，因为那会改 `nodus usage --days` 的输出形状，超出这次"不改行为"的边界；
 统计口径已同源，剩下的只是形状。
 
-### #2 S3 同一个页面上三个"失败数"，外加第四个在任务灯里
+### #2 S3 同一个页面上三个"失败数"（已收口）
 
 - `lineage._route_summary` 的 `failed` 是"不是 ok 也不是 unverified"——**completed 但测试红也算 failed**
   （`nodus/lineage.py:284-293`，合计在 `nodus/lineage.py:338`）。
@@ -74,6 +87,13 @@ token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺�
 
 建议：留一个分类函数（`lineage._run_summary` 的三桶，或 `lifecycle` 的 terminal 事实）；
 `decision_counts` 保持旧形状给 MCP/宠物读，但由同一个分类函数派生；`statuslight` 至少补 `kind="work"`。
+
+**已收口（提交 `b4568cd`）**：唯一计数是 `server.board_state()["decision_counts"]`：
+`failed` 改成"50 条工作 run 里结束且不算成功"（进程失败，或跑完但测试红），`red` 是这个
+数的子集而不是第二个失败数；`statuslight.snapshot` 改读新增的 `server.attention()`，只拿
+board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_task` 保留"本任务
+历史"的口径（该任务全部 run），CLI 渲染里写明这个分母，`failed` 桶含测试红或还在跑的重试
+时逐条标出。见 1.1。
 
 ### #3 F1 同一段 `run.error`，四套词表（已收口）
 
@@ -103,7 +123,7 @@ token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺�
 
 | 编号 | 谁在算同一件事 | 证据（文件:行） | 差异 / 风险 | 建议 |
 |---|---|---|---|---|
-| C1 ★ **已收口** | `ledger` vs `telemetry.usage_summary` | `nodus/ledger.py:1-26`、`:38`、`:211`、`:356`；`nodus/telemetry.py:94`、`:107`、`:133` | 缺币种：`"-"` vs `"USD"`；`telemetry` 还自给 `cost_basis="reported"`（`:135`） | **已收口（本提交）**：`telemetry` 改读 `ledger.parse/currency_of`，缺币种进 `"-"`；`usage.py`/`server._today` 原本已走 `ledger` |
+| C1 ★ **已收口** | `ledger` vs `telemetry.usage_summary` | `nodus/ledger.py:1-26`、`:38`、`:211`、`:356`；`nodus/telemetry.py:94`、`:107`、`:133` | 缺币种：`"-"` vs `"USD"`；`telemetry` 还自给 `cost_basis="reported"`（`:135`） | **已收口（提交 `af659e7`）**：`telemetry` 改读 `ledger.parse/currency_of`，缺币种进 `"-"`；`usage.py`/`server._today` 原本已走 `ledger` |
 | C2 ★ | `server._today` / `usage._rows` / `budget.spent` / `harness_status.by_harness` 各自定义"今天" | `nodus/server.py:1853-1872`、`:1875-1882`；`nodus/usage.py:53-72`；`nodus/budget.py:53-73`；`nodus/harness_status.py:206-241` | 行集不同（`server._today` 只取 `agent/route/usage_json`，`usage._rows` 取 status/provider/model）；无币种的钱 `budget` 当 CNY、看板留 `"-"`；观察账进"今天的钱"（`server.py:1871`）但不进终端面板（`harness_status.py:11-25` 明说不折进去） | 算术留 `ledger`（已经是）；"今天取哪些行"合并成一个 helper；每个面板标自己的口径 |
 | C3 | `server._live_rows` vs `ledger.parse` | `nodus/server.py:110-152`；`nodus/ledger.py:159` | 一个读 `usage` 事件（在跑，partial），一个读 `usage_json`（已结束）；两套 token 求和 | 事件求和移进 `ledger`（`Tokens` 已有），保留 "partial" 标记 |
 | C4 | `policy._usage_cost` vs `ledger.UNKNOWN_CURRENCY` | `nodus/policy.py:797-811`；`nodus/ledger.py:38` | 已改为委托 `ledger.cost_of`，只把 `"-"` 改名 `"unknown"` 打印 | 保持（已收敛）；若 `usage.py` 的 JSON 消费者也改名就一起退 |
@@ -115,7 +135,7 @@ token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺�
 |---|---|---|---|---|
 | S1 ★ | run 状态由谁定义 / 谁写 | `nodus/db.py:44`（默认 `queued`）、`:637`（终态判断）、`:757`（live）、`:771`（stale）；`nodus/runner.py:956`（唯一 writer）、`:796`（900s 无输出→failed）、`:1123`（wait 终态）、`:1184-1186`（reconcile 900s）；`nodus/server.py:119`；`nodus/recover.py:809`；`nodus/harness_status.py:49`；`nodus/pet.py:74` | `stalled` 没有任何 writer；900s 无输出被记成 `failed(timeout)`，语义上就是 stalled；7 处各自写 `IN ('queued','running')` / `("completed","failed")` | `lifecycle` 是状态表；读方逐批迁移；写 `stalled` 是单独的行为改动 |
 | S2 | "这个任务还有没有在跑"两份 SQL | `nodus/recover.py:787-799`（`_has_retry_child`）、`:802-814`（`_task_has_live_run`） | 与 `db.live_runs` 同源不同写法，状态字面量再抄一遍 | 留 recover 的 gate；liveness 查询收敛到 db/一处 |
-| S3 ★ | "失败"的计数口径 | `nodus/lineage.py:284-293`、`:338`；`nodus/server.py:1798-1799`、`:1813-1814`、`:1643-1741`；`nodus/statuslight.py:35-38` | 见第 2 节：completed+red 在 lineage 算 failed、在 server 算 red、在 statuslight 不可见；statuslight 还漏了 `kind="work"` | 一个分类函数；旧字段保留形状但派生；statuslight 补 kind |
+| S3 ★ **已收口** | "失败"的计数口径 | `nodus/lineage.py:284-293`、`:338`；`nodus/server.py:1798-1799`、`:1813-1814`、`:1643-1741`；`nodus/statuslight.py:35-38` | 见第 2 节：completed+red 在 lineage 算 failed、在 server 算 red、在 statuslight 不可见；statuslight 还漏了 `kind="work"` | **已收口（提交 `b4568cd`）**：`decision_counts["failed"]` 含测试红（`red` 为子集、不相加）；`statuslight` 读 `server.attention()`；`lineage` 只改"本任务历史"标签与分母 |
 | S4 | `ok` / `unverified` 的定义抄了四份 | `nodus/lineage.py:250-275`；`nodus/policy.py:855-860`、`:894`、`:914-915`；`nodus/desk.py:83`；`nodus/server.py:188-216`、`:1833-1837` | 今天四处一致（completed+ok=成功，completed+none=未验证）；但口径散着，改一处就漂 | 留 `lineage` 的三桶；policy/desk/server 调它或调 `lifecycle` 传出来的 facts |
 | S5 | proposal 状态的合法值没有地方校验 | `nodus/db.py:1011-1015`（`close_proposal` 接受任意字符串）；`nodus/propose.py:162`、`:178`（只写 merged/rejected）；`nodus/db.py:966`、`nodus/server.py:1484`、`:1782`、`nodus/statuslight.py:28`（只读 open） | 今天唯一写者是 propose，但 db 层不设防，手滑写 `merge` 会让 proposal 从所有列表消失 | `lifecycle` 的 proposal 表先立着；校验放进 `close_proposal`（行为改动，单独做） |
 
@@ -142,7 +162,7 @@ token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺�
 | X1 | `_first_line` / `_project` | `nodus/server.py:219-232`；`nodus/recover.py:1182-1190` | 逐字重复的小工具 | 收进一个 util（或 db 旁边的 text helper） |
 | X2 | 看板要的 task facts | `nodus/server.py:247-266`（`_task_facts`）；`nodus/recover.py:1162-1180`（`_facts`） | 同一次刷新各查一遍 task，只为拿标题/项目 | 一个 `{task_id: facts}` 构建器，两边共用 |
 | X3 | "为什么没有测试证据" | `nodus/server.py:1323-1350`（`_unverifiable_reason` 自己判断有没有测试入口）；`nodus/verify.py:28-55`（`detect`）；`nodus/config.py:157`（`auto_verify`） | server 在 `detect` 之上又写了一遍"有入口但没跑 / 没入口"的分支和 `NODUS_AUTO_VERIFY` 文案 | 让 `verify` 返回原因句，server 只排版 |
-| X4 | 宠物灯自己数 | `nodus/statuslight.py:23-38` | 与看板 `_decisions` 并行维护两个计数；`db.list_runs(limit=50)` 未过滤 `kind`，chat 失败会触发"跑红了" | 直接读看板 `decision_counts`（或至少补 `kind="work"`） |
+| X4 **已收口（随 S3）** | 宠物灯自己数 | `nodus/statuslight.py:23-38` | 与看板 `_decisions` 并行维护两个计数；`db.list_runs(limit=50)` 未过滤 `kind`，chat 失败会触发"跑红了" | **已收口**：`statuslight.snapshot` 改调 `server.attention()`，与看板同源；见 1.1 |
 
 ## 4. 写 lifecycle 时发现的"定义 vs 现状"边界
 
@@ -184,4 +204,5 @@ token/金额/币种改由 `ledger.parse` 与 `ledger.currency_of` 给出；缺�
 - 不给 `close_proposal` 加校验：会让现有写者之外的手工 `UPDATE` 失败，需要单独评估。
 - 不把 `stalled` 写进 `run.status`：需要 runner、`recover`、看板三处同时理解它，是一次迁移。
 - 不给看板换新的计数口径：`decision_counts` 仍被 MCP 与桌面宠物读（`nodus/mcp.py`、`nodus/pet.py`），
-  先保留形状。
+  先保留形状；2026-11-03 S3 收口时只把 `failed` 的含义收紧成"结束且不算成功"（含测试红，
+  `red` 为子集），键与形状没变，见 1.1。
