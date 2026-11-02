@@ -12,6 +12,10 @@
 > 的费用依据缺省词）已修，见 1.2。C6 是这轮扫描新发现的条目，不在上面的 20 条里。
 >
 > **2026-11-03 第三批收口**：S1（`stalled` 没有任何 writer）已修，见 1.3。
+>
+> **2026-11-03 第四批收口**：`report` / `pet` / `bench` / `desk` / `lineage._route_summary` /
+> `cli/commands/system.py cost` 这六处自己算钱的显示已改走 `ledger`，缺币种不再当作某币种、
+> 也不跨币种求和。这是**行为改动**，见 1.4。
 
 目的：过去几周新加的模块各自把"状态""成本""失败原因"算了一遍，`docs/architecture.md` 第 2 节
 只列模块名，不解释谁和谁在抢同一件事。这份清单把重复算的地方钉到行号，给出"留谁 / 退谁 / 合并到哪"，
@@ -106,6 +110,9 @@
 可见数字（`report`/`pet` 的缺币种默认 `USD` 就是 C1 修掉的同一个 7 倍错误），留作单独的
 行为改动，不混进这次"口径不变"的收口。
 
+> 2026-11-03 更新：这六处已在 1.4 收口（提交 `fefe7cf`）。上面表格的行号保留 `041d0f9`
+> 基线位置，不回改。
+
 ### 1.3 收口记录（2026-11-03，第三批）
 
 - **S1 已收口**，提交 `b5ef809`。新模块 `nodus/watchdog.py` 是 `running -> stalled` 的
@@ -129,6 +136,46 @@
   （`idle_seconds=30.7`、`window_seconds=30`、`worker="not-owned"`）；正常 run 保持 `completed`，
   没有 `run.stalled` 事件。看板 `stopped` 出现该行，`decision_counts.stopped` 从 0 变 1，
   `failed` 仍为 0，`attention()` 为 `{waiting:0, running:0, failed:0}`。
+
+### 1.4 收口记录（2026-11-03，第四批：六处金额展示）
+
+- **六处已收口**，提交 `fefe7cf`。这是**行为改动**：缺币种的金额不再当成某个币种，
+  也不再把不同币种加成一个数。`ledger` 新增 `Money` 收集器与三个展示词：
+  `UNKNOWN_LABEL="未标注币种"`、`currency_label()`、`unlabeled_line()`。`Money`
+  每个币种一个桶（形状同 `summarize()` 的 `totals["cost"]`），缺币种的按 provider 分桶，
+  `unlabeled` 是**列表**而不是总数——两个来源的未标注金额没有共同单位可以相加，所以结构上
+  就没有"合计"这个字段可打印。六处各自的变化：
+  - `report.py`：`collect()` 不再自己 `json.loads`，token 与金额都读 `ledger.parse`；
+    缺币种默认 `USD` 的旧逻辑删除。真实任务 `task-07b9e79c4e68` 的 6 条无币种 run 原来
+    报 **`$3.0320`（CLI 自报）**，现在是「未标注币种（来源未记录） 6 次 3.0320」，且不进任何
+    币种合计。多币种时每个币种一行（`- 成本：CNY ¥…` / `- 成本：USD $…`），单币种保持原
+    一行。顺带把缺 `cost_basis` 的默认词从 `reported`（错：那表示 CLI 自报）改成 `none`
+    →「未标注」，与 C7 一致。
+  - `pet.py`：`state()["cost"]` 保持 `{币种: 金额}` 旧形状（widget 还在读），缺币种的金额
+    改放新增的 `cost_unlabeled`（按 provider、带次数），不再并进 `USD`（同一批 demo 数据：
+    原来 `{"CNY": 2.0, "USD": 1.5}`，现在 `{"CNY": 2.0, "USD": 0.5}` + 两条未标注）。
+    `describe()` 缺币种时打「未标注币种 0.1234」，不再打出空符号加一个空格。
+  - `bench.py`：`_usage`/`_money` 缺币种从默认 `CNY` 改为 `ledger.UNKNOWN_CURRENCY`；
+    `summarize()` 增加 `costs`（分币种）与 `unlabeled`，`cost_cny` 保留给
+    `policy._bench_history` 读 results.json，但只含 CNY 行。`format_summary()` 单币种仍是
+    老的一行（`solve 1/2 (50%) · 平均 41s · ¥0.09`），多币种或含未标注才分行。
+  - `desk.py`：表格「成本」列缺币种原来印 `$`（7 倍错误），现在印「未标注币种 0.03」。
+  - `lineage._route_summary`：不再把一条 route 的所有金额加进一个 float、再用第一条币种给
+    它命名（同一批 demo 数据原来打 `3.5 CNY`，那是 2.0 CNY + 0.5 USD + 0.8 + 0.2 的和）。
+    现在输出 `costs`（`{币种: {total, runs}}`）与 `unlabeled`（按 provider）；渲染时单币种
+    仍接在 route 行末尾，多币种或含未标注改成分行。
+  - `cli/commands/system.py cost`：标定漂移按币种分桶。账单侧（`meter_observed`）按构造
+    就是 CNY，所以只有 CNY 桶算 `（账单 − 标定）/ 标定`；USD 桶与未标注桶如实列出金额，写明
+    「账单侧只有 CNY，不换算、不比较」（demo 数据原来报「3 个 run 合计 ¥3.3000」，那 3.3 里
+    含 0.5 USD 与 0.8 无币种）。
+- **没动的**：`nodus stats`（`system._money_text`）仍把未标注印成一个带标签的金额，用旧词
+  「币种未记录」，也没有按 provider 拆——它不在这六处里，`ledger.summarize` 的桶也不带
+  provider；要拆得先给桶加来源维度，算下一件单独的事。`ui.py:662` 的「币种未记录」同理。
+  纯 CNY 数据下 `stats`/`cost`/`report`/`lineage`/`desk` 与 bench 的输出与改造前逐字相同
+  （报告只差生成时间；`pet` 的 `cost` map 不变，只是多一个空的 `cost_unlabeled: []`）。
+- 测试：852 条全绿（基线 835，+17 条）。新增覆盖 `Money` 的三个语义（分币种、
+  按 provider 分未标注、哨兵不算币种）、五处渲染的「单币种不变 / 多币种分行 / 未标注不并列」、
+  以及漂移分桶；`test_lineage` 里原来断 route `cost` 的那条改成断 `costs`。
 
 ## 2. 最强的三条
 
