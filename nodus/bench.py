@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from . import db, runner, verify
+from . import db, ledger, runner, verify
 
 REQUIRED = ("id", "title", "prompt", "timeout")
 #: Directory the hidden tests land in, inside the work tree. Prefixed so it
@@ -235,16 +235,14 @@ class RunnerClient:
 
 
 def _usage(run: dict) -> tuple[float | None, str]:
-    try:
-        usage = json.loads(run.get("usage_json") or "{}")
-    except ValueError:
-        return None, "CNY"
-    currency = str(usage.get("currency") or "CNY").upper()
-    cost = usage.get("cost")
-    try:
-        return (float(cost) if cost is not None else None), currency
-    except (TypeError, ValueError):
-        return None, currency
+    """(cost, bucket key) for one attempt, read through `ledger`.
+
+    The key is ``ledger.UNKNOWN_CURRENCY`` when the run recorded a price but no
+    unit. The old default here was ``CNY``, which turned a dollar amount into a
+    yuan one and let it into the yuan total.
+    """
+    parsed = ledger.parse(run.get("usage_json"))
+    return parsed.cost.amount, ledger.currency_of(parsed)
 
 
 def execute(
@@ -299,6 +297,10 @@ def execute(
         "verdict": verdict,
         "run_id": run_id,
         "run_status": str(finished.get("status") or ""),
+        # Kept on the row so an attempt whose currency was not recorded can be
+        # grouped by the provider that spent it, instead of being summed into
+        # whatever unit the next report happens to use.
+        "provider": str(finished.get("provider") or ""),
         "error": str(finished.get("error") or ""),
         "duration_s": round(duration, 1),
         "cost": cost,
@@ -319,12 +321,17 @@ def _short(text: str, width: int = 64) -> str:
     return flat if len(flat) <= width else flat[: width - 1] + "…"
 
 
-def _money(row: dict) -> str:
+def _money(row: dict, digits: int = 3) -> str:
+    """One attempt's price. An unrecorded unit keeps the word, not a symbol."""
     cost = row.get("cost")
     if not isinstance(cost, (int, float)):
         return "—"
-    currency = str(row.get("currency") or "CNY").upper()
-    return f"¥{cost:.3f}" if currency == "CNY" else f"{currency} {cost:.3f}"
+    currency = str(row.get("currency") or ledger.UNKNOWN_CURRENCY).upper()
+    if currency == ledger.UNKNOWN_CURRENCY:
+        return f"{ledger.UNKNOWN_LABEL} {cost:.{digits}f}"
+    if currency == "CNY":
+        return f"¥{cost:.{digits}f}"
+    return f"{currency} {cost:.{digits}f}"
 
 
 def _detail(row: dict) -> str:
@@ -368,19 +375,25 @@ def summarize(rows: list[dict]) -> dict:
     attempts = len(rows)
     solved = sum(1 for row in rows if row.get("verdict") == SOLVE)
     seconds = sum(float(row.get("duration_s") or 0) for row in rows)
-    cost = sum(
-        float(row.get("cost") or 0.0)
-        for row in rows
-        if isinstance(row.get("cost"), (int, float))
-        and str(row.get("currency") or "CNY").upper() == "CNY"
-    )
+    money = ledger.Money()
+    for row in rows:
+        money.add(
+            {"cost": row.get("cost"), "currency": row.get("currency")},
+            row.get("provider") or "",
+        )
+    costs = {currency: bucket["total"] for currency, bucket in money.costs.items()}
     return {
         "attempts": attempts,
         "solved": solved,
         "rate": round(solved / attempts, 4) if attempts else 0.0,
         "seconds": round(seconds, 1),
         "mean_s": round(seconds / attempts, 1) if attempts else 0.0,
-        "cost_cny": round(cost, 4),
+        "costs": costs,
+        # Still here, and still yuan only: `policy._bench_history` reads this
+        # key out of results.json to score routes. What changed is that an
+        # attempt with no recorded currency is no longer counted into it.
+        "cost_cny": costs.get("CNY", 0.0),
+        "unlabeled": money.unlabeled,
     }
 
 
@@ -388,11 +401,27 @@ def format_summary(totals: dict) -> str:
     attempts = int(totals.get("attempts") or 0)
     solved = int(totals.get("solved") or 0)
     percent = round(100.0 * solved / attempts) if attempts else 0
-    return (
+    head = (
         f"solve {solved}/{attempts} ({percent}%) · "
-        f"平均 {float(totals.get('mean_s') or 0):.0f}s · "
-        f"¥{float(totals.get('cost_cny') or 0):.2f}"
+        f"平均 {float(totals.get('mean_s') or 0):.0f}s"
     )
+    costs = totals.get("costs")
+    unlabeled = totals.get("unlabeled") or []
+    if costs is None:
+        # results.json written before the split: it only ever held yuan.
+        costs = {"CNY": float(totals.get("cost_cny") or 0)}
+    if len(costs) <= 1 and not unlabeled:
+        # One currency: the old compact line, unchanged.
+        currency, amount = next(iter(sorted(costs.items())), ("CNY", 0.0))
+        return f"{head} · {_money({'cost': amount, 'currency': currency}, digits=2)}"
+    lines = [head]
+    lines += [
+        f"  {currency}  {float(amount):.4f}" for currency, amount in sorted(costs.items())
+    ]
+    for row in unlabeled:
+        amount = f"{float(row.get('total') or 0):.4f}"
+        lines.append(f"  {ledger.unlabeled_line(row, amount)}")
+    return "\n".join(lines)
 
 
 def report(rows: list[dict]) -> str:
@@ -463,7 +492,7 @@ def run(
                     "error": f"{type(exc).__name__}: {exc}",
                     "duration_s": 0.0,
                     "cost": None,
-                    "currency": "CNY",
+                    "currency": ledger.UNKNOWN_CURRENCY,
                     "changed": False,
                     "tests_ok": False,
                     "pytest_exit": None,

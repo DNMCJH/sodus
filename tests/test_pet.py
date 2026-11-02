@@ -67,6 +67,40 @@ def test_costs_are_never_added_across_currencies(home):
             usage_json=json.dumps({"cost": cost, "currency": currency}),
         )
     assert pet.state()["cost"] == {"CNY": 2.0, "USD": 0.25}
+    assert pet.state()["cost_unlabeled"] == []
+
+
+def test_a_missing_currency_is_not_filed_under_usd(home):
+    task = db.create_task("t")
+    for provider, usage in (
+        ("relay-old", {"cost": 0.25}),
+        ("relay-old", {"cost": 0.5}),
+        ("relay-cny", {"cost": 1.5, "currency": "CNY"}),
+    ):
+        run = db.create_run(task["id"], "claude", "D:\\w", provider=provider)
+        db.update_run(
+            run["id"],
+            status="completed",
+            ended_at=time.time(),
+            usage_json=json.dumps(usage),
+        )
+    found = pet.state()
+    assert found["cost"] == {"CNY": 1.5}
+    assert found["cost_unlabeled"] == [
+        {"provider": "relay-old", "total": 0.75, "runs": 2}
+    ]
+
+
+def test_describe_does_not_lend_a_currency_symbol_to_an_unlabeled_run(home):
+    run = {
+        "id": "run-abc",
+        "agent": "claude",
+        "route": "claude",
+        "usage_json": json.dumps({"cost": 0.1234}),
+    }
+    line = pet.describe(run, "ok")
+    assert "未标注币种 0.1234" in line
+    assert "$" not in line
 
 
 def test_describe_says_what_happened_in_one_line(home):

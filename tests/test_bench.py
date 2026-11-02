@@ -241,5 +241,50 @@ def test_summary_rounds_to_whole_percent():
     assert bench.format_summary(totals) == "solve 4/6 (67%) · 平均 41s · ¥0.09"
 
 
+def test_one_currency_keeps_the_old_compact_summary():
+    totals = {
+        "attempts": 2,
+        "solved": 1,
+        "mean_s": 41.0,
+        "costs": {"CNY": 0.09},
+        "unlabeled": [],
+        "cost_cny": 0.09,
+    }
+    assert bench.format_summary(totals) == "solve 1/2 (50%) · 平均 41s · ¥0.09"
+
+
+def test_an_unlabeled_attempt_is_not_counted_as_yuan():
+    """The old default was CNY: a dollar or unnamed amount joined the yuan total."""
+    rows = [
+        {"task": "a", "verdict": "solve", "duration_s": 1.0, "cost": 1.0, "currency": "CNY"},
+        {"task": "b", "verdict": "solve", "duration_s": 1.0, "cost": 0.5, "currency": "USD"},
+        {"task": "c", "verdict": "solve", "duration_s": 1.0, "cost": 0.25,
+         "currency": "-", "provider": "relay-old"},
+        {"task": "d", "verdict": "solve", "duration_s": 1.0, "cost": 0.75,
+         "currency": "-", "provider": "claude"},
+    ]
+
+    totals = bench.summarize(rows)
+
+    assert totals["costs"] == {"CNY": 1.0, "USD": 0.5}
+    assert totals["cost_cny"] == 1.0
+    assert totals["unlabeled"] == [
+        {"provider": "claude", "total": 0.75, "runs": 1},
+        {"provider": "relay-old", "total": 0.25, "runs": 1},
+    ]
+    text = bench.format_summary(totals)
+    assert "CNY  1.0000" in text
+    assert "USD  0.5000" in text
+    assert "未标注币种（来源 claude）  1 次  0.7500" in text
+    assert "未标注币种（来源 relay-old）  1 次  0.2500" in text
+    assert "2.5000" not in text  # no total across buckets
+
+
+def test_money_names_the_missing_unit_instead_of_guessing_yuan():
+    assert bench._money({"cost": 0.04, "currency": "-"}) == "未标注币种 0.040"
+    assert bench._money({"cost": 0.04, "currency": "CNY"}) == "¥0.040"
+    assert bench._money({"cost": 0.04, "currency": "USD"}) == "USD 0.040"
+
+
 def test_an_empty_table_does_not_divide_by_zero():
     assert bench.format_summary(bench.summarize([])) == "solve 0/0 (0%) · 平均 0s · ¥0.00"

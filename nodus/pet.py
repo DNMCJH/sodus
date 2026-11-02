@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config, db
+from . import config, db, ledger
 
 #: How long a failure keeps the pet looking upset.
 RECENT = 600.0
@@ -60,13 +60,6 @@ def anim_for(mood: str, agent: str = "") -> str:
     return ANIM.get(mood, "")
 
 
-def _usage(run: dict) -> dict:
-    try:
-        return json.loads(run.get("usage_json") or "{}")
-    except json.JSONDecodeError:
-        return {}
-
-
 def state(now: float | None = None) -> dict:
     """The mood, one line of text, and the numbers behind them."""
     now = now or time.time()
@@ -78,13 +71,9 @@ def state(now: float | None = None) -> dict:
     red = [r for r in recent if states.get(r["id"]) == "red"]
     proposals = db.list_proposals("open")
 
-    costs: dict[str, float] = {}
+    money = ledger.Money()
     for run in runs:
-        usage = _usage(run)
-        cost = usage.get("cost")
-        if isinstance(cost, (int, float)):
-            currency = usage.get("currency") or "USD"
-            costs[currency] = round(costs.get(currency, 0.0) + float(cost), 6)
+        money.add(run.get("usage_json"), run.get("provider") or "")
 
     if failed or red:
         mood = "error"
@@ -108,7 +97,14 @@ def state(now: float | None = None) -> dict:
         "failed": len(failed),
         "red": len(red),
         "proposals": len(proposals),
-        "cost": costs,
+        # `cost` keeps its old shape -- a flat {currency: amount} map -- so the
+        # widget that already reads it keeps working. Money whose currency was
+        # not recorded is not put in that map under any code: it is a separate
+        # list, one entry per provider, and belongs to no currency total.
+        "cost": {
+            currency: bucket["total"] for currency, bucket in money.costs.items()
+        },
+        "cost_unlabeled": money.unlabeled,
         "updated_at": now,
     }
 
@@ -119,12 +115,17 @@ def describe(run: dict, verify_mark: str = "none") -> str:
     label = {"ok": "测试通过", "red": "测试红了", "none": "跑完但没验证"}.get(
         verify_mark, verify_mark
     )
-    usage = _usage(run)
-    cost = usage.get("cost")
+    parsed = ledger.parse(run.get("usage_json"))
     money = ""
-    if isinstance(cost, (int, float)):
-        symbol = "¥" if usage.get("currency") == "CNY" else (usage.get("currency") or "") + " "
-        money = f"，{symbol}{cost:.4f}"
+    if parsed.cost.amount is not None:
+        currency = parsed.cost.currency
+        if currency:
+            symbol = "¥" if currency == "CNY" else f"{currency} "
+            money = f"，{symbol}{parsed.cost.amount:.4f}"
+        else:
+            # One run, so there is no provider total to group: name the missing
+            # unit instead of borrowing a currency symbol for it.
+            money = f"，{ledger.UNKNOWN_LABEL} {parsed.cost.amount:.4f}"
     return f"{route} {label}{money}"
 
 

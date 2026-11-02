@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from . import db
+from . import db, ledger
 
 VERIFY_LABEL = {"ok": "通过", "red": "失败", "none": "未验证"}
 STATUS_LABEL = {
@@ -21,21 +21,23 @@ STATUS_LABEL = {
 }
 
 
-def _money(usage: dict) -> str:
-    cost = usage.get("cost")
-    if not isinstance(cost, (int, float)) or not cost:
+def _money(run: dict) -> str:
+    """One run's price for the table. Never borrows a symbol it did not record."""
+    priced = ledger.cost_of(run.get("usage_json"))
+    if priced is None:
         return "-"
-    symbol = "¥" if usage.get("currency") == "CNY" else "$"
-    return f"{symbol}{cost:.2f}"
-
-
-def _usage(run: dict) -> dict:
-    import json
-
-    try:
-        return json.loads(run.get("usage_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
+    amount, currency, _basis = priced
+    if not amount:
+        # A meter with 0.01 resolution reads zero for a cheap run; "-" says
+        # "no number", not "free".
+        return "-"
+    if currency == ledger.UNKNOWN_CURRENCY:
+        return f"{ledger.UNKNOWN_LABEL} {amount:.2f}"
+    if currency == "CNY":
+        return f"¥{amount:.2f}"
+    if currency == "USD":
+        return f"${amount:.2f}"
+    return f"{currency} {amount:.2f}"
 
 
 def collect(limit: int = 15) -> list[dict]:
@@ -53,7 +55,7 @@ def collect(limit: int = 15) -> list[dict]:
                 "agent": _endpoint(last),
                 "run_status": (last or {}).get("status") or "-",
                 "verify": mark,
-                "cost": _money(_usage(last)) if last else "-",
+                "cost": _money(last) if last else "-",
                 "updated": (last or {}).get("ended_at") or task.get("created_at") or 0,
             }
         )

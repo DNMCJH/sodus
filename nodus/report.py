@@ -7,23 +7,22 @@ example), the report says so instead of interpolating.
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
-from . import config, db
+from . import config, db, ledger
 
 #: Vendors bill in their own currency; never add two currencies together.
 CURRENCY_SYMBOL = {"USD": "$", "CNY": "¥"}
-COST_BASIS = {"metered": "实测扣费", "list_price": "价目表", "reported": "CLI 自报"}
-
-
-def _usage(run: dict) -> dict:
-    try:
-        data = json.loads(run.get("usage_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+COST_BASIS = {
+    "metered": "实测扣费",
+    "list_price": "价目表",
+    "reported": "CLI 自报",
+    # A row that never recorded `cost_basis` (the field postdates the oldest
+    # rows) did not say how it was priced. The old default here was "reported",
+    # which claims the CLI's own price book answered when nothing did.
+    "none": "未标注",
+}
 
 
 def _seconds(run: dict) -> float | None:
@@ -100,25 +99,27 @@ def collect(task_id: str) -> dict:
         "cache_read": 0,
         "cache_write": 0,
         "costs": {},
+        "unlabeled": [],
         "seconds": 0.0,
     }
+    money = ledger.Money()
     cost_agents: set[str] = set()
     cost_basis: set[str] = set()
     cost_below = 0
     for run in runs:
-        usage = _usage(run)
-        totals["in"] += int(usage.get("input_tokens") or 0)
-        totals["out"] += int(usage.get("output_tokens") or 0)
-        totals["cache_read"] += int(usage.get("cache_read") or 0)
-        totals["cache_write"] += int(usage.get("cache_write") or 0)
-        if isinstance(usage.get("cost"), (int, float)):
-            currency = usage.get("currency") or "USD"
-            totals["costs"][currency] = totals["costs"].get(currency, 0.0) + float(usage["cost"])
+        parsed = ledger.parse(run.get("usage_json"))
+        counted = parsed.tokens.as_report()
+        totals["in"] += counted["prompt"]
+        totals["out"] += counted["completion"]
+        totals["cache_read"] += counted["cache_read"]
+        totals["cache_write"] += counted["cache_write"]
+        if parsed.cost.amount is not None:
+            money.add(parsed, run.get("provider") or "")
             cost_agents.add(run["agent"])
-            cost_basis.add(usage.get("cost_basis") or "reported")
+            cost_basis.add(parsed.cost.basis or "none")
             # A meter with 0.01 resolution reads zero for cheap runs. Printing
             # that as "¥0.0000" would claim the work was free.
-            if not usage["cost"] and (usage.get("input_tokens") or usage.get("output_tokens")):
+            if not parsed.cost.amount and (parsed.tokens.input or parsed.tokens.output):
                 cost_below += 1
         seconds = _seconds(run)
         if seconds:
@@ -127,6 +128,8 @@ def collect(task_id: str) -> dict:
     started = [r["started_at"] for r in runs if r.get("started_at")]
     ended = [r["ended_at"] for r in runs if r.get("ended_at")]
     totals["wall"] = (max(ended) - min(started)) if started and ended else None
+    totals["costs"] = {currency: bucket["total"] for currency, bucket in money.costs.items()}
+    totals["unlabeled"] = money.unlabeled
     totals["cost_agents"] = sorted(cost_agents)
     totals["cost_basis"] = sorted(cost_basis)
     totals["cost_below_resolution"] = cost_below
@@ -176,6 +179,47 @@ def collect(task_id: str) -> dict:
     }
 
 
+def _amount_text(currency: str, amount: float) -> str:
+    symbol = CURRENCY_SYMBOL.get(currency)
+    return f"{symbol}{amount:.4f}" if symbol else f"{amount:.4f}"
+
+
+def _pricing_detail(totals: dict) -> str:
+    """``价目表；覆盖 claude；1 个 run 低于计量精度，记 0`` — task-wide facts."""
+    basis = "/".join(COST_BASIS.get(b, b) for b in totals.get("cost_basis") or [])
+    coverage = "/".join(totals.get("cost_agents") or [])
+    below = totals.get("cost_below_resolution") or 0
+    extra = f"；{below} 个 run 低于计量精度，记 0" if below else ""
+    return f"{basis or '来源未知'}；覆盖 {coverage}{extra}"
+
+
+def _cost_lines(totals: dict) -> list[str]:
+    """The price block: one line per bucket, never a cross-currency sum.
+
+    A task that spent in one currency keeps the old one-liner. A task that
+    spent in two gets one bullet each, because "¥0.0034 + $0.2500" invites the
+    reader to add two numbers with no common unit. Money that recorded no
+    currency gets its own bullet per provider: it is part of no currency total,
+    and one provider's unnamed amount is not added to another's either.
+    """
+    costs = sorted((totals.get("costs") or {}).items())
+    unlabeled = totals.get("unlabeled") or []
+    if not costs and not unlabeled:
+        return ["- 成本：未上报（agent CLI 没有返回 cost 字段，也没有可读的计费表）"]
+    detail = _pricing_detail(totals)
+    if len(costs) == 1 and not unlabeled:
+        currency, amount = costs[0]
+        return [f"- 成本：{_amount_text(currency, amount)}（{detail}）"]
+    lines = [f"- 成本：{currency} {_amount_text(currency, amount)}" for currency, amount in costs]
+    for row in unlabeled:
+        amount = f"{float(row.get('total') or 0):.4f}"
+        lines.append(f"- 成本：{ledger.unlabeled_line(row, amount)}")
+    # Basis and coverage are task-wide (the old report gathered them that way),
+    # so in the expanded form they are stated once instead of per bucket.
+    lines.append(f"- 计价依据：{detail}")
+    return lines
+
+
 def render_md(data: dict) -> str:
     task = data["task"]
     totals = data["totals"]
@@ -194,29 +238,17 @@ def render_md(data: dict) -> str:
         f"- token：in {totals['in']:,} / out {totals['out']:,} / "
         f"cache_read {totals['cache_read']:,} / cache_write {totals['cache_write']:,}",
     ]
-    if totals.get("costs"):
-        parts = " + ".join(
-            f"{CURRENCY_SYMBOL.get(cur, cur + ' ')}{amount:.4f}"
-            for cur, amount in sorted(totals["costs"].items())
-        )
-        basis = "/".join(COST_BASIS.get(b, b) for b in totals.get("cost_basis") or [])
-        below = totals.get("cost_below_resolution") or 0
-        extra = f"；{below} 个 run 低于计量精度，记 0" if below else ""
-        lines.append(
-            f"- 成本：{parts}（{basis or '来源未知'}；覆盖 {'/'.join(totals['cost_agents'])}{extra}）"
-        )
-    else:
-        lines.append("- 成本：未上报（agent CLI 没有返回 cost 字段，也没有可读的计费表）")
+    lines += _cost_lines(totals)
     lines += ["", "## 执行", "", "| run | 路由/端点 | 状态 | 用时 | in | out | cache_read |", "|---|---|---|---|---|---|---|"]
     for run in data["runs"]:
-        usage = _usage(run)
+        counted = ledger.parse(run.get("usage_json")).tokens.as_report()
         route = run.get("route") or run.get("agent") or "-"
         provider = run.get("provider") or ""
         endpoint = f"{route} → {provider}" if provider and provider != route else route
         lines.append(
             f"| {run['id']} | {endpoint} | {run.get('status')} | "
-            f"{_fmt_dur(_seconds(run))} | {int(usage.get('input_tokens') or 0):,} | "
-            f"{int(usage.get('output_tokens') or 0):,} | {int(usage.get('cache_read') or 0):,} |"
+            f"{_fmt_dur(_seconds(run))} | {counted['prompt']:,} | "
+            f"{counted['completion']:,} | {counted['cache_read']:,} |"
         )
     if not data["runs"]:
         lines.append("| （无） | | | | | | |")

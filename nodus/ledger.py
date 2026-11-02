@@ -37,6 +37,15 @@ from typing import Any, Iterable, Mapping
 #: the same sentinel `usage.py` prints, so a report does not need a mapping.
 UNKNOWN_CURRENCY = "-"
 
+#: What a human reads for the key above. The key stays a machine token; the
+#: six reports that print a currency bucket ask `currency_label`, so the same
+#: amount is not worded differently from one command to the next.
+UNKNOWN_LABEL = "未标注币种"
+
+#: Printed where the row did not record which provider it went through. Old
+#: rows predate the column, and a report must not guess an endpoint.
+PROVIDER_UNKNOWN = "来源未记录"
+
 #: What ``summarize()`` accepts for ``group_by``.
 GROUP_BYS = ("route", "model", "provider", "agent")
 
@@ -206,6 +215,45 @@ def currency_of(usage: Usage | Mapping[str, Any] | str | None) -> str:
     """The bucket key a cost belongs in; ``UNKNOWN_CURRENCY`` when unnamed."""
     parsed = usage if isinstance(usage, Usage) else parse(usage)
     return parsed.cost.currency or UNKNOWN_CURRENCY
+
+
+def currency_label(currency: str | None) -> str:
+    """The word to print for a currency bucket: the code, or ``未标注币种``.
+
+    Never ``"-"`` and never an empty string. Printing the sentinel as a
+    currency is how an unnamed amount starts looking like a real one, and an
+    empty one reads as "free".
+    """
+    text = str(currency or "").strip().upper()
+    if not text or text == UNKNOWN_CURRENCY:
+        return UNKNOWN_LABEL
+    return text
+
+
+def provider_label(provider: str | None) -> str:
+    """``来源 <name>``, or ``来源未记录`` when the row named none.
+
+    Both forms read inside the same parentheses in `unlabeled_line`, so the
+    missing case is a phrase rather than "来源 -".
+    """
+    text = str(provider or "").strip()
+    if not text or text == UNKNOWN_CURRENCY:
+        return PROVIDER_UNKNOWN
+    return f"来源 {text}"
+
+
+def unlabeled_line(row: Mapping[str, Any], amount: str) -> str:
+    """One source's unrecorded-currency money, in the sentence every report uses.
+
+    The caller formats `amount` with its own precision; this function owns the
+    words, so a task report, the pet and the cost command cannot call the same
+    bucket three different things. No currency symbol is added: there is no
+    unit, which is the whole reason the row is here instead of in a total.
+    """
+    return (
+        f"{UNKNOWN_LABEL}（{provider_label(row.get('provider'))}）"
+        f"  {row.get('runs')} 次  {amount}"
+    )
 
 
 def cost_of(value: Mapping[str, Any] | str | None) -> tuple[float, str, str] | None:
@@ -475,6 +523,79 @@ def currency_totals(rows: Iterable[Mapping[str, Any]]) -> dict[str, float]:
             totals.get(currency, 0.0) + float(parsed.cost.amount), 6
         )
     return totals
+
+
+class Money:
+    """Money from a set of runs: one bucket per currency, unlabeled kept apart.
+
+    ``costs`` has the same ``{currency: {total, runs}}`` shape `summarize()`
+    puts under ``totals["cost"]``. ``unlabeled`` is a list of ``{provider,
+    total, runs}`` and deliberately carries no grand total: two providers'
+    unnamed amounts are not known to share a unit, so adding them would invent
+    the exchange rate this module refuses to guess.
+
+    A caller adds one run at a time and reads the two properties at the end.
+    The class is here so that no print site can hold a single "cost" number and
+    then have to remember, on its own, whether it was allowed to add it up.
+    """
+
+    def __init__(self) -> None:
+        self._costs: dict[str, dict] = {}
+        self._unlabeled: dict[str, dict] = {}
+
+    def add(
+        self,
+        usage: Usage | Mapping[str, Any] | str | None,
+        provider: str = "",
+    ) -> str | None:
+        """File one row's price; returns its bucket key, or ``None`` if unpriced.
+
+        `provider` is read only for a row that recorded no currency, because
+        that is the one case where the report needs a source to group by. A
+        row that named its currency never inherits a provider's unit.
+        """
+        parsed = usage if isinstance(usage, Usage) else parse(usage)
+        amount = parsed.cost.amount
+        if amount is None:
+            return None
+        currency = parsed.cost.currency
+        if currency and currency != UNKNOWN_CURRENCY:
+            bucket = self._costs.setdefault(currency, {"total": 0.0, "runs": 0})
+            bucket["total"] += float(amount)
+            bucket["runs"] += 1
+            return currency
+        key = str(provider or "").strip() or UNKNOWN_CURRENCY
+        bucket = self._unlabeled.setdefault(key, {"total": 0.0, "runs": 0})
+        bucket["total"] += float(amount)
+        bucket["runs"] += 1
+        return UNKNOWN_CURRENCY
+
+    @property
+    def costs(self) -> dict[str, dict]:
+        return {
+            currency: {"total": round(money["total"], 6), "runs": money["runs"]}
+            for currency, money in sorted(self._costs.items())
+        }
+
+    @property
+    def unlabeled(self) -> list[dict]:
+        return [
+            {
+                "provider": provider,
+                "total": round(money["total"], 6),
+                "runs": money["runs"],
+            }
+            for provider, money in sorted(self._unlabeled.items())
+        ]
+
+    def currencies(self) -> list[str]:
+        return sorted(self._costs)
+
+    def amount(self, currency: str) -> float:
+        return round(self._costs.get(currency.upper(), {}).get("total", 0.0), 6)
+
+    def empty(self) -> bool:
+        return not self._costs and not self._unlabeled
 
 
 def spent(

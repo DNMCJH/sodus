@@ -85,9 +85,91 @@ def test_render_includes_totals_and_verification():
 
 def test_render_states_missing_cost_instead_of_guessing():
     data = _data()
-    data["totals"] = {**data["totals"], "costs": {}, "cost_agents": []}
+    data["totals"] = {**data["totals"], "costs": {}, "unlabeled": [], "cost_agents": []}
     md = report.render_md(data)
     assert "成本：未上报" in md
+
+
+def test_render_keeps_one_currency_on_the_old_single_line():
+    """A task that spent yuan only must not get the verbose split layout."""
+    data = _data()
+    data["totals"] = {
+        **data["totals"],
+        "costs": {"CNY": 0.0034},
+        "unlabeled": [],
+        "cost_basis": ["list_price"],
+        "cost_agents": ["minimax"],
+        "cost_below_resolution": 0,
+    }
+    md = report.render_md(data)
+    assert "- 成本：¥0.0034（价目表；覆盖 minimax）" in md
+    assert "计价依据" not in md
+
+
+def test_render_gives_each_currency_its_own_line_and_never_adds_them():
+    data = _data()
+    data["totals"] = {
+        **data["totals"],
+        "costs": {"CNY": 0.0034, "USD": 0.25},
+        "unlabeled": [],
+        "cost_basis": ["list_price", "reported"],
+        "cost_agents": ["claude", "minimax"],
+    }
+    md = report.render_md(data)
+    assert "- 成本：CNY ¥0.0034" in md
+    assert "- 成本：USD $0.2500" in md
+    assert "0.2534" not in md  # the two are not a total
+
+
+def test_collect_does_not_call_a_missing_currency_usd(tmp_path, monkeypatch):
+    """The old block defaulted a missing currency to USD: a 7x overstatement."""
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    task = db.create_task("demo", "pytest green")
+    for provider, usage in (
+        ("relay-old", {"cost": 0.25}),
+        ("relay-old", {"cost": 0.75}),
+        ("relay-cny", {"cost": 1.0, "currency": "CNY"}),
+    ):
+        run = db.create_run(task["id"], "claude", str(tmp_path), provider=provider)
+        db.update_run(
+            run["id"],
+            status="completed",
+            started_at=100.0,
+            ended_at=101.0,
+            usage_json=json.dumps(usage),
+        )
+
+    data = report.collect(task["id"])
+
+    assert data["totals"]["costs"] == {"CNY": 1.0}
+    assert data["totals"]["unlabeled"] == [
+        {"provider": "relay-old", "total": 1.0, "runs": 2}
+    ]
+    md = report.render_md(data)
+    assert "- 成本：CNY ¥1.0000" in md
+    assert "未标注币种（来源 relay-old）  2 次  1.0000" in md
+    assert "$" not in md
+
+
+def test_the_unlabeled_block_lists_each_provider_and_no_total(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    task = db.create_task("demo", "pytest green")
+    for provider, cost in (("relay-a", 1.0), ("relay-b", 0.5), ("relay-b", 0.25)):
+        run = db.create_run(task["id"], "claude", str(tmp_path), provider=provider)
+        db.update_run(
+            run["id"],
+            status="completed",
+            started_at=100.0,
+            ended_at=101.0,
+            usage_json=json.dumps({"cost": cost}),
+        )
+
+    md = report.render_md(report.collect(task["id"]))
+
+    assert "未标注币种（来源 relay-a）  1 次  1.0000" in md
+    assert "未标注币种（来源 relay-b）  2 次  0.7500" in md
+    assert "1.7500" not in md  # two providers are not one total
+    assert "¥" not in md.split("## 执行")[0]
 
 
 def test_render_lists_review_findings_source():

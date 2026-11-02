@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import db
+from . import db, ledger
 
 #: Hard stop for any walk. A hand-edited or corrupted parent link must not turn
 #: `nodus lineage` into an infinite loop.
@@ -250,7 +250,7 @@ def for_run(run_id: str) -> dict:
 def _run_summary(run: dict, verify: str) -> dict:
     started = run.get("started_at") or 0
     ended = run.get("ended_at") or 0
-    usage = _json(run.get("usage_json"))
+    parsed = ledger.parse(run.get("usage_json"))
     status = run.get("status") or ""
     return {
         "id": run["id"],
@@ -267,8 +267,10 @@ def _run_summary(run: dict, verify: str) -> dict:
         "ok": status == "completed" and verify == "ok",
         "unverified": status == "completed" and verify == "none",
         "seconds": round(ended - started, 1) if ended and started else None,
-        "cost": usage.get("cost"),
-        "currency": usage.get("currency") or "",
+        "cost": parsed.cost.amount,
+        # "" (not "-"): this field is a run's own record, and the sentinel is a
+        # report key. `_cost` turns "" into the words for a missing unit.
+        "currency": parsed.cost.currency or "",
         "vendor_session": _vendor(run),
         "error": run.get("error") or "",
         "started_at": started,
@@ -276,13 +278,20 @@ def _run_summary(run: dict, verify: str) -> dict:
 
 
 def _route_summary(runs: list[dict]) -> list[dict]:
+    """Per-route totals. Money is one bucket per currency, never one number.
+
+    `Money` keeps a route's yuan and its dollars apart and files a price that
+    recorded no unit under the provider that spent it. The old version added
+    every amount into one float and then labelled the sum with whichever
+    currency it saw first, which is a number that cannot be true.
+    """
     buckets: dict[str, dict] = {}
     for run in runs:
         name = run["route"] or "?"
         bucket = buckets.setdefault(
             name,
             {"route": name, "runs": 0, "ok": 0, "unverified": 0, "failed": 0,
-             "seconds": [], "cost": 0.0, "currency": "", "sessions": []},
+             "seconds": [], "money": ledger.Money(), "sessions": []},
         )
         bucket["runs"] += 1
         if run["ok"]:
@@ -293,16 +302,19 @@ def _route_summary(runs: list[dict]) -> list[dict]:
             bucket["failed"] += 1
         if run["seconds"] is not None:
             bucket["seconds"].append(run["seconds"])
-        if isinstance(run["cost"], (int, float)):
-            bucket["cost"] += float(run["cost"])
-            bucket["currency"] = bucket["currency"] or run["currency"]
+        bucket["money"].add(
+            {"cost": run["cost"], "currency": run["currency"]},
+            run.get("provider") or "",
+        )
         if run["vendor_session"] and run["vendor_session"] not in bucket["sessions"]:
             bucket["sessions"].append(run["vendor_session"])
     out = []
     for bucket in buckets.values():
         seconds = bucket.pop("seconds")
+        money = bucket.pop("money")
         bucket["avg_seconds"] = round(sum(seconds) / len(seconds), 1) if seconds else None
-        bucket["cost"] = round(bucket["cost"], 6) if bucket["cost"] else None
+        bucket["costs"] = money.costs
+        bucket["unlabeled"] = money.unlabeled
         out.append(bucket)
     out.sort(key=lambda b: (-b["runs"], b["route"]))
     return out
@@ -436,7 +448,27 @@ def _cost(run: dict) -> str:
     cost = run.get("cost")
     if not isinstance(cost, (int, float)):
         return "-"
-    return f"{cost:.4g} {run.get('currency') or ''}".strip()
+    return f"{cost:.4g} {ledger.currency_label(run.get('currency'))}"
+
+
+def _route_money(route: dict) -> tuple[str, list[str]]:
+    """(text for the route line, continuation lines), one bucket per line.
+
+    A route priced in a single currency keeps its old inline form. A route
+    with more than one currency, or with money that recorded no currency, gets
+    its numbers on their own lines: the line has room for one field, and
+    squeezing two units into it is how the old code ended up printing a
+    yuan+dollar sum under the first currency it saw.
+    """
+    costs = sorted((route.get("costs") or {}).items())
+    unlabeled = route.get("unlabeled") or []
+    if len(costs) == 1 and not unlabeled:
+        currency, bucket = costs[0]
+        return f"{bucket['total']:.4g} {ledger.currency_label(currency)}", []
+    lines = [f"{ledger.currency_label(cur)}  {bucket['total']:.4g}" for cur, bucket in costs]
+    for row in unlabeled:
+        lines.append(ledger.unlabeled_line(row, f"{row['total']:.4g}"))
+    return "", lines
 
 
 def _render_run(data: dict) -> list[str]:
@@ -445,7 +477,7 @@ def _render_run(data: dict) -> list[str]:
         return ["(no run)"]
     task = data.get("task") or {}
     session = data.get("session") or {}
-    usage = _json(run.get("usage_json"))
+    parsed = ledger.parse(run.get("usage_json"))
     verify = db.verify_states([run["id"]]).get(run["id"], "none")
     seconds = ""
     if run.get("ended_at") and run.get("started_at"):
@@ -453,7 +485,8 @@ def _render_run(data: dict) -> list[str]:
     lines = [
         f"run     {run['id']}  {run.get('status') or '?'}  route={run.get('route') or '?'}"
         f"  agent={run.get('agent') or '?'}  provider={run.get('provider') or '?'}"
-        f"  verify={verify}  {seconds}  {_cost({'cost': usage.get('cost'), 'currency': usage.get('currency')})}",
+        f"  verify={verify}  {seconds}"
+        f"  {_cost({'cost': parsed.cost.amount, 'currency': parsed.cost.currency})}",
         f"task    {task.get('id') or '?'}  {_title(task)}",
         f"session {session.get('id') or '-'}  {(session.get('relation') or '-'):<6}  {_title(session)}",
     ]
@@ -515,10 +548,12 @@ def _render_task(data: dict) -> list[str]:
     lines.append("routes:")
     for route in data.get("routes") or []:
         avg = f"{route['avg_seconds']:.0f}s" if route.get("avg_seconds") is not None else "-"
+        money, extra = _route_money(route)
         lines.append(
             f"  {route['route']:<10} {route['runs']} run(s)  {route['ok']} ok  "
-            f"{route['failed']} failed  avg {avg}  {_cost(route)}"
+            f"{route['failed']} failed  avg {avg}" + (f"  {money}" if money else "")
         )
+        lines += [f"             {line}" for line in extra]
     return lines
 
 

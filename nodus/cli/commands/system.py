@@ -16,6 +16,7 @@ from ... import (
     decision,
     daemon,
     desk as desk_view,
+    ledger,
     policy,
     providers,
     routes,
@@ -140,29 +141,64 @@ def cost(args) -> int:
         print(f"  per call               {cal.per_call:.4e}")
     print(f"单位：站内余额；× cost_rate(relay_unit)={rate} = CNY")
 
-    calibrated = observed = 0.0
+    # One bucket per currency; money that recorded no currency is grouped by
+    # provider instead. The drift is (bill - calibration) / calibration, and
+    # the bill side is CNY by construction (`_price` multiplies the meter's
+    # relay units by `cost_rate`, which is a CNY rate). So only the CNY bucket
+    # can be compared: converting a dollar amount to reach the bill would be
+    # the invented exchange rate this command exists to avoid printing.
+    buckets: dict[str, dict] = {}
+    unlabeled: dict[str, dict] = {}
     counted = 0
     for run in db.list_runs(limit=200):
-        try:
-            usage = json.loads(run.get("usage_json") or "{}")
-        except json.JSONDecodeError:
+        parsed = ledger.parse(run.get("usage_json"))
+        if parsed.cost.basis != "calibrated":
             continue
-        if usage.get("cost_basis") != "calibrated":
+        observed = parsed.raw.get("meter_observed")
+        if not ledger.number(observed):
             continue
-        if not isinstance(usage.get("meter_observed"), (int, float)):
+        amount = parsed.cost.amount
+        if amount is None:
             continue
-        calibrated += float(usage["cost"])
-        observed += float(usage["meter_observed"])
+        currency = ledger.currency_of(parsed)
+        if currency == ledger.UNKNOWN_CURRENCY:
+            bucket = unlabeled.setdefault(
+                str(run.get("provider") or "").strip() or ledger.UNKNOWN_CURRENCY,
+                {"calibrated": 0.0, "runs": 0},
+            )
+        else:
+            bucket = buckets.setdefault(currency, {"calibrated": 0.0, "observed": 0.0, "runs": 0})
+            bucket["observed"] += float(observed)
+        bucket["calibrated"] += float(amount)
+        bucket["runs"] += 1
         counted += 1
         if counted >= args.runs:
             break
-    if counted:
+
+    mixed = len(buckets) + len(unlabeled) > 1
+    for currency, bucket in sorted(buckets.items()):
+        scope = f"（{currency}）" if mixed else ""
+        if currency != "CNY":
+            print(
+                f"\n最近 {bucket['runs']} 个已标定的 run{scope}："
+                f"标定合计 {bucket['calibrated']:.4f}；账单侧只有 CNY，不换算、不比较"
+            )
+            continue
+        calibrated, observed = bucket["calibrated"], bucket["observed"]
         drift = (observed - calibrated) / calibrated * 100 if calibrated else 0.0
         print(
-            f"\n最近 {counted} 个已标定的 run：标定合计 ¥{calibrated:.4f}，"
+            f"\n最近 {bucket['runs']} 个已标定的 run{scope}：标定合计 ¥{calibrated:.4f}，"
             f"账单合计 ¥{observed:.4f}（{drift:+.1f}%）"
         )
         print("账单那侧含并发重叠，只作漂移参考；持续偏离说明 relay 调价了，重跑标定。")
+    for provider, bucket in sorted(unlabeled.items()):
+        amount = f"标定合计 {bucket['calibrated']:.4f}；账单侧只有 CNY，不换算、不比较"
+        print(
+            "\n"
+            + ledger.unlabeled_line(
+                {"provider": provider, "runs": bucket["runs"]}, amount
+            )
+        )
     return 0
 
 
@@ -440,6 +476,10 @@ def _money_text(cost: dict) -> str:
                 shown = f"{total:.4f}"
             parts.append(f"¥{shown}")
         elif currency == usage_stats.UNKNOWN_CURRENCY:
+            # Left as the old wording on purpose: `nodus stats` is not one of
+            # the six displays this change reworks, and its unlabeled bucket is
+            # still a single number (no provider split), which is the shape the
+            # six no longer use. See docs/overlap-audit.md 1.4.
             parts.append(f"币种未记录 {total:.4f}")
         else:
             parts.append(f"{currency} {total:.4f}")

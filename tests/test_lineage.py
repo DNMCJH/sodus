@@ -250,11 +250,44 @@ def test_for_task_counts_routes_and_finds_the_first_success(home):
     routes = {row["route"]: row for row in data["routes"]}
     assert routes["claude"]["ok"] == 1 and routes["claude"]["failed"] == 0
     assert routes["codex"]["ok"] == 0 and routes["codex"]["failed"] == 1
-    assert routes["claude"]["cost"] == pytest.approx(0.25)
-    assert routes["codex"]["cost"] == pytest.approx(0.05)
+    assert routes["claude"]["costs"] == {"USD": {"total": 0.25, "runs": 1}}
+    assert routes["codex"]["costs"] == {"USD": {"total": 0.05, "runs": 1}}
+    assert routes["claude"]["unlabeled"] == []
     # The task's own sitting is the tail of the history it was launched from.
     assert data["sessions"][-1]["id"] == task["session_id"]
     assert data["runs"][1]["error"] == "boom"
+
+
+def test_a_route_with_two_currencies_never_prints_one_number(home):
+    """CNY + USD + an unlabeled run: three buckets, three lines, no sum.
+
+    The old `_route_summary` added all three into one float and labelled the
+    result with whichever currency it met first — a total no exchange rate can
+    reproduce. The route line now keeps the money off it unless there is
+    exactly one bucket, and the unlabeled amount is grouped by provider.
+    """
+    task = db.create_task("mixed money")
+    for provider, usage in (
+        ("relay-cny", {"cost": 1.0, "currency": "CNY"}),
+        ("relay-usd", {"cost": 0.5, "currency": "USD"}),
+        ("relay-old", {"cost": 0.25}),
+        ("relay-old", {"cost": 0.75}),
+    ):
+        run = db.create_run(task["id"], "claude", cwd=str(Path.cwd()), route="claude",
+                            provider=provider)
+        db.update_run(run["id"], status="completed", started_at=time.time() - 5,
+                      ended_at=time.time(), usage_json=json.dumps(usage))
+
+    data = lineage.for_task(task["id"])
+    route = data["routes"][0]
+
+    assert route["costs"] == {"CNY": {"total": 1.0, "runs": 1}, "USD": {"total": 0.5, "runs": 1}}
+    assert route["unlabeled"] == [{"provider": "relay-old", "total": 1.0, "runs": 2}]
+    text = lineage.render({"kind": "task", **data})
+    assert "CNY  1" in text and "USD  0.5" in text
+    assert "未标注币种（来源 relay-old）  2 次  1" in text
+    # The sum of 1.0 + 0.5 + 1.0 must not appear as one currency's total.
+    assert "2.5 CNY" not in text and "2.5 USD" not in text
 
 
 def test_a_completed_run_with_red_verification_is_not_a_success(home):

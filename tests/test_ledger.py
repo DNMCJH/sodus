@@ -232,6 +232,60 @@ def test_currency_totals_keeps_each_currency_separate():
     assert ledger.currency_totals(rows) == {"CNY": 1.0, "USD": 2.0, ledger.UNKNOWN_CURRENCY: 3.0}
 
 
+# ---- the per-report accumulator --------------------------------------
+#
+# `Money` is what the six display sites add a run into. It is tested here once
+# so that none of them has to re-test the arithmetic, only its own sentence.
+
+
+def test_money_keeps_currencies_apart_and_groups_unlabeled_by_provider():
+    money = ledger.Money()
+    money.add({"cost": 1.0, "currency": "CNY"}, "relay")
+    money.add({"cost": 0.5, "currency": "usd"}, "relay")
+    money.add({"cost": 0.25}, "relay-old")
+    money.add({"cost": 0.75}, "claude")
+    money.add({"input_tokens": 10}, "relay")  # unpriced: belongs in no bucket
+
+    assert money.costs == {
+        "CNY": {"total": 1.0, "runs": 1},
+        "USD": {"total": 0.5, "runs": 1},
+    }
+    assert money.unlabeled == [
+        {"provider": "claude", "total": 0.75, "runs": 1},
+        {"provider": "relay-old", "total": 0.25, "runs": 1},
+    ]
+    assert money.amount("CNY") == 1.0
+    assert money.amount("USD") == 0.5
+    assert money.currencies() == ["CNY", "USD"]
+
+
+def test_money_treats_the_sentinel_as_unlabeled_not_as_a_currency():
+    """`bench`'s results.json writes "-"; it must not become a bucket called "-"."""
+    money = ledger.Money()
+    money.add({"cost": 3.0, "currency": ledger.UNKNOWN_CURRENCY}, "relay-old")
+    assert money.costs == {}
+    assert money.unlabeled == [{"provider": "relay-old", "total": 3.0, "runs": 1}]
+    assert not money.empty()
+    assert ledger.Money().empty()
+
+
+def test_currency_label_is_never_the_sentinel_or_a_blank():
+    assert ledger.currency_label("CNY") == "CNY"
+    assert ledger.currency_label("cny") == "CNY"
+    assert ledger.currency_label(ledger.UNKNOWN_CURRENCY) == ledger.UNKNOWN_LABEL
+    assert ledger.currency_label("") == ledger.UNKNOWN_LABEL
+    assert ledger.currency_label(None) == ledger.UNKNOWN_LABEL
+
+
+def test_unlabeled_line_names_one_source_and_prints_no_symbol():
+    line = ledger.unlabeled_line({"provider": "relay-old", "runs": 2}, "1.0000")
+    assert line == "未标注币种（来源 relay-old）  2 次  1.0000"
+    assert "¥" not in line and "$" not in line
+    assert ledger.unlabeled_line({"runs": 1}, "0.5000") == (
+        "未标注币种（来源未记录）  1 次  0.5000"
+    )
+
+
 # ---- the board's per-agent money page --------------------------------
 
 
