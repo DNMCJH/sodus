@@ -56,7 +56,7 @@
 
 ### 1.2 收口记录（2026-11-03，第二批）
 
-- **C6 已收口**，提交 `0daefb6`。`recover.estimate_cost` / `_task_remaining` /
+- **C6 已收口**，提交 `a405f16`。`recover.estimate_cost` / `_task_remaining` /
   `_over_budget` 三处不再自己 `json.loads(usage_json)`，改调 `ledger.amount_in` /
   `ledger.spent`；`amount_in` 是新增的"一行版 `spent`"，解析仍只有 `ledger.parse` 一处。
   币种读法作为实参写在每个调用点，不在 ledger 里设默认：
@@ -64,12 +64,12 @@
     显式写了别的币种的 run 不进均值；
   - `_task_remaining`：同样把没记币种算作预算币种（该函数只支持 CNY）；
   - `_over_budget`：预算写了币种时严格只算该币种；没写币种时按 CNY 读。这是本轮唯一的
-    行为修正：旧实现在"没写币种"时把 CNY 和 USD 直接相加，和同一份 budget 的
-    `_task_remaining`（按 CNY 读）互相矛盾。真实库 0 个 task 有 budget
-    （`task.budget_json` 非空 0 行），所以没有真实 run 的结论变化；4 组合成预算 ×
-    全部真实 task/run 对比，`_over_budget` 0 差异。
+    预算结论修正（另一处是 `cost: true` 不再当成 1 元，真实库 0 行）：旧实现在"没写币种"
+    时把 CNY 和 USD 直接相加，和同一份 budget 的 `_task_remaining`（按 CNY 读）互相矛盾。
+    真实库 0 个 task 有 budget（`task.budget_json` 非空 0 行），所以没有真实 run 的结论
+    变化；4 组合成预算 × 全部真实 task/run 对比，`_over_budget` 0 差异。
   验收：323 条真实 run 逐条对比旧/新 `estimate_cost`，0 差异；`pytest` 全绿。
-- **C7 已收口**，提交 `0daefb6`。`usage --days` 的费用依据缺省值此前是两个词：
+- **C7 已收口**，提交 `a405f16`。`usage --days` 的费用依据缺省值此前是两个词：
   `af659e7` 之前 `telemetry` 写 `reported`（含义是 CLI 自报，错的），之后写 `none`
   （CLI 原样打印英文 key）。现在统一显示 **未标注**：这条 run 没有记录 `cost_basis`
   （字段比最老的行新），既不是 CLI 自报，也不是实测；真正 `cost_basis=reported` 的
