@@ -38,6 +38,7 @@ from . import (
     runner,
     ui,
     verify,
+    watchdog,
 )
 
 MAX_BODY = 1_000_000
@@ -1585,14 +1586,95 @@ def _stop_entry(entry: dict, reason: str, *, settled: bool) -> dict:
     return entry
 
 
+def _stalled_row(run: dict, facts: dict[str, dict]) -> dict:
+    """One 已停止 row for a run the watchdog marked `stalled`.
+
+    A stalled run is not a failure: there is no error, no exit code and no
+    failure class to name. The `run.stalled` event is the evidence, so the card
+    repeats it instead of inventing a cause.
+
+    It lands in `stopped` because nothing is moving any more, and `handling` is
+    the block for work the machine is actively doing; a stall is the absence of
+    that. No new counter: the row is part of `stopped`'s length, and `failed`
+    stays a count of terminal failures.
+    """
+    run_id = str(run.get("id") or "")
+    signs = _events(run_id, ("run.stalled",))
+    sign = signs[-1] if signs else {}
+    payload = sign.get("payload") or {}
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        idle = max(0.0, time.time() - float(run.get("started_at") or 0))
+        message = f"无实质进展：最后事件是 run.started，距今 {idle / 60:.1f} 分钟"
+    raw_idle = payload.get("idle_seconds")
+    if isinstance(raw_idle, (int, float)):
+        span = (
+            f"{float(raw_idle):.0f} 秒"
+            if raw_idle < 120
+            else f"{float(raw_idle) / 60:.1f} 分钟"
+        )
+    else:
+        span = "一段时间"
+    change = _change_evidence(run, deep=False)
+    entry = _run_entry(
+        run,
+        facts,
+        "没有失败，只是没有在动。",
+        state="none",
+        evidence=False,
+        kind="stalled",
+    )
+    plan = (
+        "先看日志确认卡在哪一步；要接着跑就点「重试」，"
+        "不想继续就让它停着（自动恢复不会重试它）。"
+    )
+    entry.update(
+        {
+            "kind": "stopped",
+            "stop_reason": "stalled",
+            "settled": False,
+            "at": sign.get("ts") or payload.get("last_at") or run.get("started_at"),
+            "title": "卡住了：没有实质进展",
+            "headline": message,
+            "statement": message,
+            "why": (
+                f"不是报错，也没有退出：{span}里没有 tool_call、文件改动或状态变化；"
+                "可能卡在模型调用或工具上。"
+            ),
+            "cause": "",
+            "cause_line": "没有失败可归因：这是一次没有进展的运行，不是报错。",
+            "failure_kind": "",
+            "likely_cause": "没有失败可归因：这是一次没有进展的运行，不是报错。",
+            "retry_line": "未重试（原因：没有失败，自动恢复只处理 failed 的 run）",
+            "history": [],
+            "plan": plan,
+            "suggestion": plan,
+            "change": _change_line(change),
+            "evidence": {
+                "action": _last_action(run).get("text") or "",
+                "error_tail": "",
+                "error_source": "",
+                "tests": [],
+                "test_cmd": "",
+                "test_exit": None,
+                "change": change,
+                "attempts": [],
+                "missing": [],
+            },
+        }
+    )
+    return entry
+
+
 def _stopped(
     runs: list[dict], states: dict[str, str], facts: dict[str, dict], now: float
 ) -> tuple[list[dict], list[dict]]:
     """Failures the machine is done with, told as a report, not a request.
 
     `stopped` is everything no longer moving: a spent retry chain, a repeated
-    signature, a deterministic error, a red test nobody owns, and the older
-    failures a later retry moved past (`settled`, also returned separately as
+    signature, a deterministic error, a red test nobody owns, a run the
+    watchdog marked `stalled` (no progress, no failure), and the older failures
+    a later retry moved past (`settled`, also returned separately as
     `history_failures` for the old callers).
 
     Each row answers three things — what I tried, why I stopped, where the
@@ -1661,6 +1743,9 @@ def _stopped(
             why=plan["why"] or problem,
         )
         stopped.append(_stop_entry(entry, gate, settled=False))
+    for run in runs:
+        if str(run.get("status") or "") == "stalled":
+            stopped.append(_stalled_row(run, facts))
     # A red test on a completed run: the acceptance failed and recovery does
     # not own completed runs, so nobody is retrying it.
     red = [
@@ -1935,8 +2020,9 @@ def board_state(now: float | None = None) -> dict:
     - `handling`: the failures the machine is on right now, with the attempt
       number, the history, the likely cause and the plan.
     - `stopped`: the ones it has finished with (spent chain, repeated error,
-      deterministic error, red test nobody owns) plus the older failures a
-      retry moved past. A report, not a question.
+      deterministic error, red test nobody owns, a run the watchdog marked
+      `stalled`) plus the older failures a retry moved past. A report, not a
+      question.
     - `unverifiable`: runs that completed with no test evidence. Information;
       it says why, and what would make the next run verifiable.
 
@@ -2541,6 +2627,17 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         recover.start(log=_log)
     else:
         _log("auto-recover disabled (NODUS_AUTO_RECOVER=0)")
+    # The other half of "a run is not moving": recovery owns failures, the
+    # watchdog owns rows that are still `running` but silent. `stalled` had no
+    # writer before this; `NODUS_WATCHDOG=0` turns the loop off. One sweep is
+    # cheap (live rows only) and never kills a run recovery is already handling.
+    if watchdog.enabled():
+        try:
+            watchdog.start(log=_log)
+        except Exception:  # noqa: BLE001 - the board outranks the watchdog
+            _log("watchdog failed to start:\n" + traceback.format_exc())
+    else:
+        _log("watchdog disabled (NODUS_WATCHDOG=0)")
     # The board's money is only as fresh as the last import. This used to be a
     # manual step, so a weekend of conversations sat unread in DSH's session
     # files while /board showed the previous number. A broken sweep is logged
