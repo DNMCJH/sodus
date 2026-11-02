@@ -123,6 +123,50 @@ SUGGESTION: dict[str, str] = {
     "unknown": "先看最后一次动作和报错尾部，再决定重跑还是自己接手。",
 }
 
+#: What to actually do, per cause. Every one of these names an action; none of
+#: them says "由你决定". Keyed by cause, not by label: the display sentence and
+#: the action are two projections of one row, so a renamed cause cannot lose
+#: its advice while the sentence moves on.
+ADVICE: dict[str, str] = {
+    "orphaned": "先确认 daemon 没在重启、机器没休眠，再点「重跑」；总在同一个秒数附近死就换 codex 路由重试，或自己接手。",
+    "timeout": "先看日志最后停在哪一步，再点「重跑」；每次都卡在同一个地方就换 codex 路由重试一次，或自己接手。",
+    "network": "先确认要连的服务起着、网络是通的，再点「重跑」；反复断就换一条路由重试。",
+    "5xx": "等几分钟再点「重跑」；同一个 5xx 反复出现就自己接手。",
+    "rate-limit": "等几分钟再点「重跑」；一直 429 就换一条路由重试，或自己接手。",
+    "auth": "换上有效的密钥或补权限，再点「重跑」；也可以换 codex 路由重试，或者自己接手。",
+    "bad-request": "按报错改这次指令/模型/参数（上下文太长就拆小，或换一条长上下文路由），改完再点「重跑」。",
+    "model-missing": "换一个可用模型（或换路由）再点「重跑」；模型名要在配置里改。",
+    "content-policy": "换个说法或换一个模型再点「重跑」；同样的内容再发一次还是会被拦，反复拦就自己接手。",
+    "tests-red": "先修失败的那条测试，改完点「重跑」；测试红着再跑一遍不会自己变绿。",
+    "no-change": "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，或者自己翻日志（旧记录补不回来）。",
+    "exit-code": "它自己退了但没打印报错：先点「看日志」翻完整输出，再决定重跑；找不到原因就自己接手。",
+    "unknown": "先点「看日志」读第一条报错，确认它停在哪一步，再决定重跑还是自己接手。",
+}
+
+#: The same action as a *noun phrase* instead of an order. A stopped row is a
+#: report of what happened, so its cause line says what would have to change,
+#: not what the reader must do. Read from the same row as `ADVICE`.
+FIX: dict[str, str] = {
+    "orphaned": "确认 daemon 没有在重启、机器没有休眠",
+    "timeout": "换一条路由再试，或换个做法",
+    "network": "确认服务起着、网络恢复，或换一条路由",
+    "5xx": "等一会，或换一条路由",
+    "rate-limit": "等限流过去，或换一条路由",
+    "auth": "换上有效的密钥或补权限",
+    "bad-request": "改请求参数、输入或上下文长度",
+    "model-missing": "改配置里的模型名",
+    "content-policy": "换说法或换模型",
+    "tests-red": "把失败的测试修过",
+    "no-change": "重新跑一遍拿到新证据",
+    "exit-code": "读完整日志定位它退在哪一步",
+    "unknown": "读完整日志定位它停在哪一步",
+}
+
+#: The display label back to its machine cause. A rendered cause is
+#: `大概率是<label>（报错是 …）`; this is how the advice table is found again
+#: from that sentence without a second lookup table.
+CAUSE_BY_LABEL: dict[str, str] = {label: cause for cause, label in KINDS.items()}
+
 #: Why a retry cannot help, in the operator's terms. Empty for a transient cause.
 WHY_NOT_RETRIED: dict[str, str] = {
     "auth": "上游判定这次请求无权（401/403）。密钥和权限不变，再发一次还是同一个结果。",
@@ -254,6 +298,45 @@ def problem(cause: str) -> str:
 def suggestion(cause: str) -> str:
     """What to do about `cause`."""
     return SUGGESTION.get(str(cause or ""), SUGGESTION["unknown"])
+
+
+def label_of(text: str) -> str:
+    """The bare label (`进程被外部杀掉`) out of `大概率是进程被外部杀掉（报错是 …）`.
+
+    Some causes carry a detail after a colon (`大概率是测试红：…`); the label is
+    what sits between `大概率是` and the first of `（` / `：`. A bare label or a
+    cause code with no decoration comes back unchanged.
+    """
+    label = re.split(r"[（：]", str(text or ""), maxsplit=1)[0]
+    return label.replace("大概率是", "", 1).strip()
+
+
+def _cause_for(text: str) -> str:
+    """The cause behind either a cause code or a rendered cause detail."""
+    value = str(text or "")
+    if value in ADVICE:
+        return value
+    return CAUSE_BY_LABEL.get(label_of(value), "")
+
+
+def advice_of(cause: str) -> str:
+    """The action for a cause; "" for anything that is not one."""
+    return ADVICE.get(str(cause or ""), "")
+
+
+def fix_of(cause: str) -> str:
+    """The change a stopped row names for a cause; "" for anything else."""
+    return FIX.get(str(cause or ""), "")
+
+
+def advice(text: str) -> str:
+    """The action described by a cause or a rendered cause detail, or ""."""
+    return ADVICE.get(_cause_for(text), "")
+
+
+def fix(text: str) -> str:
+    """The change named by a cause or a rendered cause detail, or ""."""
+    return FIX.get(_cause_for(text), "")
 
 
 def why_not_retried(cause: str) -> str:

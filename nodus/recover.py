@@ -253,8 +253,8 @@ def signature_text(sig: dict | None) -> str:
     """One readable phrase for a signature, used in the "why not retry" line."""
     sig = sig or {}
     where = _STAGE_LABEL.get(str(sig.get("stage") or ""), "未知阶段")
-    what = str(sig.get("error") or "").strip() or _PROBLEM.get(
-        str(sig.get("cause") or ""), "执行失败"
+    what = str(sig.get("error") or "").strip() or diagnosis.problem(
+        str(sig.get("cause") or "")
     )
     return f"都在{where}阶段、都是「{_short(what, 80)}」"
 

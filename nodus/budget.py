@@ -61,16 +61,8 @@ def spent(now: float | None = None) -> float:
     and the two are not the same question.
     """
     start = day_start(now)
-    conn = db.connect()
-    try:
-        rows = conn.execute(
-            "SELECT usage_json FROM run WHERE workspace_id=? AND started_at IS NOT NULL"
-            " AND started_at>=?",
-            (config.workspace_id(), start),
-        ).fetchall()
-    finally:
-        conn.close()
-    return ledger.spent((dict(row) for row in rows), CURRENCY, unrecorded_is=CURRENCY)
+    rows = db.runs_in_window(start)
+    return ledger.spent(rows, CURRENCY, unrecorded_is=CURRENCY)
 
 
 def check(now: float | None = None) -> dict:

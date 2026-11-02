@@ -29,6 +29,8 @@
   C1、F1 与 S3 已在 2026-11-03 收口，见 1.1。
 - 状态机（S1）2026-11-03 已收口：`watchdog` 是第一个写 `stalled` 的模块，见 1.3。其余状态读取方仍在
   各自判断，迁移仍是单独的行为改动。
+- 到 1.5 为止，20 条里已收口 9 条（C1、C2、C3、F1、F2、F3、S1、S3、X4），另有扫描时新发现的
+  C6、C7 也已收口。剩下 11 条：C4/C5/O2 是保留的独立口径，S2/S4/S5/F4/O1/X1/X2/X3 待做。
 
 ### 1.1 收口记录（2026-11-03）
 
@@ -177,6 +179,44 @@
   按 provider 分未标注、哨兵不算币种）、五处渲染的「单币种不变 / 多币种分行 / 未标注不并列」、
   以及漂移分桶；`test_lineage` 里原来断 route `cost` 的那条改成断 `costs`。
 
+### 1.5 收口记录（2026-11-03，第五批：C3 / C2 / F2）
+
+- **C3 已收口**。`ledger.sum_events(payloads)` 是「事件里已经记下的用量」的唯一求和：
+  token 四个字段缺了就是缺（`None`，不是 0），金额相加但**不造币种**（事件里没有币种
+  字段，`Cost.currency` 保持 `None`，由调用方决定怎么标注）。`server._live_rows` 改调它，
+  本地那份 `json.loads` 求和和 `server._usage` 一起删掉。行为不变：看板跑着的行仍是
+  `tokens{input,output}` + `partial_cost` + `partial_currency`；那个 `"USD"` 是 CLI 自报的
+  `total_cost_usd` 口径，注释里写明了它不是 `_price()` 的数，本轮没改显示。
+  测试 `tests/test_live_tokens.py` 4 条：跨事件求和、缺字段保持缺、坏 JSON 当没记、
+  看板行读的是同一份求和。
+- **C2 已收口**。新增 `db.runs_in_window(start, end, *, live=False, conn=None)`：全仓只有
+  这一条 SQL 决定「今天取哪些行」。四个读方改成调它，各自口径**保留在调用点**：
+  `server._today` / `server._usage_rows` / `usage._rows` 在上面叠加
+  `observe.observed_runs`（人开的会话不是 run，但花了钱）；`budget.spent` 不叠加观察账
+  （它只数 `_price()` 写下的数），并且继续把没记币种的金额按 CNY 读；`harness_status.snapshot`
+  传 `live=True`，保留「在跑的 run 即使不是今天开始也要出现在终端面板」。窗口是左闭右开，
+  本地时区午夜由调用方给（`ledger.bounds` / `budget.day_start`）。
+  测试 `tests/test_today_rows.py` 3 条：窗口边界与 workspace 过滤、live 行跨午夜仍保留、
+  看板/CLI/预算闸读同一批行（含「同一行、两种读法」的断言：CNY 1.0 + 无币种 0.5，看板
+  分成两个桶，预算闸读成 1.5）。
+- **F2 已收口**。`diagnosis` 现在一张表回答一个 cause 的四件事：`KINDS`（一句话标签）、
+  `PROBLEM`、`SUGGESTION`、`ADVICE`（动作句，原来是 `server._CAUSE_ADVICE`）、`FIX`
+  （名词短语，原来是 `server._CAUSE_FIX`）。`server` 的两张表与 `_cause_label` 删除，
+  `_cause_fix` / `_advice_for` 改调 `diagnosis.fix` / `diagnosis.advice`；渲染句
+  `大概率是<label>（报错是 …）` 经 `CAUSE_BY_LABEL` + `label_of` 找回同一行，不再有第二张
+  查找表。`tests/test_diagnosis.py` 的「每个 cause 恰好一句话」那条扩成同时断言
+  `problem/suggestion/advice/fix` 四件齐全、且渲染句能找回同一个 answer；
+  `tests/test_board_recovery.py` 的两条从「label 是键」改成「cause 是键」。
+- **顺手修掉第三个悬空引用**：`recover.signature_text` 还在读 F1 已经删掉的 `_PROBLEM`，
+  当同签名失败没有 error 文本时（`recover.py:475` 的「连续两次同样的错」那一行）会
+  `NameError`。改成 `diagnosis.problem(cause)`，加回归测试
+  `test_a_signature_with_no_error_text_still_gets_a_sentence`。这和 60ff511 修的
+  `report._decisions` 缺 `import json` 是同一类：搬迁时删了旧表/旧导入，引用没跟着走，
+  测试刚好没走到那条路径。
+
+扫描后仍然开着的条目：C4/C5（保持）、S2、S4、S5、F4、O1、O2（保持）、X1、X2、X3，共 11 条。
+其中 C4/C5/O2 是「已经收敛、只作为独立口径保留」，不需要再动。
+
 ## 2. 最强的三条
 
 ### #1 C1 缺货币时两个模块给出两个币种（已收口）
@@ -250,8 +290,8 @@ board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_
 | 编号 | 谁在算同一件事 | 证据（文件:行） | 差异 / 风险 | 建议 |
 |---|---|---|---|---|
 | C1 ★ **已收口** | `ledger` vs `telemetry.usage_summary` | `nodus/ledger.py:1-26`、`:38`、`:211`、`:356`；`nodus/telemetry.py:94`、`:107`、`:133` | 缺币种：`"-"` vs `"USD"`；`telemetry` 还自给 `cost_basis="reported"`（`:135`） | **已收口（提交 `af659e7`）**：`telemetry` 改读 `ledger.parse/currency_of`，缺币种进 `"-"`；`usage.py`/`server._today` 原本已走 `ledger` |
-| C2 ★ | `server._today` / `usage._rows` / `budget.spent` / `harness_status.by_harness` 各自定义"今天" | `nodus/server.py:1853-1872`、`:1875-1882`；`nodus/usage.py:53-72`；`nodus/budget.py:53-73`；`nodus/harness_status.py:206-241` | 行集不同（`server._today` 只取 `agent/route/usage_json`，`usage._rows` 取 status/provider/model）；无币种的钱 `budget` 当 CNY、看板留 `"-"`；观察账进"今天的钱"（`server.py:1871`）但不进终端面板（`harness_status.py:11-25` 明说不折进去） | 算术留 `ledger`（已经是）；"今天取哪些行"合并成一个 helper；每个面板标自己的口径 |
-| C3 | `server._live_rows` vs `ledger.parse` | `nodus/server.py:110-152`；`nodus/ledger.py:159` | 一个读 `usage` 事件（在跑，partial），一个读 `usage_json`（已结束）；两套 token 求和 | 事件求和移进 `ledger`（`Tokens` 已有），保留 "partial" 标记 |
+| C2 ★ **已收口（1.5）** | `server._today` / `usage._rows` / `budget.spent` / `harness_status.by_harness` 各自定义"今天" | `nodus/server.py:1853-1872`、`:1875-1882`；`nodus/usage.py:53-72`；`nodus/budget.py:53-73`；`nodus/harness_status.py:206-241` | 行集不同（`server._today` 只取 `agent/route/usage_json`，`usage._rows` 取 status/provider/model）；无币种的钱 `budget` 当 CNY、看板留 `"-"`；观察账进"今天的钱"（`server.py:1871`）但不进终端面板（`harness_status.py:11-25` 明说不折进去） | 算术留 `ledger`（已经是）；"今天取哪些行"合并成一个 helper；每个面板标自己的口径 |
+| C3 ★ **已收口（1.5）** | `server._live_rows` vs `ledger.parse` | `nodus/server.py:110-152`；`nodus/ledger.py:159` | 一个读 `usage` 事件（在跑，partial），一个读 `usage_json`（已结束）；两套 token 求和 | 事件求和移进 `ledger`（`Tokens` 已有），保留 "partial" 标记 |
 | C4 | `policy._usage_cost` vs `ledger.UNKNOWN_CURRENCY` | `nodus/policy.py:797-811`；`nodus/ledger.py:38` | 已改为委托 `ledger.cost_of`，只把 `"-"` 改名 `"unknown"` 打印 | 保持（已收敛）；若 `usage.py` 的 JSON 消费者也改名就一起退 |
 | C5 | `observe_ccswitch.estimated_usd` vs `ledger` 的分币种规则 | `nodus/observe_ccswitch.py:47`、`:61-65`、`:133` | CC Switch 的 rollup 是 USD，缺价模型记 0 并单独计 `zero_cost_requests`；与 `ledger` 的"不跨币种相加"一致但自成一套 | 保持只读探针；若并入看板，必须先有汇率口径，不能直接加总 |
 
@@ -270,7 +310,7 @@ board 的 `needs_you` / `failed` / live 行，不再自己查库；`lineage.for_
 | 编号 | 谁在算同一件事 | 证据（文件:行） | 差异 / 风险 | 建议 |
 |---|---|---|---|---|
 | F1 ★ **已收口** | 同一段 error 的分类 | `nodus/recover.py:207-232`、`:125`；`nodus/server.py:376-426`、`:770-788`、`:895-919` | 10 cause / 2 class / 14 label / 5 kind / 1 outcome token，见第 2 节 | **已收口（`8717a3b`）**：`nodus/diagnosis.py` 一张表，13 cause / 4 class / 13 kind；四个入口都调它 |
-| F2 | 同一个 cause 的中文文案 | `nodus/recover.py:127-151`（`_PROBLEM`/`_SUGGESTION`）；`nodus/server.py:1083-1174`（`_CAUSE_FIX`/`_CAUSE_ADVICE`/`_next_step`） | 两套中文句子按 cause 各写一遍，措辞已经不同 | 合并成一张 `{cause: {machine_sentence, action}}`，机器句归 recover，动作句归 server |
+| F2 ★ **已收口（1.5）** | 同一个 cause 的中文文案 | `nodus/recover.py:127-151`（`_PROBLEM`/`_SUGGESTION`）；`nodus/server.py:1083-1174`（`_CAUSE_FIX`/`_CAUSE_ADVICE`/`_next_step`） | 两套中文句子按 cause 各写一遍，措辞已经不同 | 合并成一张 `{cause: {machine_sentence, action}}`，机器句归 recover，动作句归 server |
 | F3 ★ **已随 F1 收口** | 同一批错误正则 | `nodus/recover.py:82-122`；`nodus/server.py:353-369`、`:376-426` | timeout/model/auth/网络/进程退出各抄一遍（timeout 两边几乎同字） | **已收口（`8717a3b`）**：正则只在 `nodus/diagnosis.py`，`recover`/`server` 都不再自带匹配表 |
 | F4 | "这次 run 到底做了没有" | `nodus/recover.py:276-290`（tool_call 数 + 改动文件）；`nodus/server.py:874-892`（tool_call/tool_result/error 事件 + change/tests） | 只有 `error` 事件的 run：`_evidence_gap` 认为有证据，`recover.progress` 认为 `barely` | 一个"已记录操作"读法（事件前缀 + artifact），两处共用 |
 

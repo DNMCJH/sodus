@@ -90,14 +90,6 @@ def body_allowed(length: int) -> bool:
     return 0 <= length <= MAX_BODY
 
 
-def _usage(raw: str | None) -> dict:
-    try:
-        data = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _day_start(now: float | None = None) -> tuple[float, str]:
     """Midnight in the operator's timezone.
 
@@ -115,7 +107,8 @@ def _live_rows(conn, now: float) -> list[dict]:
     `run.usage_json` is only written when a run finalises, so a live row has no
     price yet. What it does have is its `usage` events, which is a real record
     of what the CLI reported mid-flight — a lower bound, never presented as the
-    final `_price()` number.
+    final `_price()` number. The summation is `ledger.sum_events`, so a live
+    row and a finished row are read by one definition of "add up tokens".
     """
     rows = conn.execute(
         "SELECT * FROM run WHERE workspace_id=? AND status IN ('queued','running')"
@@ -125,16 +118,14 @@ def _live_rows(conn, now: float) -> list[dict]:
     out = []
     for row in rows:
         run = dict(row)
-        tokens = {"input": 0, "output": 0}
-        reported: float | None = None
-        for ev in conn.execute(
-            "SELECT payload_json FROM event WHERE run_id=? AND type='usage'", (run["id"],)
-        ):
-            payload = _usage(ev["payload_json"])
-            tokens["input"] += int(payload.get("input_tokens") or 0)
-            tokens["output"] += int(payload.get("output_tokens") or 0)
-            if isinstance(payload.get("cost"), (int, float)):
-                reported = (reported or 0.0) + float(payload["cost"])
+        so_far = ledger.sum_events(
+            ev["payload_json"]
+            for ev in conn.execute(
+                "SELECT payload_json FROM event WHERE run_id=? AND type='usage'",
+                (run["id"],),
+            )
+        )
+        reported = so_far.cost.amount
         out.append(
             {
                 "id": run["id"],
@@ -145,7 +136,10 @@ def _live_rows(conn, now: float) -> list[dict]:
                 "note": run.get("note") or "",
                 "status": run.get("status") or "",
                 "started_at": run.get("started_at"),
-                "tokens": tokens,
+                "tokens": {
+                    "input": int(so_far.tokens.input or 0),
+                    "output": int(so_far.tokens.output or 0),
+                },
                 "partial_cost": round(reported, 6) if reported is not None else None,
                 # The CLI's own `total_cost_usd`; different basis from _price().
                 "partial_currency": "USD" if reported is not None else "",
@@ -365,9 +359,10 @@ _DEAD_TEXT = re.compile(
 #: output it left behind is the last thing it did, not the reason it stopped.
 _PROCESS_DEATH = re.compile(r"orphaned|killed|sigterm|terminated|interrupted", re.I)
 
-#: Every label `_CAUSE_ADVICE` / `_CAUSE_FIX` has to answer for. It is derived
-#: from `diagnosis`, so a cause cannot exist without a display sentence and a
-#: renamed cause cannot silently lose its advice.
+#: Every label the one sentence, the advice and the noun phrase answer for.
+#: They are derived from `diagnosis` (KINDS, ADVICE, FIX), so a cause cannot
+#: exist without a display sentence and a renamed cause cannot silently lose
+#: its advice.
 CAUSE_LABELS = tuple(diagnosis.label(cause) for cause in diagnosis.CAUSES)
 
 #: One board render asks the same question about the same run more than once
@@ -986,77 +981,33 @@ def _change_line(change: dict) -> str | None:
     return f"改了 {len(files)} 个文件：{shown}"
 
 
-#: What to actually do, per cause label. Every one of these names an action;
-#: none of them says "由你决定". The keys are `CAUSE_LABELS`, derived from
-#: `diagnosis`; a test pins the two together so a renamed cause cannot silently
-#: lose its advice.
-_CAUSE_ADVICE: dict[str, str] = {
-    "密钥无效或没有权限": "换上有效的密钥或补权限，再点「重跑」；也可以换 codex 路由重试，或者自己接手。",
-    "被上游限流或额度用尽": "等几分钟再点「重跑」；一直 429 就换一条路由重试，或自己接手。",
-    "模型名不对": "换一个可用模型（或换路由）再点「重跑」；模型名要在配置里改。",
-    "卡住超时": "先看日志最后停在哪一步，再点「重跑」；每次都卡在同一个地方就换 codex 路由重试一次，或自己接手。",
-    "网络断了": "先确认要连的服务起着、网络是通的，再点「重跑」；反复断就换一条路由重试。",
-    "上游服务出错": "等几分钟再点「重跑」；同一个 5xx 反复出现就自己接手。",
-    "请求被拒绝": "按报错改这次指令/模型/参数（上下文太长就拆小，或换一条长上下文路由），改完再点「重跑」。",
-    "内容被安全策略拦截": "换个说法或换一个模型再点「重跑」；同样的内容再发一次还是会被拦，反复拦就自己接手。",
-    "进程被外部杀掉": "先确认 daemon 没在重启、机器没休眠，再点「重跑」；总在同一个秒数附近死就换 codex 路由重试，或自己接手。",
-    "进程自己退出": "它自己退了但没打印报错：先点「看日志」翻完整输出，再决定重跑；找不到原因就自己接手。",
-    "测试红": "先修失败的那条测试，改完点「重跑」；测试红着再跑一遍不会自己变绿。",
-    "证据缺失": "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，或者自己翻日志（旧记录补不回来）。",
-    "无法归类": "先点「看日志」读第一条报错，确认它停在哪一步，再决定重跑还是自己接手。",
-}
-
-#: The same labels as `_CAUSE_ADVICE`, as a *noun phrase* instead of an order.
-#: A stopped row is a report of what happened, so its cause line says what
-#: would have to change, not what the reader must do.
-_CAUSE_FIX: dict[str, str] = {
-    "密钥无效或没有权限": "换上有效的密钥或补权限",
-    "被上游限流或额度用尽": "等限流过去，或换一条路由",
-    "模型名不对": "改配置里的模型名",
-    "卡住超时": "换一条路由再试，或换个做法",
-    "网络断了": "确认服务起着、网络恢复，或换一条路由",
-    "上游服务出错": "等一会，或换一条路由",
-    "请求被拒绝": "改请求参数、输入或上下文长度",
-    "内容被安全策略拦截": "换说法或换模型",
-    "进程被外部杀掉": "确认 daemon 没有在重启、机器没有休眠",
-    "进程自己退出": "读完整日志定位它退在哪一步",
-    "测试红": "把失败的测试修过",
-    "证据缺失": "重新跑一遍拿到新证据",
-    "无法归类": "读完整日志定位它停在哪一步",
-}
-
-
-def _cause_label(cause: str) -> str:
-    """The bare label (`进程被外部杀掉`) out of `大概率是进程被外部杀掉（报错是 …）`.
-
-    Some causes carry a detail after a colon (`大概率是测试红：…`); the label is
-    what sits between `大概率是` and the first of `（` / `：`.
-    """
-    label = re.split(r"[（：]", str(cause or ""), maxsplit=1)[0]
-    return label.replace("大概率是", "", 1).strip()
-
-
 def _cause_fix(cause: str) -> str:
-    """`；要解决得…` for a stopped row, or "" when the cause is not a label."""
-    fix = _CAUSE_FIX.get(_cause_label(cause))
+    """「；要解决得…」 for a stopped row, or "" when the cause has no label.
+
+    The noun phrase is `diagnosis.FIX`, the same row as the action sentence
+    below: one cause, one thing that would have to change.
+    """
+    fix = diagnosis.fix(cause)
     return f"；要解决得{fix}" if fix else ""
 
 
 def _advice_for(kind: str, cause: str, evidence: dict, cwd: str = "") -> str:
     """The 建议 line: one concrete action, plus what to do instead.
 
+    The sentence is `diagnosis.ADVICE`, found from the cause the board already
+    matched -- there is no second wording table left to drift from it. A run
+    with nothing recorded gets the no-change sentence, because "rerun to get
+    evidence" is the one true next step then.
+
     The cause wins over the missing-evidence case: a run with no tool_call but
     a legible `401` should be told to change the key, not to "rerun for
     evidence".
     """
-    template = _CAUSE_ADVICE.get(_cause_label(cause))
-    if template:
-        return template
+    text = diagnosis.advice(cause)
+    if text:
+        return text
     if kind == "证据缺失":
-        return (
-            "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，"
-            "或者自己翻日志（旧记录补不回来）。"
-        )
+        return diagnosis.advice_of("no-change")
     return ""
 
 
@@ -1923,14 +1874,7 @@ def _today(conn, start: float) -> dict:
     reading and the bucketing are `ledger.by_agent`, so this page, the CLI and
     MCP cannot drift apart on what "today, per agent" means.
     """
-    rows = [
-        dict(row)
-        for row in conn.execute(
-            "SELECT agent, route, usage_json FROM run"
-            " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
-            (config.workspace_id(), start),
-        ).fetchall()
-    ]
+    rows = db.runs_in_window(start, conn=conn)
     # A harness session the user drove is not a run, but its tokens were paid
     # for today; the board's first question ("what did today cost") includes it.
     rows.extend(observe.observed_runs(start))
@@ -1939,12 +1883,7 @@ def _today(conn, start: float) -> dict:
 
 def _usage_rows(conn, start: float) -> list[dict]:
     """Runs that started on/after `start`, in the shape `ledger.summarize` wants."""
-    rows = conn.execute(
-        "SELECT agent, route, provider, model, status, usage_json, started_at FROM run"
-        " WHERE workspace_id=? AND started_at IS NOT NULL AND started_at>=?",
-        (config.workspace_id(), start),
-    ).fetchall()
-    return [dict(row) for row in rows] + observe.observed_runs(start)
+    return db.runs_in_window(start, conn=conn) + observe.observed_runs(start)
 
 
 def _usage_snapshot(conn, day_start: float, month_start: float) -> dict:

@@ -103,8 +103,21 @@ def test_every_cause_has_exactly_one_class_one_kind_and_one_sentence():
         assert diagnosis.label(cause) == diagnosis.kind(cause)
         assert diagnosis.problem(cause)
         assert diagnosis.suggestion(cause)
-    # The labels the advice tables answer for are the labels this module emits.
+        assert diagnosis.advice_of(cause)
+        assert diagnosis.fix_of(cause)
+        # One rendered cause detail finds the same row again.
+        detail = f"大概率是{diagnosis.label(cause)}（报错是 whatever）"
+        assert diagnosis.advice(detail) == diagnosis.advice_of(cause)
+        assert diagnosis.fix(detail) == diagnosis.fix_of(cause)
+    # The labels the board shows are the labels this module emits.
     assert tuple(diagnosis.label(cause) for cause in diagnosis.CAUSES) == server.CAUSE_LABELS
+
+
+def test_a_signature_with_no_error_text_still_gets_a_sentence():
+    """Regression: `signature_text` read a table that F1 had already deleted."""
+    text = recover.signature_text({"cause": "timeout", "error": "", "stage": "start"})
+    assert "刚启动" in text
+    assert diagnosis.problem("timeout") in text
 
 
 def test_the_retry_classes_are_the_old_deterministic_line():

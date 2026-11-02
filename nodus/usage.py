@@ -27,9 +27,7 @@ move under them at 08:00 local time.
 
 from __future__ import annotations
 
-from typing import Any
-
-from . import config, db, ledger, observe
+from . import db, ledger, observe
 
 PERIODS = ledger.PERIODS
 GROUP_BYS = ledger.GROUP_BYS
@@ -51,22 +49,7 @@ def _rows(start: float | None = None, end: float | None = None) -> list[dict]:
     Deliberately not ``db.list_runs(limit=...)``: a stats command must not
     silently drop old rows because a page size was chosen for a different job.
     """
-    sql = (
-        "SELECT agent, route, provider, model, status, usage_json, started_at"
-        " FROM run WHERE workspace_id=?"
-    )
-    args: list[Any] = [config.workspace_id()]
-    if start is not None:
-        sql += " AND started_at IS NOT NULL AND started_at>=?"
-        args.append(start)
-    if end is not None:
-        sql += " AND started_at<?"
-        args.append(end)
-    conn = db.connect()
-    try:
-        rows = [dict(row) for row in conn.execute(sql, args)]
-    finally:
-        conn.close()
+    rows = db.runs_in_window(start, end)
     # Sessions a human drove are not runs, but they spent money; the report
     # counts them as one row per session-day (see observe.observed_runs).
     return rows + observe.observed_runs(start, end)

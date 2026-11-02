@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from nodus import config, db, lineage, server, statuslight, ui
+from nodus import config, db, diagnosis, lineage, server, statuslight, ui
 
 ORPHAN = "orphaned: the process that owned this run is gone"
 
@@ -391,23 +391,23 @@ def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
     assert "orphaned" in entry["headline"]
 
 
-def test_every_cause_label_has_a_concrete_advice():
-    # The labels are the lookup keys: renaming one without renaming its advice
-    # silently downgrades 建议 to a generic sentence, which is the whole bug.
-    labels = list(server.CAUSE_LABELS)
-    assert labels
-    assert [label for label in labels if label not in server._CAUSE_ADVICE] == []
-    for advice in server._CAUSE_ADVICE.values():
+def test_every_cause_has_a_concrete_advice():
+    # The causes are the keys: renaming a display label without renaming its
+    # advice silently downgrades 建议 to a generic sentence, which is the bug.
+    assert diagnosis.CAUSES
+    for cause in diagnosis.CAUSES:
+        advice = diagnosis.advice_of(cause)
+        assert advice, cause
         assert "由你决定" not in advice
         assert "重跑" in advice or "接手" in advice or "重试" in advice
 
 
-def test_every_cause_label_has_a_noun_phrase_for_the_stopped_row():
+def test_every_cause_has_a_noun_phrase_for_the_stopped_row():
     # 已停止 is a report, so its cause line says what would have to change
     # ("要解决得装上缺的依赖") instead of ordering the reader to go do it.
-    labels = list(server.CAUSE_LABELS)
-    assert [label for label in labels if label not in server._CAUSE_FIX] == []
-    for fix in server._CAUSE_FIX.values():
+    for cause in diagnosis.CAUSES:
+        fix = diagnosis.fix_of(cause)
+        assert fix, cause
         assert "由你决定" not in fix
         assert "点" not in fix
 

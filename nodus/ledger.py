@@ -198,6 +198,40 @@ def parse(value: Mapping[str, Any] | str | None) -> Usage:
     return Usage(tokens=tokens, cost=cost, raw=dict(data))
 
 
+def _running_total(total: int | None, value: int | None) -> int | None:
+    """Add a recorded count to a running total; absent stays absent."""
+    if value is None:
+        return total
+    return (total or 0) + value
+
+
+def sum_events(payloads: Iterable[Any]) -> Usage:
+    """Token and cost totals across a run's mid-flight `usage` events.
+
+    A live run has no `usage_json` yet -- that is only written when the attempt
+    finalises -- so the only record of what it has cost so far is the stream of
+    `usage` events. Adding that stream up belongs here for the same reason
+    `parse` does: a second summation is a second definition, and the board's
+    live rows had one.
+
+    No currency is invented. The events carry amounts, not a currency code, so
+    `cost.currency` stays `None` and the caller decides how to label it.
+    """
+    tokens = Tokens()
+    amount: float | None = None
+    for payload in payloads:
+        usage = parse(payload)
+        tokens = Tokens(
+            input=_running_total(tokens.input, usage.tokens.input),
+            output=_running_total(tokens.output, usage.tokens.output),
+            cache_read=_running_total(tokens.cache_read, usage.tokens.cache_read),
+            cache_write=_running_total(tokens.cache_write, usage.tokens.cache_write),
+        )
+        if usage.cost.amount is not None:
+            amount = (amount or 0.0) + usage.cost.amount
+    return Usage(tokens=tokens, cost=Cost(amount=amount))
+
+
 def _currency(value: Any) -> str | None:
     """A currency code, or ``None`` when it was not recorded.
 

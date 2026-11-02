@@ -718,6 +718,47 @@ def list_runs(
     return [dict(r) for r in rows]
 
 
+def runs_in_window(
+    start: float | None = None,
+    end: float | None = None,
+    *,
+    live: bool = False,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
+    """Run rows whose start falls inside a window, for every "today" panel.
+
+    This is the only SQL that decides which rows "today" contains. Before it,
+    the board's money, its usage snapshot, the CLI's stats and the daily budget
+    gate each wrote their own WHERE clause: same word, four row sets, and the
+    unnamed-currency row counted differently on two of them. Consumers keep
+    their own reading on top (the ceiling treats an unnamed amount as CNY, the
+    board does not), but they no longer disagree about which runs happened.
+
+    `live=True` also returns queued/running rows started before the window: a
+    run in flight is still something the page has to show. `conn` lets a
+    caller pass its own connection so the board reads one transaction.
+
+    Harness sessions a person drove are not run rows; callers that count them
+    (see `observe.observed_runs`) add those themselves.
+    """
+    where = ["workspace_id=?"]
+    args: list[Any] = [config.workspace_id()]
+    if start is not None:
+        if live:
+            where.append("(started_at>=? OR status IN ('queued','running'))")
+        else:
+            where.append("started_at IS NOT NULL AND started_at>=?")
+        args.append(start)
+    if end is not None:
+        where.append("started_at IS NOT NULL AND started_at<?")
+        args.append(end)
+    sql = "SELECT * FROM run WHERE " + " AND ".join(where)
+    if conn is not None:
+        return [dict(row) for row in conn.execute(sql, args).fetchall()]
+    with connect() as c:
+        return [dict(row) for row in c.execute(sql, args).fetchall()]
+
+
 def verify_states(run_ids: list[str]) -> dict[str, str]:
     """Per-run verification mark.
 

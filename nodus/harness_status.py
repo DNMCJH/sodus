@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from . import config, ledger, observe
+from . import db, ledger, observe
 
 #: A log written within this window means the harness is still working. The
 #: board refreshes by hand, so the window only has to bridge a pause in a
@@ -259,15 +259,7 @@ def snapshot(
     moment = time.time() if now is None else float(now)
     if start is None:
         start = ledger.bounds("day", moment)[0]
-    rows = [
-        dict(row)
-        for row in conn.execute(
-            "SELECT id, agent, status, started_at, session_ref_json, usage_json, kind"
-            " FROM run WHERE workspace_id=?"
-            " AND (started_at>=? OR status IN ('queued','running'))",
-            (config.workspace_id(), start),
-        ).fetchall()
-    ]
+    rows = db.runs_in_window(start, live=True, conn=conn)
     today = by_harness(rows, start=start)
     live = live_harnesses(rows)
     terminals = probe(
