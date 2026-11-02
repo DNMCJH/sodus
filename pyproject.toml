@@ -11,6 +11,9 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 nodus = "nodus.cli:main"
+# Phase A of the rename: a second name for the same entry point, same daemon
+# and same database. The package and state directory stay nodus.
+sodus = "nodus.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]

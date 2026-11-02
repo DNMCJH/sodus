@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from .. import config
 
@@ -99,6 +100,18 @@ def _utf8() -> None:
             pass
 
 
+def _prog() -> str:
+    """Which name this process was invoked as.
+
+    `nodus` and `sodus` are two console scripts over this one module, so the
+    usage line has to follow argv[0] instead of picking a side. A bare
+    `python -m nodus` has no console-script name -- argv[0] is `__main__.py`
+    -- and stays nodus.
+    """
+    stem = Path(sys.argv[0]).stem.lower() if sys.argv else ""
+    return "sodus" if stem == "sodus" else "nodus"
+
+
 class _Dropped:
     """Absorbs registration calls for a command a namespace does not carry.
 
@@ -164,7 +177,7 @@ def build_parser():
     )
 
     parser = argparse.ArgumentParser(
-        prog="nodus",
+        prog=_prog(),
         description="Nodus — task acceptance layer for agents",
     )
     parser.add_argument("--version", action="version", version=f"nodus {config.VERSION}")

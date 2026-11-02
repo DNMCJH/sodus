@@ -45,7 +45,7 @@ PAGE = """<!doctype html>
 <meta name="color-scheme" content="light dark">
 <script>(function(){try{var t=localStorage.getItem("nodus-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nodus</title>
+<title>Sodus</title>
 <style>
 
   /* ===================== 油彩纸本 · Nodus board (2026-10-25 v4) =====================
@@ -480,7 +480,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
 <header>
-  <div class="brand"><span class="mark">验</span><h1>NODUS</h1><span class="tagline">一纸验收 · 本机工作台</span></div>
+  <div class="brand"><span class="mark">验</span><h1>SODUS</h1><span class="tagline">一纸验收 · 本机工作台</span></div>
   <div class="hmeta"><span class="hday" id="s-day">—</span><span class="hprofile" id="s-profile"></span></div>
   <div class="rule">结束 ≠ 通过 · 只有测试证据变绿才算验收</div>
   <button id="refresh" onclick="manualRefresh()" title="重新拉取 /board。页面不会自己刷新。">刷新</button>

@@ -1,6 +1,6 @@
-# Nodus
+# Sodus
 
-> 名字来自拉丁语 *nodus*（结、节点）。CLI、Python 包、仓库目录、状态目录都叫 `nodus`（`~/.nodus`）。
+> 名字来自拉丁语 *nodus*（结、节点）。产品名是 **Sodus**，实现名仍是 **nodus**——CLI、Python 包、仓库目录、状态目录都叫 `nodus`（`~/.nodus`）。
 > 2026-10-21 之前它叫 `wb`／`workbench`，旧状态目录会在首次运行时自动迁移。
 
 本地多 agent 任务编排器。不重写 agent loop，把 Claude Code / Codex / DSH / MiniMax 当 worker 驱动，
