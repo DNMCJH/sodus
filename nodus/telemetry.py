@@ -4,6 +4,12 @@ Usage comes from the run table (already collected per attempt). Probes ask each
 provider for its model list, which is free and also tells us whether the key
 still works. No probe spends generation tokens.
 
+Reading `usage_json` is `ledger`'s job, not this module's: token fields, the
+price, and the currency bucket all come from `ledger.parse` /
+`ledger.currency_of`. That is what makes a run with no recorded currency land
+under `"-"` here exactly as it does on the board and in `nodus stats`, instead
+of being quietly relabelled `USD` (the old 7x error).
+
 Endpoints come from the provider registry, so this module has no list of its
 own to drift out of date.
 """
@@ -13,7 +19,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config, db, providers
+from . import config, db, ledger, providers
 
 PROBE_LOG = "probes.jsonl"
 
@@ -97,16 +103,18 @@ def usage_summary(days: float = 7.0) -> dict:
     Routed, not per-agent: "claude" no longer names one endpoint, and a report
     that merges a relay run with a MiniMax run hides the number that matters.
     Runs from before the split have no route column and fall back to the agent.
+
+    Money is read by `ledger`: a run whose currency was not recorded goes under
+    `"-"` (`ledger.UNKNOWN_CURRENCY`), never `USD`. The shape is the legacy one
+    the CLI prints; the numbers are the ledger's.
     """
     cutoff = time.time() - days * 86400
     totals: dict[str, dict] = {}
     for run in db.list_runs(limit=10000):
         if (run.get("started_at") or 0) < cutoff:
             continue
-        try:
-            usage = json.loads(run.get("usage_json") or "{}")
-        except json.JSONDecodeError:
-            usage = {}
+        parsed = ledger.parse(run.get("usage_json"))
+        tokens = parsed.tokens.as_report()
         key = run.get("route") or run["agent"]
         bucket = totals.setdefault(
             key,
@@ -123,16 +131,18 @@ def usage_summary(days: float = 7.0) -> dict:
             },
         )
         bucket["runs"] += 1
-        bucket["in"] += int(usage.get("input_tokens") or 0)
-        bucket["out"] += int(usage.get("output_tokens") or 0)
-        bucket["cache_read"] += int(usage.get("cache_read") or 0)
+        bucket["in"] += tokens["prompt"]
+        bucket["out"] += tokens["completion"]
+        bucket["cache_read"] += tokens["cache_read"]
         bucket["providers"].add(run.get("provider") or "-")
-        if len(usage.get("attempts") or []) > 1:
+        if len(parsed.cost.attempts) > 1:
             bucket["fallbacks"] += 1
-        if isinstance(usage.get("cost"), (int, float)):
-            currency = usage.get("currency") or "USD"
-            bucket["costs"][currency] = bucket["costs"].get(currency, 0.0) + float(usage["cost"])
-            bucket["basis"].add(usage.get("cost_basis") or "reported")
+        if parsed.cost.amount is not None:
+            currency = ledger.currency_of(parsed)
+            bucket["costs"][currency] = bucket["costs"].get(currency, 0.0) + float(
+                parsed.cost.amount
+            )
+            bucket["basis"].add(parsed.cost.basis or "none")
         if run.get("status") == "failed":
             bucket["failed"] += 1
     return totals
