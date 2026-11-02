@@ -1382,7 +1382,7 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, completed, failed]
+          enum: [queued, running, completed, failed, stalled]
         parent_run_id:
           type: [string, 'null']
         cwd:
@@ -1655,7 +1655,7 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, completed, failed, stopped]
+          enum: [queued, running, completed, failed, stopped, stalled]
         params_json:
           type: string
         result_json:
