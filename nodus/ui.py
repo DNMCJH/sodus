@@ -24,8 +24,8 @@ Every card keeps the five answers — **哪个项目 / 什么样的失败 / 自�
 原因 / 我的判断 / 收尾 for a stopped row, 我在做 / 已试过 / 原因推测 / 计划
 for one in flight. The project line carries the last two directories
 (`nodus-removal（…/2026-10-survey）`), the failure line names the class
-(进程退出 / 超时 / 测试红 / 模型报错 / 证据缺失 / 无法归类), and the cause
-line is a rule-based guess quoting the line it came from. The raw evidence —
+from `diagnosis` (进程被外部杀掉 / 卡住超时 / 测试红 / 证据缺失 / …), and the
+cause line is a rule-based guess quoting the line it came from. The raw evidence —
 last tool call, failed tests, diff, error tail — is folded behind 详情 instead
 of pushing the answers down the card. Missing evidence is printed as
 "证据缺失：…"; nothing is paraphrased into "执行失败", and no failure copy
@@ -699,8 +699,9 @@ function table(headers, rows, empty) {
 function outcomeTone(text) {
   const t = String(text || "").toLowerCase();
   if (t.includes("tests_red") || t.includes("exit") || t.includes("auth") ||
-      t.includes("param") || t.includes("orphan") || t.includes("failed")) return "red";
-  if (t.includes("timeout") || t.includes("network") || t.includes("rate") || t.includes("upstream")) return "warn";
+      t.includes("bad-request") || t.includes("model-missing") || t.includes("content-policy") ||
+      t.includes("orphan") || t.includes("failed")) return "red";
+  if (t.includes("timeout") || t.includes("network") || t.includes("rate") || t.includes("5xx")) return "warn";
   if (t.includes("ok") || t.includes("completed")) return "ok";
   return "";
 }
@@ -771,7 +772,13 @@ function renderLive() {
 //   已停止     — a report: what I tried, why I stopped, where the evidence is.
 // The five answers survive from the old decision card, relabelled per voice;
 // the raw evidence (tool call / tests / diff / tail) stays behind 详情.
-const KIND_TONE = new Set(["测试红", "模型报错", "进程退出"]);
+// Tone only: the words themselves come from `diagnosis` on the server. These
+// are the labels for a red test, a request that must change, and a process
+// death; a transient cause keeps the neutral tone.
+const KIND_TONE = new Set([
+  "测试红", "密钥无效或没有权限", "模型名不对", "请求被拒绝",
+  "内容被安全策略拦截", "进程被外部杀掉", "进程自己退出",
+]);
 const LINES = {
   handling: ["项目", "我在做", "已试过", "原因推测", "计划"],
   stopped: ["项目", "我试了", "原因", "我的判断", "收尾"],

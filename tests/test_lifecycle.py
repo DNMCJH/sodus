@@ -195,7 +195,7 @@ def test_a_failed_run_without_a_gate_makes_no_claim():
     assert lifecycle.needs_attention(_run("failed", "exit code 1"), {}) == ""
     assert (
         lifecycle.needs_attention(
-            _run("failed", "exit code 1"), {"classification": "retryable"}
+            _run("failed", "exit code 1"), {"classification": "transient"}
         )
         == ""
     )
@@ -203,19 +203,19 @@ def test_a_failed_run_without_a_gate_makes_no_claim():
 
 @pytest.mark.parametrize("gate", lifecycle.RETRY_PENDING_GATES)
 def test_retry_pending_gates(gate):
-    facts = {"classification": "retryable", "retry_gate": gate}
+    facts = {"classification": "transient", "retry_gate": gate}
     assert lifecycle.needs_attention(_run("failed", "exit code 1"), facts) == "retry-pending"
 
 
 @pytest.mark.parametrize("gate", lifecycle.AWAITING_HUMAN_GATES)
 def test_spend_gates_await_a_person(gate):
-    facts = {"classification": "retryable", "retry_gate": gate}
+    facts = {"classification": "transient", "retry_gate": gate}
     assert lifecycle.needs_attention(_run("failed", "exit code 1"), facts) == "awaiting-human"
 
 
 @pytest.mark.parametrize("gate", lifecycle.SETTLED_GATES)
 def test_settled_gates_are_done(gate):
-    facts = {"classification": "retryable", "retry_gate": gate}
+    facts = {"classification": "transient", "retry_gate": gate}
     assert lifecycle.needs_attention(_run("failed", "exit code 1"), facts) == "done"
 
 
@@ -235,12 +235,12 @@ def test_deterministic_failure_is_done_not_a_human_question():
 
 
 def test_recovery_off_turns_a_pending_retry_into_done():
-    facts = {"classification": "retryable", "retry_gate": "", "retry_enabled": False}
+    facts = {"classification": "transient", "retry_gate": "", "retry_enabled": False}
     assert lifecycle.needs_attention(_run("failed", "orphaned"), facts) == "done"
 
 
 def test_unknown_gate_makes_no_claim():
-    facts = {"classification": "retryable", "retry_gate": "some-future-gate"}
+    facts = {"classification": "transient", "retry_gate": "some-future-gate"}
     assert lifecycle.needs_attention(_run("failed", "exit code 1"), facts) == ""
 
 
@@ -331,7 +331,7 @@ def test_lineage_never_calls_a_failed_run_ok():
         "ok",
     )
     assert not row["ok"] and not row["unverified"]
-    facts = {"classification": "retryable", "retry_gate": "backoff"}
+    facts = {"classification": "transient", "retry_gate": "backoff"}
     assert lifecycle.needs_attention(row, facts) == "retry-pending"
 
 
@@ -612,8 +612,14 @@ def test_twenty_real_runs_agree_with_recover_lineage_and_the_board(history):
                 if status != "completed":
                     assert not row["ok"] and not row["unverified"]
 
-        # the board's grouping -> the same three tokens
+        # the board's grouping -> the same three tokens. A live retry child
+        # sits in the board's handling block while its run is still `running`;
+        # `needs_attention` has no "machine is already doing it" token for a
+        # live row (it returns "" unless stalled), so the mapping only applies
+        # to rows that have stopped.
         bucket = where.get(run_id)
+        if status in ("queued", "running"):
+            bucket = ""
         expected = {
             "needs_you": "awaiting-human",
             "handling": "retry-pending",

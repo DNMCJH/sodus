@@ -155,7 +155,7 @@ def test_a_wrong_request_is_never_retried(error):
     ],
 )
 def test_everything_else_is_judged_by_the_other_four_questions(error):
-    assert recover.classify({"error": error}) == "retryable"
+    assert recover.classify({"error": error}) == "transient"
 
 
 def test_problem_text_is_a_sentence_not_an_error_dump():

@@ -45,7 +45,7 @@ import re
 import threading
 import time
 
-from . import budget, db, routes
+from . import budget, db, diagnosis, routes
 
 #: The ceiling on automatic retries per chain. Three is the operator's line
 #: ("rerun is normal, unless two or three reruns still produce nothing"), but
@@ -75,89 +75,6 @@ COST_CAP = float(os.environ.get("NODUS_RETRY_COST_CAP", "0.5"))
 #: Only costs in this currency are compared with the caps above. Converting at
 #: an invented rate is how a 7x error gets into a budget.
 COST_CURRENCY = "CNY"
-
-#: Failure signals, checked in this order. Deterministic reasons come before
-#: network ones on purpose: a 401 wrapped in a connection reset is still a
-#: rejected key, and retrying it burns a retry that a transient error needs.
-_ORPHANED = re.compile(r"orphaned", re.I)
-_AUTH = re.compile(
-    r"\b(?:401|403)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
-    r"authenticat|authoriz|api[\s_-]*key|密钥|鉴权|未授权|认证失败|授权失败",
-    re.I,
-)
-_PARAM = re.compile(
-    r"\b400\b|bad request|invalid[\s_-]?(?:request|argument|parameter|param|input)|"
-    r"unrecognized|unknown (?:argument|parameter)|validation error|missing required|"
-    r"参数错误|参数不合法|参数无效|参数缺失",
-    re.I,
-)
-_POLICY = re.compile(
-    r"content[\s_-]?policy|safety|content[\s_-]?filter|blocked by|违规|"
-    r"内容[^\n]{0,10}(?:安全|审核|被拦|拦截)",
-    re.I,
-)
-_MODEL = re.compile(
-    r"model[\s_-]?not[\s_-]?found|model_not_found|no such model|unknown model|"
-    r"invalid model|model[^.\n]{0,40}(?:does not exist|not available|not found)|"
-    r"模型[^\n。]{0,12}(?:不存在|下线|不可用|名不对|弃用)",
-    re.I,
-)
-_RATE = re.compile(
-    r"rate[\s_-]?limit|\b429\b|too many requests|overloaded|slow down|"
-    r"限流|频率限制|请求过多|太频繁",
-    re.I,
-)
-_TIMEOUT = re.compile(r"timed?[\s_-]?out|\btimeout\b|no output for|etimedout|超时", re.I)
-_NETWORK = re.compile(
-    r"econnreset|econnrefused|econnaborted|etimedout|\benotfound\b|eai_again|epipe|"
-    r"ehostunreach|enetunreach|connection (?:reset|refused|closed|aborted|error)|"
-    r"reset by peer|broken pipe|fetch failed|network|socket|dns|tls|ssl|"
-    r"网络|连接(?:断|被重置|失败|超时)|断线|掉线",
-    re.I,
-)
-_UPSTREAM = re.compile(
-    r"\b5\d\d\b|internal server error|bad gateway|service unavailable|gateway timeout|"
-    r"upstream|上游|服务(?:器)?(?:错误|不可用|异常)",
-    re.I,
-)
-
-#: Retrying cannot fix these: the request itself has to change first.
-_DETERMINISTIC = {"auth", "param", "policy", "model"}
-
-_PROBLEM = {
-    "orphaned": "执行到一半，启动它的进程退出了（不是模型出错）。",
-    "timeout": "跑太久没有响应，被当成卡死中止了。",
-    "rate_limit": "上游限流了，等一会儿可以再试。",
-    "network": "网络断了（连接被重置或超时），这次执行没走完。",
-    "upstream": "上游服务出错（5xx），不是任务本身的问题。",
-    "auth": "密钥被上游拒绝（401/403），重试不会好，需要换密钥或补权限。",
-    "param": "请求参数被拒绝（400），重试不会好，需要改配置或这次指令。",
-    "policy": "内容被上游安全策略拦了，重试不会好。",
-    "model": "模型名不存在或没有权限，重试不会好，需要换模型。",
-    "unknown": "执行失败，报错里只有退出码，没有能归因的文案。",
-}
-
-_SUGGESTION = {
-    "orphaned": "不用你管：系统会从断点重新派一轮，有会话就接着会话。",
-    "timeout": "不用你管：退避后会自动再试，连续失败才会来找你。",
-    "network": "不用你管：退避后会自动再试，连续失败才会来找你。",
-    "rate_limit": "不用你管：退避后会自动再试，连续失败才会来找你。",
-    "upstream": "不用你管：退避后会自动再试，连续失败才会来找你。",
-    "auth": "换好密钥或补权限后点「重跑」，任务本身不用改。",
-    "param": "检查这次指令/模型/参数，改完再重跑。",
-    "policy": "换个说法或换个模型再派。",
-    "model": "换一个可用模型再重跑。",
-    "unknown": "先看最后一次动作和报错尾部，再决定重跑还是自己接手。",
-}
-
-#: Why a retry cannot help, in the operator's terms. Shown with a deterministic
-#: failure, so "fix the cause first" is a reason and not a rule to trust.
-_WHY_NOT_RETRIED = {
-    "auth": "上游判定这次请求无权（401/403）。密钥和权限不变，再发一次还是同一个结果。",
-    "param": "请求本身不合法（400）。参数不改，重发只会得到同一个 400。",
-    "policy": "输入被上游安全策略拦下。同样的内容再发一次还是被拦。",
-    "model": "模型名不存在或这个密钥没有该模型权限。换模型之前，重试没有意义。",
-}
 
 #: The stage a failure happened in, inferred from what the worker last did.
 _STAGE_LABEL = {
@@ -189,14 +106,14 @@ def _usage(raw) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def cause(run: dict) -> str:
-    """The failure reason this module matched, for callers that render it."""
-    return _cause(run)
+def cause(run: dict, facts: dict | None = None) -> str:
+    """The failure reason `diagnosis` matched, for callers that render it."""
+    return diagnosis.cause(run, facts)
 
 
 def why_not_retried(run: dict) -> str:
     """Why this deterministic failure must be fixed before it can run again."""
-    return _WHY_NOT_RETRIED.get(_cause(run), "")
+    return diagnosis.why_not_retried(diagnosis.cause(run))
 
 
 def enabled() -> bool:
@@ -205,41 +122,28 @@ def enabled() -> bool:
 
 
 def _cause(run: dict) -> str:
-    """The first matching reason, from most specific to most guessy."""
-    text = str(run.get("error") or "")
-    if not text.strip():
-        return "unknown"
-    for name, pattern in (
-        ("orphaned", _ORPHANED),
-        ("auth", _AUTH),
-        ("param", _PARAM),
-        ("policy", _POLICY),
-        ("model", _MODEL),
-        ("timeout", _TIMEOUT),
-        ("rate_limit", _RATE),
-        ("network", _NETWORK),
-        ("upstream", _UPSTREAM),
-    ):
-        if pattern.search(text):
-            return name
-    return "unknown"
+    """Backwards-compatible name for `cause`; same answer, same table."""
+    return cause(run)
 
 
-def classify(run: dict) -> str:
-    """Retryable or deterministic. An unclassified exit is still a failure to judge."""
-    if _cause(run) in _DETERMINISTIC:
-        return "deterministic"
-    return "retryable"
+def classify(run: dict, facts: dict | None = None) -> str:
+    """transient / deterministic / human / none, from `diagnosis`.
+
+    `recover` needs exactly one bit -- "may the machine try again" -- and
+    treats `human` as a no for the same reason `deterministic` is a no: a
+    person has to change something first. `none` is a run that has not failed.
+    """
+    return diagnosis.classify(run, facts)
 
 
 def problem_text(run: dict) -> str:
     """The one sentence a person reads on the board instead of a stack trace."""
-    return _PROBLEM[_cause(run)]
+    return diagnosis.problem(diagnosis.cause(run))
 
 
 def suggestion_text(run: dict) -> str:
     """What to do about it, in the operator's terms."""
-    return _SUGGESTION[_cause(run)]
+    return diagnosis.suggestion(diagnosis.cause(run))
 
 
 # ---- what the attempt did before it died -------------------------------
@@ -525,7 +429,7 @@ def retry_plan(
 
     if str(run.get("status") or "") != "failed":
         return stop("not-failed")
-    if classify(run) == "deterministic":
+    if classify(run) in ("deterministic", "human"):
         why = why_not_retried(run) or "请求本身要先改掉，重发只会得到同一个错误。"
         return stop("deterministic", why)
     if not run.get("task_id") or not run.get("cwd"):

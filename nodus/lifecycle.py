@@ -189,8 +189,8 @@ def needs_attention(run: Mapping[str, Any], facts: Mapping[str, Any]) -> str:
     ``facts`` is whatever the caller already knows; nothing here is looked up:
 
     ==================  =====================================================
-    ``classification``  ``recover.classify(run)``: ``"deterministic"`` or
-                        ``"retryable"``.
+    ``classification``  ``recover.classify(run)``: ``"transient"``,
+                        ``"deterministic"``, ``"human"`` or ``"none"``.
     ``retry_gate``      ``recover.retry_plan(run)["gate"]``: ``""``,
                         ``"backoff"``, or a named gate. **Required to answer
                         for a failed run**; `None`/absent means "not known",

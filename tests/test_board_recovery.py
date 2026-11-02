@@ -267,9 +267,9 @@ def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
     assert entry["project"] == "shop"
     assert entry["project_path"] == "work/shop"
     assert entry["task_title"] == "修复登录"
-    assert entry["failure_kind"] == "进程退出"
+    assert entry["failure_kind"] == "进程自己退出"
     assert entry["headline"] == (
-        "进程退出：ModuleNotFoundError: No module named 'jwt'"
+        "进程自己退出：ModuleNotFoundError: No module named 'jwt'"
     )
     assert entry["gate"] == "retry-limit"
     assert "上限" in entry["why"]
@@ -280,7 +280,7 @@ def test_a_spent_chain_arrives_with_the_four_pieces_of_evidence(home):
     assert "第2次 38s timeout" in entry["retry_line"]
     assert entry["statement"].startswith("3 次都试过了：")
     assert "第3次 51s exit 1" in entry["statement"]
-    assert entry["likely_cause"].startswith("大概率是依赖没装")
+    assert entry["likely_cause"].startswith("大概率是进程自己退出")
     assert "要解决得" in entry["cause_line"]
     assert "由你决定" not in entry["plan"]
 
@@ -394,7 +394,7 @@ def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
 def test_every_cause_label_has_a_concrete_advice():
     # The labels are the lookup keys: renaming one without renaming its advice
     # silently downgrades 建议 to a generic sentence, which is the whole bug.
-    labels = [label for _pattern, label in server._CAUSE_RULES]
+    labels = list(server.CAUSE_LABELS)
     assert labels
     assert [label for label in labels if label not in server._CAUSE_ADVICE] == []
     for advice in server._CAUSE_ADVICE.values():
@@ -405,7 +405,7 @@ def test_every_cause_label_has_a_concrete_advice():
 def test_every_cause_label_has_a_noun_phrase_for_the_stopped_row():
     # 已停止 is a report, so its cause line says what would have to change
     # ("要解决得装上缺的依赖") instead of ordering the reader to go do it.
-    labels = [label for _pattern, label in server._CAUSE_RULES]
+    labels = list(server.CAUSE_LABELS)
     assert [label for label in labels if label not in server._CAUSE_FIX] == []
     for fix in server._CAUSE_FIX.values():
         assert "由你决定" not in fix
@@ -415,19 +415,21 @@ def test_every_cause_label_has_a_noun_phrase_for_the_stopped_row():
 @pytest.mark.parametrize(
     ("error", "label"),
     [
-        ("ModuleNotFoundError: No module named 'jwt'", "依赖没装"),
-        ("ImportError: cannot import name 'jwt' from 'jwt'", "依赖或导入路径不对"),
-        ("bash: pytest: command not found", "命令不在 PATH 里"),
-        ("FileNotFoundError: [Errno 2] No such file or directory: 'a.py'", "路径或环境不对"),
-        ("401 Unauthorized", "密钥无效或没有权限"),
-        ("429 Too Many Requests", "被上游限流或额度用尽"),
-        ("This model's maximum context length is 8192 tokens", "上下文太长"),
-        ("model_not_found: gpt-9", "模型名不对"),
-        ("Command timed out after 60s", "卡住超时"),
-        ("Connection refused", "目标服务没起"),
-        ("502 Bad Gateway", "上游服务出错"),
+        # The 13 causes, one real-looking line each. The first three are
+        # verbatim from `~/.nodus` history; the rest are the shapes the old
+        # `recover`/`_CAUSE_RULES` tests used.
         ("orphaned: the process that owned this run is gone", "进程被外部杀掉"),
         ("exit code 1", "进程自己退出"),
+        ("[WinError 2] 系统找不到指定的文件。", "无法归类"),
+        ("stale run from hung test", "无法归类"),
+        ("Command timed out after 60s", "卡住超时"),
+        ("ECONNRESET", "网络断了"),
+        ("502 Bad Gateway", "上游服务出错"),
+        ("429 Too Many Requests", "被上游限流或额度用尽"),
+        ("401 Unauthorized", "密钥无效或没有权限"),
+        ("400 Bad Request: messages must not be empty", "请求被拒绝"),
+        ("model_not_found: gpt-9", "模型名不对"),
+        ("content policy violation", "内容被安全策略拦截"),
     ],
 )
 def test_the_likely_cause_and_the_advice_come_from_the_error_string(error, label):

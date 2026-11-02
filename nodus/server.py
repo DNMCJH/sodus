@@ -22,6 +22,7 @@ from . import (
     agents,
     config,
     db,
+    diagnosis,
     harness_status,
     jobs,
     ledger,
@@ -328,9 +329,11 @@ def _change_summary(run: dict) -> str | None:
 #: away; 200 characters is what fits on a card and what the requirement asks.
 ERROR_TAIL_CHARS = 200
 
-#: The five classes a failure can fall into, in the operator's words. Every
-#: decision row names exactly one: "执行失败" is not a class, it is a shrug.
-FAILURE_KINDS = ("进程退出", "超时", "测试红", "模型报错", "证据缺失", "无法归类")
+#: Every display class a failure can carry, projected from
+#: `diagnosis.CAUSES`. Every decision row names exactly one: "执行失败" is not
+#: a class, it is a shrug. `证据缺失` is the `no-change` cause's sentence; it
+#: means the record cannot answer, not that the run did nothing.
+FAILURE_KINDS = tuple(diagnosis.kind(cause) for cause in diagnosis.CAUSES)
 
 #: The only things a person has to decide: merge a proposal (a value
 #: judgement), pick a direction when the request is ambiguous, and spend money
@@ -348,16 +351,9 @@ DECISION_KINDS = ("proposal", "budget", "ambiguous")
 #: as a spend decision, never as "执行失败，要不要重跑".
 SPEND_GATES = ("budget", "cost-cap", "over-budget")
 
-#: Same text, different question: "what kind of failure" is about the process,
-#: "what probably caused it" is about the setup. Both read the same records.
-_TIMEOUT_TEXT = re.compile(r"timed?[\s_-]?out|etimedout|\btimeout\b|no output for|超时", re.I)
-_MODEL_TEXT = re.compile(
-    r"model[\s_-]?not[\s_-]?found|unknown model|invalid model|no such model|"
-    r"context[\s_-]?length|maximum context|too many tokens|"
-    r"\b(?:401|403|429)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
-    r"rate[\s_-]?limit|quota|模型|密钥|鉴权",
-    re.I,
-)
+#: The raw-text witness `_error_evidence` uses to tell a failed tool call from
+#: a tool that merely printed help. It is not a failure classifier: the one
+#: classifier is `diagnosis`.
 _DEAD_TEXT = re.compile(
     r"orphaned|killed|sigterm|terminated|interrupted|exit code -?\d+|"
     r"traceback|error|exception|failed|denied|not found|no such file",
@@ -368,62 +364,10 @@ _DEAD_TEXT = re.compile(
 #: output it left behind is the last thing it did, not the reason it stopped.
 _PROCESS_DEATH = re.compile(r"orphaned|killed|sigterm|terminated|interrupted", re.I)
 
-#: (pattern, the cause in three to eight characters). First match wins, so the
-#: specific ones come before the generic network/exit ones. The label is a
-#: *name*, not a sentence: it is the key `_CAUSE_ADVICE` looks the action up
-#: by, so a label with a colon in it silently loses its advice. The sentence
-#: is built around it, and the raw line it matched is quoted next to it.
-_CAUSE_RULES: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"No module named '?[\w.\-]+'?"), "依赖没装"),
-    (re.compile(r"ModuleNotFoundError|ImportError|cannot import name"), "依赖或导入路径不对"),
-    (
-        re.compile(r"is not recognized as|command not found|不是内部或外部命令", re.I),
-        "命令不在 PATH 里",
-    ),
-    (
-        re.compile(r"no such file or directory|ENOENT|cannot find the path|"
-                   r"系统找不到指定的(?:文件|路径)|路径不存在", re.I),
-        "路径或环境不对",
-    ),
-    (
-        re.compile(r"\b(?:401|403)\b|unauthoriz|forbidden|invalid[\s_-]*api[\s_-]*key|"
-                   r"authentication|密钥|鉴权|未授权", re.I),
-        "密钥无效或没有权限",
-    ),
-    (
-        re.compile(r"rate[\s_-]?limit|\b429\b|too many requests|quota|限流", re.I),
-        "被上游限流或额度用尽",
-    ),
-    (
-        re.compile(r"context[\s_-]?length|maximum context|too many tokens", re.I),
-        "上下文太长",
-    ),
-    (
-        re.compile(r"model[\s_-]?not[\s_-]?found|unknown model|invalid model|"
-                   r"no such model|模型[^\n。]{0,12}(?:不存在|不可用)", re.I),
-        "模型名不对",
-    ),
-    (_TIMEOUT_TEXT, "卡住超时"),
-    (
-        re.compile(r"econnrefused|connection refused|could not connect", re.I),
-        "目标服务没起",
-    ),
-    (
-        re.compile(r"econnreset|connection reset|broken pipe|ssl handshake|dns|无法解析", re.I),
-        "网络断了",
-    ),
-    (
-        re.compile(r"\b5\d\d\b|internal server error|bad gateway|service unavailable", re.I),
-        "上游服务出错",
-    ),
-    (
-        re.compile(r"orphaned|killed|sigterm|terminated|interrupted", re.I),
-        "进程被外部杀掉",
-    ),
-    # A process that exits non-zero and prints nothing is still a class of
-    # failure; "看不出" is a worse answer than "它自己退了，没留话".
-    (re.compile(r"exit code -?\d+", re.I), "进程自己退出"),
-]
+#: Every label `_CAUSE_ADVICE` / `_CAUSE_FIX` has to answer for. It is derived
+#: from `diagnosis`, so a cause cannot exist without a display sentence and a
+#: renamed cause cannot silently lose its advice.
+CAUSE_LABELS = tuple(diagnosis.label(cause) for cause in diagnosis.CAUSES)
 
 #: One board render asks the same question about the same run more than once
 #: (a decision row, the history row, the log endpoint). A per-thread cache
@@ -774,9 +718,12 @@ def _outcome(run: dict, verify: str) -> str:
     if verify == "ok":
         return "ok"
     cause = recover.cause(run)
-    if cause in {
-        "timeout", "orphaned", "network", "rate_limit", "upstream",
-        "auth", "param", "policy", "model",
+    if cause in diagnosis.DETERMINISTIC | {
+        "timeout",
+        "orphaned",
+        "network",
+        "5xx",
+        "rate-limit",
     }:
         return cause
     error = str(run.get("error") or "")
@@ -893,30 +840,29 @@ def _evidence_gap(run: dict, evidence: dict) -> str:
 
 
 def _failure_kind(run: dict, evidence: dict, state: str, gap: str = "") -> str:
-    """One of FAILURE_KINDS. This is the line the operator reads second.
+    """The `diagnosis.kind` for this run. This is the line the operator reads second.
 
-    A run with no tool_call, no change and no test is classified as 证据缺失
-    even when it left a one-line error: the error says how it stopped, not
-    what it was doing. The recognisable part still shows up in the headline,
-    the likely cause and the advice, so nothing is lost.
+    The class itself comes from `diagnosis`; this function only supplies the
+    facts the board already has. A run with no tool_call, no change and no test
+    is still shown as 证据缺失 even when it left a one-line error: the record
+    cannot answer "what was it doing", which is not the same question as "how
+    did it stop". The error-derived cause stays visible in `likely_cause`.
     """
     if state == "red" or (evidence.get("tests") or []):
-        return "测试红"
-    if gap:
-        return "证据缺失"
+        return diagnosis.kind("tests-red")
     text = " ".join(
         str(part or "")
         for part in (evidence.get("error_tail"), run.get("error"), evidence.get("action"))
     )
-    if not text.strip():
-        return "证据缺失"
-    if _TIMEOUT_TEXT.search(text):
-        return "超时"
-    if _MODEL_TEXT.search(text):
-        return "模型报错"
-    if _DEAD_TEXT.search(text):
-        return "进程退出"
-    return "无法归类"
+    facts = {"verify": state, "text": text}
+    if gap or not text.strip():
+        # No error text and no recorded operation is `no-change`: the record
+        # cannot answer, which is itself the answer the card has to give.
+        facts["operations"] = False
+    answer = diagnosis.diagnose(run, facts)
+    if gap and answer.cause not in ("tests-red", "no-change"):
+        return diagnosis.kind("no-change")
+    return answer.kind
 
 
 def _cause_snippet(text: str) -> str:
@@ -930,33 +876,37 @@ def _likely_cause(run: dict, evidence: dict, state: str, gap: str = "") -> str:
     Rule-based on purpose: this runs on every board render, and a model call
     per row would make the board cost money and be slow. The wording says it
     is a guess ("大概率是") and shows the line it came from, so a wrong guess
-    is visibly a guess. A run with no operations recorded falls back to saying
-    so — but only after the error text has had its chance, because a legible
-    `ModuleNotFoundError` is a real cause even in a run with no tool_call.
+    is visibly a guess. The label is `diagnosis.label`, so the cause line and
+    the failure class cannot name the same error differently.
     """
     tests = evidence.get("tests") or []
     if state == "red" or tests:
         first = tests[0] if tests else {}
         name = str(first.get("test") or first.get("name") or "")
         assertion = _assertion_phrase(str(first.get("assertion") or ""))
+        label = diagnosis.label("tests-red")
         if name and assertion:
-            return f"大概率是改动没做到位：{name} 的断言没过（{assertion}）"
+            return f"大概率是{label}：改动没做到位，{name} 的断言没过（{assertion}）"
         if name:
-            return f"大概率是改动没做到位：{name} 没过"
-        return "大概率是改动没做到位：测试跑完了但没通过"
+            return f"大概率是{label}：改动没做到位，{name} 没过"
+        return f"大概率是{label}：改动没做到位，测试跑完了但没通过"
     text = " ".join(
         str(part or "") for part in (evidence.get("error_tail"), run.get("error"))
     )
-    for pattern, label in _CAUSE_RULES:
-        match = pattern.search(text)
-        if not match:
-            continue
-        return f"大概率是{label}（报错是 {_clip(match.group(0).strip(), 80)}）"
+    if not text.strip():
+        # The same fact `_failure_kind` uses: no error and no recorded
+        # operation is `no-change`, so the cause line names 证据缺失 instead of
+        # guessing. A legacy row with a status and nothing else says so.
+        return "大概率是证据缺失：这次运行没有记录 tool_call / 改动 / 测试输出"
+    facts = {"verify": state, "text": text}
     if gap:
-        return "推断不了：旧记录里没有 tool_call、也没有报错原文，只剩一个状态。"
-    if text.strip():
-        return f"看不出已知的错误模式，要读日志原文才知道：{_cause_snippet(text)}"
-    return "没有报错原文，推断不了。"
+        facts["operations"] = False
+    answer = diagnosis.diagnose(run, facts)
+    label = answer.label or diagnosis.label("unknown")
+    if answer.cause == "no-change":
+        return f"大概率是{label}：这次运行没有记录 tool_call / 改动 / 测试输出"
+    shown = _clip(answer.matched.strip(), 80) or _cause_snippet(text)
+    return f"大概率是{label}（报错是 {shown}）"
 
 
 def _attempt_phrase(attempts: list[dict]) -> str:
@@ -1035,54 +985,53 @@ def _change_line(change: dict) -> str | None:
     return f"改了 {len(files)} 个文件：{shown}"
 
 
-#: What to actually do, per likely cause. Every one of these names an action;
-#: none of them says "由你决定". The second half is the escape hatch for the
-#: operator who would rather fix it than spend another run. The keys are the
-#: labels in `_CAUSE_RULES`; a test pins the two tables together so a renamed
-#: label cannot silently lose its advice.
+#: What to actually do, per cause label. Every one of these names an action;
+#: none of them says "由你决定". The keys are `CAUSE_LABELS`, derived from
+#: `diagnosis`; a test pins the two together so a renamed cause cannot silently
+#: lose its advice.
 _CAUSE_ADVICE: dict[str, str] = {
-    "依赖没装": "先把依赖装上（{module}），再点「重跑」；不想装就自己改掉这个 import，再点「重跑」。",
-    "依赖或导入路径不对": "先确认这个包装在跑 worker 的那个解释器里，再点「重跑」；路径的问题直接自己改更快。",
-    "命令不在 PATH 里": "先把这条命令装进 PATH（或改成绝对路径），再点「重跑」；临时要做就自己接手跑。",
-    "路径或环境不对": "先确认 cwd 和文件都在（{cwd}），再点「重跑」；路径本身错了就直接自己改。",
     "密钥无效或没有权限": "换上有效的密钥或补权限，再点「重跑」；也可以换 codex 路由重试，或者自己接手。",
     "被上游限流或额度用尽": "等几分钟再点「重跑」；一直 429 就换一条路由重试，或自己接手。",
-    "上下文太长": "把这个任务拆小再派，或换一个能吃更长上下文的路由重试。",
     "模型名不对": "换一个可用模型（或换路由）再点「重跑」；模型名要在配置里改。",
     "卡住超时": "先看日志最后停在哪一步，再点「重跑」；每次都卡在同一个地方就换 codex 路由重试一次，或自己接手。",
-    "目标服务没起": "先把要连的服务起起来，再点「重跑」；连不上就别重试，直接自己查。",
-    "网络断了": "网络恢复后点「重跑」；反复断就换一条路由重试。",
+    "网络断了": "先确认要连的服务起着、网络是通的，再点「重跑」；反复断就换一条路由重试。",
     "上游服务出错": "等几分钟再点「重跑」；同一个 5xx 反复出现就自己接手。",
+    "请求被拒绝": "按报错改这次指令/模型/参数（上下文太长就拆小，或换一条长上下文路由），改完再点「重跑」。",
+    "内容被安全策略拦截": "换个说法或换一个模型再点「重跑」；同样的内容再发一次还是会被拦，反复拦就自己接手。",
     "进程被外部杀掉": "先确认 daemon 没在重启、机器没休眠，再点「重跑」；总在同一个秒数附近死就换 codex 路由重试，或自己接手。",
     "进程自己退出": "它自己退了但没打印报错：先点「看日志」翻完整输出，再决定重跑；找不到原因就自己接手。",
+    "测试红": "先修失败的那条测试，改完点「重跑」；测试红着再跑一遍不会自己变绿。",
+    "证据缺失": "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，或者自己翻日志（旧记录补不回来）。",
+    "无法归类": "先点「看日志」读第一条报错，确认它停在哪一步，再决定重跑还是自己接手。",
 }
-
-_MODULE_NAME = re.compile(r"No module named '?([\w.\-]+)'?")
 
 #: The same labels as `_CAUSE_ADVICE`, as a *noun phrase* instead of an order.
 #: A stopped row is a report of what happened, so its cause line says what
-#: would have to change ("要解决得装上缺的依赖"), not what the reader must do.
+#: would have to change, not what the reader must do.
 _CAUSE_FIX: dict[str, str] = {
-    "依赖没装": "把缺的包装进跑 worker 的那个解释器",
-    "依赖或导入路径不对": "确认那个包在正确的解释器里",
-    "命令不在 PATH 里": "把命令装进 PATH，或写成绝对路径",
-    "路径或环境不对": "先确认 cwd 和文件都在",
     "密钥无效或没有权限": "换上有效的密钥或补权限",
     "被上游限流或额度用尽": "等限流过去，或换一条路由",
-    "上下文太长": "把任务拆小，或换一条长上下文路由",
     "模型名不对": "改配置里的模型名",
     "卡住超时": "换一条路由再试，或换个做法",
-    "目标服务没起": "先把要连的服务起起来",
-    "网络断了": "等网络恢复，或换一条路由",
+    "网络断了": "确认服务起着、网络恢复，或换一条路由",
     "上游服务出错": "等一会，或换一条路由",
+    "请求被拒绝": "改请求参数、输入或上下文长度",
+    "内容被安全策略拦截": "换说法或换模型",
     "进程被外部杀掉": "确认 daemon 没有在重启、机器没有休眠",
     "进程自己退出": "读完整日志定位它退在哪一步",
+    "测试红": "把失败的测试修过",
+    "证据缺失": "重新跑一遍拿到新证据",
+    "无法归类": "读完整日志定位它停在哪一步",
 }
 
 
 def _cause_label(cause: str) -> str:
-    """The bare label (`依赖没装`) out of `大概率是依赖没装（报错是 …）`."""
-    label = str(cause or "").split("（", 1)[0]
+    """The bare label (`进程被外部杀掉`) out of `大概率是进程被外部杀掉（报错是 …）`.
+
+    Some causes carry a detail after a colon (`大概率是测试红：…`); the label is
+    what sits between `大概率是` and the first of `（` / `：`.
+    """
+    label = re.split(r"[（：]", str(cause or ""), maxsplit=1)[0]
     return label.replace("大概率是", "", 1).strip()
 
 
@@ -1101,11 +1050,7 @@ def _advice_for(kind: str, cause: str, evidence: dict, cwd: str = "") -> str:
     """
     template = _CAUSE_ADVICE.get(_cause_label(cause))
     if template:
-        module = ""
-        match = _MODULE_NAME.search(str(evidence.get("error_tail") or ""))
-        if match:
-            module = f"pip install {match.group(1)} 之类"
-        return template.format(module=module or "装好缺的那个包", cwd=cwd or "这个目录")
+        return template
     if kind == "证据缺失":
         return (
             "这次运行什么都没记下来：直接点「重跑」重新跑一遍拿到新证据，"
