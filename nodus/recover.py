@@ -45,7 +45,7 @@ import re
 import threading
 import time
 
-from . import budget, db, diagnosis, routes
+from . import budget, db, diagnosis, ledger, routes
 
 #: The ceiling on automatic retries per chain. Three is the operator's line
 #: ("rerun is normal, unless two or three reruns still produce nothing"), but
@@ -96,14 +96,6 @@ _TEST_CMD = re.compile(
 def _short(text: str, n: int = 90) -> str:
     value = " ".join(str(text or "").split())
     return value if len(value) <= n else value[: n - 1].rstrip() + "…"
-
-
-def _usage(raw) -> dict:
-    try:
-        data = json.loads(raw or "{}")
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def cause(run: dict, facts: dict | None = None) -> str:
@@ -318,6 +310,11 @@ def estimate_cost(run: dict) -> float | None:
     a cheap task inherit an expensive one's cost. The failed run is excluded
     from the mean (it stopped early); when it is the only priced attempt, its
     own bill is the best available estimate.
+
+    Reading the bill is `ledger.amount_in`, not a local `json.loads`: the old
+    copy treated an unrecorded currency as yuan and a USD run as absent, which
+    is this call site's rule, so it is passed in explicitly rather than being
+    a default in the ledger.
     """
     tid = str(run.get("task_id") or "")
     if not tid:
@@ -325,17 +322,15 @@ def estimate_cost(run: dict) -> float | None:
     costs: list[float] = []
     own: float | None = None
     for other in db.list_runs(tid, limit=200):
-        usage = _usage(other.get("usage_json"))
-        cost = usage.get("cost")
-        if not isinstance(cost, (int, float)):
-            continue
-        currency = str(usage.get("currency") or "").upper()
-        if currency and currency != COST_CURRENCY:
+        cost = ledger.amount_in(
+            other.get("usage_json"), COST_CURRENCY, unrecorded_is=COST_CURRENCY
+        )
+        if cost is None:
             continue
         if str(other.get("id") or "") == str(run.get("id") or ""):
-            own = float(cost)
+            own = cost
         else:
-            costs.append(float(cost))
+            costs.append(cost)
     if costs:
         return sum(costs) / len(costs)
     return own
@@ -358,14 +353,11 @@ def _task_remaining(run: dict, task: dict | None) -> float | None:
     currency = str(shape.get("currency") or COST_CURRENCY).upper()
     if currency != COST_CURRENCY:
         return None
-    spent = 0.0
-    for other in db.list_runs(str(run.get("task_id") or ""), limit=500):
-        usage = _usage(other.get("usage_json"))
-        if str(usage.get("currency") or COST_CURRENCY).upper() != currency:
-            continue
-        cost = usage.get("cost")
-        if isinstance(cost, (int, float)):
-            spent += float(cost)
+    spent = ledger.spent(
+        db.list_runs(str(run.get("task_id") or ""), limit=500),
+        currency,
+        unrecorded_is=currency,
+    )
     return max(0.0, float(max_cost) - spent)
 
 
@@ -723,6 +715,11 @@ def _over_budget(run: dict, task: dict | None = None) -> bool:
 
     Recognised keys: `{"max_runs": 20}`, `{"max_cost": 5.0, "currency": "CNY"}`.
     An absent or unreadable budget means "no limit", not "block everything".
+
+    A budget with a currency counts only that currency's rows. A budget with no
+    currency means yuan, the same reading `_task_remaining` uses; the old local
+    parser summed every currency together in that case, which is the one thing
+    the ledger exists to prevent (and why this now asks it).
     """
     task = task if task is not None else _task(run)
     raw = task.get("budget_json") if task else None
@@ -751,14 +748,11 @@ def _over_budget(run: dict, task: dict | None = None) -> bool:
     max_cost = shape.get("max_cost")
     if isinstance(max_cost, (int, float)) and max_cost > 0:
         currency = str(shape.get("currency") or "").upper()
-        spent = 0.0
-        for other in db.list_runs(tid, limit=500):
-            usage = _usage(other.get("usage_json"))
-            if currency and str(usage.get("currency") or "").upper() != currency:
-                continue
-            cost = usage.get("cost")
-            if isinstance(cost, (int, float)):
-                spent += float(cost)
+        rows = db.list_runs(tid, limit=500)
+        if currency:
+            spent = ledger.spent(rows, currency)
+        else:
+            spent = ledger.spent(rows, COST_CURRENCY, unrecorded_is=COST_CURRENCY)
         if spent >= float(max_cost):
             return True
     return False

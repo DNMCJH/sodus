@@ -512,6 +512,10 @@ def _legacy_usage(args) -> int:
                 "metered_request": "网关逐请求",
                 "list_price": "价目表",
                 "reported": "CLI 自报偏大",
+                # `ledger`'s bucket for a priced run that did not record
+                # `cost_basis` (the field postdates the oldest rows). It is not
+                # "reported": that word means the CLI's own price book answered.
+                "none": "未标注",
             }
             money += "（" + "+".join(labels.get(x, x) for x in sorted(b["basis"])) + "）"
             metered = metered or "metered" in b["basis"]

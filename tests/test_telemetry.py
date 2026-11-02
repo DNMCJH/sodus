@@ -9,10 +9,12 @@ unnamed.
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 
 from nodus import config, db, ledger, server, telemetry, usage
+from nodus.cli.commands import system
 
 
 def _seed(route: str, usage_json, *, status: str = "completed", started: float) -> dict:
@@ -95,3 +97,22 @@ def test_telemetry_keeps_a_real_usd_run_apart_from_an_unnamed_one(tmp_path, monk
     costs = telemetry.usage_summary(days=1)["claude"]["costs"]
     assert costs == {ledger.UNKNOWN_CURRENCY: 1.5, "USD": 2.0}
     assert costs[ledger.UNKNOWN_CURRENCY] != costs["USD"]
+
+
+def test_the_legacy_cli_prints_one_word_for_a_missing_basis(tmp_path, monkeypatch, capsys):
+    """`usage --days` used to name an unrecorded basis `reported` (wrong: that
+    word means the CLI's own price book) and then print the raw key `none`.
+    One label now says what the row is: 未标注."""
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cost-basis")
+    now = time.time()
+    _seed("claude", {"cost": 1.0, "currency": "CNY", "cost_basis": "metered"}, started=now)
+    _seed("claude", {"cost": 1.0, "currency": "CNY", "cost_basis": "reported"}, started=now)
+    _seed("claude", {"cost": 1.0, "currency": "CNY"}, started=now)
+
+    system._legacy_usage(argparse.Namespace(days=1))
+    out = capsys.readouterr().out
+    assert "实测" in out
+    assert "CLI 自报偏大" in out
+    assert "未标注" in out
+    assert "none" not in out

@@ -220,6 +220,29 @@ def cost_of(value: Mapping[str, Any] | str | None) -> tuple[float, str, str] | N
     return parsed.cost.amount, currency_of(parsed), parsed.cost.basis or ""
 
 
+def amount_in(
+    value: Mapping[str, Any] | str | None,
+    currency: str,
+    unrecorded_is: str | None = None,
+) -> float | None:
+    """This row's amount when it is priced in `currency`, else ``None``.
+
+    One row of what ``spent()`` does for many, for callers that need each run
+    separately (a mean, a per-run comparison). A missing currency is not a real
+    currency, so it is skipped unless the caller says which bucket it counts
+    in: `unrecorded_is` is an argument, never a default, because treating an
+    unnamed amount as yuan is a budget decision, not a fact about the row.
+    """
+    parsed = parse(value)
+    if parsed.cost.amount is None:
+        return None
+    want = currency.upper()
+    fallback = unrecorded_is.upper() if unrecorded_is else None
+    if (parsed.cost.currency or fallback) != want:
+        return None
+    return float(parsed.cost.amount)
+
+
 # ---- windows ----------------------------------------------------------
 
 
@@ -472,14 +495,9 @@ def spent(
     ledger -- the board must not inherit it and label an unnamed amount USD.
     """
     want = currency.upper()
-    fallback = unrecorded_is.upper() if unrecorded_is else None
     total = 0.0
     for row in rows:
-        parsed = parse(row.get("usage_json"))
-        if parsed.cost.amount is None:
-            continue
-        recorded = parsed.cost.currency or fallback
-        if recorded != want:
-            continue
-        total += float(parsed.cost.amount)
+        amount = amount_in(row.get("usage_json"), want, unrecorded_is)
+        if amount is not None:
+            total += amount
     return total

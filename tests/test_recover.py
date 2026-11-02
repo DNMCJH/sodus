@@ -400,6 +400,65 @@ def test_dollars_are_not_converted_into_a_yuan_estimate(home, work):
     assert recover.retry_plan(run)["gate"] == ""
 
 
+def test_an_unrecorded_currency_is_still_a_yuan_estimate(home, work):
+    """The estimate has always read an unnamed amount as yuan.
+
+    Real history has rows with a price and no `currency` (28 on 2026-11-03);
+    the ledger call keeps that call-site rule explicit instead of a default.
+    """
+    task = db.create_task(goal="g", acceptance="a", title="无币种")
+    previous_failure(
+        work, task, ORPHAN, status="completed", usage_json=json.dumps({"cost": 0.5})
+    )
+    run = make_run(work, ORPHAN, task=task, ended=time.time() - 1)
+    assert recover.estimate_cost(run) == pytest.approx(0.5)
+
+
+def test_a_budget_with_no_currency_reads_yuan_not_a_mixed_sum(home, work):
+    """A `max_cost` with no currency used to sum yuan and dollars together.
+
+    That was the one rule the ledger exists to enforce, and it disagreed with
+    `_task_remaining` on the same budget (which already read it as yuan).
+    """
+    task = db.create_task(goal="g", acceptance="a", title="无币种预算")
+    db.update_task(task["id"], budget_json=json.dumps({"max_cost": 1.0}))
+    previous_failure(
+        work,
+        task,
+        ORPHAN,
+        status="completed",
+        usage_json=json.dumps({"cost": 9.0, "currency": "USD"}),
+    )
+    run = make_run(work, ORPHAN, task=task, ended=time.time() - 1)
+    db.update_run(run["id"], usage_json=json.dumps({"cost": 0.2, "currency": "CNY"}))
+    run = db.get_run(run["id"])
+
+    assert recover._over_budget(run) is False
+    assert recover._task_remaining(run, db.get_task(task["id"])) == pytest.approx(0.8)
+
+    # An unnamed amount is yuan here too, same as the estimate and the
+    # remaining-budget figure.
+    db.update_run(run["id"], usage_json=json.dumps({"cost": 1.1}))
+    assert recover._over_budget(db.get_run(run["id"])) is True
+
+
+def test_a_budget_in_a_named_currency_ignores_unlabelled_amounts(home, work):
+    """An explicit currency stays strict: no fallback bucket is invented."""
+    task = db.create_task(goal="g", acceptance="a", title="美元预算")
+    db.update_task(
+        task["id"], budget_json=json.dumps({"max_cost": 1.0, "currency": "USD"})
+    )
+    previous_failure(
+        work, task, ORPHAN, status="completed", usage_json=json.dumps({"cost": 9.0})
+    )
+    run = make_run(work, ORPHAN, task=task, ended=time.time() - 1)
+    db.update_run(run["id"], usage_json=json.dumps({"cost": 0.2, "currency": "USD"}))
+    assert recover._over_budget(db.get_run(run["id"])) is False
+
+    db.update_run(run["id"], usage_json=json.dumps({"cost": 1.2, "currency": "USD"}))
+    assert recover._over_budget(db.get_run(run["id"])) is True
+
+
 # ---- the ceiling and the rest of the bookkeeping -----------------------
 
 

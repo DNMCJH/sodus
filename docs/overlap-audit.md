@@ -7,6 +7,9 @@
 > **2026-11-03 收口**：F1（提交 `8717a3b`）、C1（提交 `af659e7`）与 S3（提交
 > `b4568cd`）已修，见 1.1。下面第 1–5 节保持 `041d0f9` 基线的原文与行号，不再
 > 回改；新增的收口记录单独成节。
+>
+> **2026-11-03 第二批收口**：C6（`recover` 三处自己解析 `usage_json`）与 C7（`usage --days`
+> 的费用依据缺省词）已修，见 1.2。C6 是这轮扫描新发现的条目，不在上面的 20 条里。
 
 目的：过去几周新加的模块各自把"状态""成本""失败原因"算了一遍，`docs/architecture.md` 第 2 节
 只列模块名，不解释谁和谁在抢同一件事。这份清单把重复算的地方钉到行号，给出"留谁 / 退谁 / 合并到哪"，
@@ -50,6 +53,56 @@
   用 2 失败（1 条在重试）+ 1 完成断言 board / statuslight / lineage 三个读法同数；
   `::test_a_red_test_is_one_failure_for_board_light_and_history` 钉住 completed+red 这个
   原始矛盾；数字没变时 `statuslight.line` 仍返回空串，不重复说话。
+
+### 1.2 收口记录（2026-11-03，第二批）
+
+- **C6 已收口**，提交 `0daefb6`。`recover.estimate_cost` / `_task_remaining` /
+  `_over_budget` 三处不再自己 `json.loads(usage_json)`，改调 `ledger.amount_in` /
+  `ledger.spent`；`amount_in` 是新增的"一行版 `spent`"，解析仍只有 `ledger.parse` 一处。
+  币种读法作为实参写在每个调用点，不在 ledger 里设默认：
+  - `estimate_cost`：没记币种的金额算 CNY（旧行为；真实库 323 条 run 里 28 条有价无币种），
+    显式写了别的币种的 run 不进均值；
+  - `_task_remaining`：同样把没记币种算作预算币种（该函数只支持 CNY）；
+  - `_over_budget`：预算写了币种时严格只算该币种；没写币种时按 CNY 读。这是本轮唯一的
+    行为修正：旧实现在"没写币种"时把 CNY 和 USD 直接相加，和同一份 budget 的
+    `_task_remaining`（按 CNY 读）互相矛盾。真实库 0 个 task 有 budget
+    （`task.budget_json` 非空 0 行），所以没有真实 run 的结论变化；4 组合成预算 ×
+    全部真实 task/run 对比，`_over_budget` 0 差异。
+  验收：323 条真实 run 逐条对比旧/新 `estimate_cost`，0 差异；`pytest` 全绿。
+- **C7 已收口**，提交 `0daefb6`。`usage --days` 的费用依据缺省值此前是两个词：
+  `af659e7` 之前 `telemetry` 写 `reported`（含义是 CLI 自报，错的），之后写 `none`
+  （CLI 原样打印英文 key）。现在统一显示 **未标注**：这条 run 没有记录 `cost_basis`
+  （字段比最老的行新），既不是 CLI 自报，也不是实测；真正 `cost_basis=reported` 的
+  run 仍显示"CLI 自报偏大"。
+
+扫描（`git grep -n "usage_json" -- nodus`，按"读 token / 已是 ledger / 自己算钱"分类）：
+
+| 位置 | 现在 |
+|---|---|
+| `nodus/ledger.py:1`、`:160`、`:332`、`:435`、`:470`、`:500` | 唯一解析入口（docstring 与 `parse`/`summarize`/`by_agent`/`spent`/`amount_in`） |
+| `nodus/usage.py:55` | SQL 取 `usage_json`，交 `ledger.summarize`；本身不解析 |
+| `nodus/telemetry.py:116` | `ledger.parse` / `currency_of` |
+| `nodus/harness_status.py:233`、`:265` | `ledger.cost_of`（`:265` 只取列） |
+| `nodus/mcp.py:289` | `ledger.parse` |
+| `nodus/policy.py:805`、`:840`、`:871` | `ledger.cost_of`（`:840` 只取列） |
+| `nodus/server.py:1844`、`:1858` | SQL 取列，交 `ledger.by_agent` / `ledger.summarize` |
+| `nodus/budget.py:67` | SQL 取列，交 `ledger.spent` |
+| `nodus/recover.py:326` | 本提交：`ledger.amount_in` / `ledger.spent` |
+| `nodus/report.py:23`、`:114-118` | **自己算钱**：cost，缺币种记 `USD`，缺 basis 记 `reported` |
+| `nodus/pet.py:65`、`:81-87` | **自己算钱**：cost 求和，缺币种记 `USD` |
+| `nodus/bench.py:239-247` | **自己算钱**：cost，缺币种记 `CNY` |
+| `nodus/desk.py:24-38` | **自己算钱**（单条展示）：缺币种当 `$` |
+| `nodus/lineage.py:250-271`、`:296-298`、`:448` | **自己算钱**：按 route 求和，币种只取第一条 |
+| `nodus/cli/commands/system.py:147-156` | **自己算钱**：`cost` 子命令的标定漂移合计 |
+| `nodus/runner.py:1007`、`nodus/llm.py:482`、`nodus/observe.py:317` | 写 `usage_json`，不是读方 |
+| `nodus/db.py:51`、`:243` | 建表 / 迁移 LIKE，不是金额 |
+| `nodus/ui.py:1401` | 整行 JSON 交给前端，token 展示 |
+| `nodus/pricing.py:9`、`nodus/server.py:114`、`nodus/telemetry.py:7`、`nodus/usage.py:3` | docstring / 注释，不是读方 |
+
+**剩余**：`report.py`、`pet.py`、`bench.py`、`desk.py`、`lineage._route_summary`、
+`cli/commands/system.py cost` 这六处仍是自己读 `usage_json` 算钱。每处改完都会动用户
+可见数字（`report`/`pet` 的缺币种默认 `USD` 就是 C1 修掉的同一个 7 倍错误），留作单独的
+行为改动，不混进这次"口径不变"的收口。
 
 ## 2. 最强的三条
 

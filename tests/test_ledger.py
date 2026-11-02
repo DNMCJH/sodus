@@ -211,6 +211,18 @@ def test_spent_can_be_told_how_to_read_an_unrecorded_currency():
     assert ledger.currency_totals(rows) == {"CNY": 1.5, ledger.UNKNOWN_CURRENCY: 7.0}
 
 
+def test_amount_in_is_spent_for_one_row():
+    """The per-run form of `spent`, used by recovery's estimate and budgets."""
+    assert ledger.amount_in({"cost": 1.5, "currency": "cny"}, "CNY") == pytest.approx(1.5)
+    assert ledger.amount_in({"cost": 1.5, "currency": "USD"}, "CNY") is None
+    assert ledger.amount_in({"cost": 1.5}, "CNY") is None
+    assert ledger.amount_in({"cost": 1.5}, "CNY", unrecorded_is="CNY") == pytest.approx(1.5)
+    assert ledger.amount_in({"input_tokens": 3}, "CNY") is None
+    assert ledger.amount_in("not json", "CNY") is None
+    # A bool is not a measurement (`isinstance(True, int)` is true).
+    assert ledger.amount_in({"cost": True, "currency": "CNY"}, "CNY") is None
+
+
 def test_currency_totals_keeps_each_currency_separate():
     rows = [
         _run(1.0, {"cost": 1.0, "currency": "CNY"}),
