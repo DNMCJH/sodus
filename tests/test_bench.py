@@ -275,13 +275,13 @@ def test_an_unlabeled_attempt_is_not_counted_as_yuan():
     text = bench.format_summary(totals)
     assert "CNY  1.0000" in text
     assert "USD  0.5000" in text
-    assert "未标注币种（来源 claude）  1 次  0.7500" in text
-    assert "未标注币种（来源 relay-old）  1 次  0.2500" in text
+    assert "来源 claude  1 次  0.7500" in text
+    assert "来源 relay-old  1 次  0.2500" in text
     assert "2.5000" not in text  # no total across buckets
 
 
 def test_money_names_the_missing_unit_instead_of_guessing_yuan():
-    assert bench._money({"cost": 0.04, "currency": "-"}) == "未标注币种 0.040"
+    assert bench._money({"cost": 0.04, "currency": "-"}) == "来源未记录 0.040"
     assert bench._money({"cost": 0.04, "currency": "CNY"}) == "¥0.040"
     assert bench._money({"cost": 0.04, "currency": "USD"}) == "USD 0.040"
 

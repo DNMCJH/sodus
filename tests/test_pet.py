@@ -99,7 +99,7 @@ def test_describe_does_not_lend_a_currency_symbol_to_an_unlabeled_run(home):
         "usage_json": json.dumps({"cost": 0.1234}),
     }
     line = pet.describe(run, "ok")
-    assert "未标注币种 0.1234" in line
+    assert "来源未记录 0.1234" in line
     assert "$" not in line
 
 

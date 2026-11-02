@@ -68,7 +68,7 @@ def test_empty_workspace_still_renders():
 
 def test_cost_cell_never_borrows_a_symbol_for_a_missing_currency():
     """The old `_money` printed a missing currency as "$" — a 7x overstatement."""
-    assert desk._money({"usage_json": json.dumps({"cost": 0.03})}) == "未标注币种 0.03"
+    assert desk._money({"usage_json": json.dumps({"cost": 0.03})}) == "来源未记录 0.03"
     assert desk._money({"usage_json": json.dumps({"cost": 0.03, "currency": "CNY"})}) == "¥0.03"
     assert desk._money({"usage_json": json.dumps({"cost": 0.03, "currency": "USD"})}) == "$0.03"
     assert desk._money({"usage_json": json.dumps({"cost": 0.03, "currency": "EUR"})}) == "EUR 0.03"

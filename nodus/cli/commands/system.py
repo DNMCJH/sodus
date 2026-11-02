@@ -480,7 +480,7 @@ def _money_text(cost: dict) -> str:
             # the six displays this change reworks, and its unlabeled bucket is
             # still a single number (no provider split), which is the shape the
             # six no longer use. See docs/overlap-audit.md 1.4.
-            parts.append(f"币种未记录 {total:.4f}")
+            parts.append(f"来源未记录 {total:.4f}")
         else:
             parts.append(f"{currency} {total:.4f}")
     return " + ".join(parts) or "还没计价"
@@ -495,7 +495,7 @@ def _mean_text(cost: dict) -> str:
         if currency == "CNY":
             parts.append(f"¥{mean:.4f}/次")
         elif currency == usage_stats.UNKNOWN_CURRENCY:
-            parts.append(f"币种未记录 {mean:.4f}/次")
+            parts.append(f"来源未记录 {mean:.4f}/次")
         else:
             parts.append(f"{currency} {mean:.4f}/次")
     return " · ".join(parts)

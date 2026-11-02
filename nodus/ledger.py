@@ -40,7 +40,7 @@ UNKNOWN_CURRENCY = "-"
 #: What a human reads for the key above. The key stays a machine token; the
 #: six reports that print a currency bucket ask `currency_label`, so the same
 #: amount is not worded differently from one command to the next.
-UNKNOWN_LABEL = "未标注币种"
+UNKNOWN_LABEL = "来源未记录"
 
 #: Printed where the row did not record which provider it went through. Old
 #: rows predate the column, and a report must not guess an endpoint.
@@ -218,7 +218,7 @@ def currency_of(usage: Usage | Mapping[str, Any] | str | None) -> str:
 
 
 def currency_label(currency: str | None) -> str:
-    """The word to print for a currency bucket: the code, or ``未标注币种``.
+    """The word to print for a currency bucket: the code, or ``来源未记录``.
 
     Never ``"-"`` and never an empty string. Printing the sentinel as a
     currency is how an unnamed amount starts looking like a real one, and an
@@ -251,7 +251,7 @@ def unlabeled_line(row: Mapping[str, Any], amount: str) -> str:
     unit, which is the whole reason the row is here instead of in a total.
     """
     return (
-        f"{UNKNOWN_LABEL}（{provider_label(row.get('provider'))}）"
+        f"{provider_label(row.get('provider'))}"
         f"  {row.get('runs')} 次  {amount}"
     )
 

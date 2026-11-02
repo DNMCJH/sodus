@@ -147,7 +147,7 @@ def test_collect_does_not_call_a_missing_currency_usd(tmp_path, monkeypatch):
     ]
     md = report.render_md(data)
     assert "- 成本：CNY ¥1.0000" in md
-    assert "未标注币种（来源 relay-old）  2 次  1.0000" in md
+    assert "来源 relay-old  2 次  1.0000" in md
     assert "$" not in md
 
 
@@ -166,8 +166,8 @@ def test_the_unlabeled_block_lists_each_provider_and_no_total(tmp_path, monkeypa
 
     md = report.render_md(report.collect(task["id"]))
 
-    assert "未标注币种（来源 relay-a）  1 次  1.0000" in md
-    assert "未标注币种（来源 relay-b）  2 次  0.7500" in md
+    assert "来源 relay-a  1 次  1.0000" in md
+    assert "来源 relay-b  2 次  0.7500" in md
     assert "1.7500" not in md  # two providers are not one total
     assert "¥" not in md.split("## 执行")[0]
 

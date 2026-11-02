@@ -279,10 +279,10 @@ def test_currency_label_is_never_the_sentinel_or_a_blank():
 
 def test_unlabeled_line_names_one_source_and_prints_no_symbol():
     line = ledger.unlabeled_line({"provider": "relay-old", "runs": 2}, "1.0000")
-    assert line == "未标注币种（来源 relay-old）  2 次  1.0000"
+    assert line == "来源 relay-old  2 次  1.0000"
     assert "¥" not in line and "$" not in line
     assert ledger.unlabeled_line({"runs": 1}, "0.5000") == (
-        "未标注币种（来源未记录）  1 次  0.5000"
+        "来源未记录  1 次  0.5000"
     )
 
 

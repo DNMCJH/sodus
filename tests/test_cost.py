@@ -135,7 +135,7 @@ def test_the_drift_block_compares_only_yuan_and_names_the_rest(tmp_path, monkeyp
     out = capsys.readouterr().out
     assert "最近 1 个已标定的 run（CNY）：标定合计 ¥0.5000，账单合计 ¥0.6000（+20.0%）" in out
     assert "最近 1 个已标定的 run（USD）：标定合计 0.2500" in out
-    assert "未标注币种（来源 relay-old）  1 次  标定合计 0.7500" in out
+    assert "来源 relay-old  1 次  标定合计 0.7500" in out
     # No line claims the three are one sum: 1.5 / 1.8 would be that mistake.
     assert "1.5000" not in out and "1.8000" not in out
 
@@ -151,4 +151,4 @@ def test_the_drift_block_is_unchanged_when_every_row_is_yuan(tmp_path, monkeypat
 
     out = capsys.readouterr().out
     assert "最近 1 个已标定的 run：标定合计 ¥0.5000，账单合计 ¥0.6000（+20.0%）" in out
-    assert "未标注币种" not in out
+    assert "来源未记录" not in out

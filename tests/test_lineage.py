@@ -285,7 +285,7 @@ def test_a_route_with_two_currencies_never_prints_one_number(home):
     assert route["unlabeled"] == [{"provider": "relay-old", "total": 1.0, "runs": 2}]
     text = lineage.render({"kind": "task", **data})
     assert "CNY  1" in text and "USD  0.5" in text
-    assert "未标注币种（来源 relay-old）  2 次  1" in text
+    assert "来源 relay-old  2 次  1" in text
     # The sum of 1.0 + 0.5 + 1.0 must not appear as one currency's total.
     assert "2.5 CNY" not in text and "2.5 USD" not in text
 

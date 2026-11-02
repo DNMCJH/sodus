@@ -659,7 +659,7 @@ function span(seconds) {
 
 const SYMBOL = { CNY: "¥", USD: "$" };
 const money = (currency, value) =>
-  currency === "-" ? "币种未记录 " + Number(value).toFixed(2)
+  currency === "-" ? "来源未记录 " + Number(value).toFixed(2)
   : (SYMBOL[currency] || currency + " ") + Number(value).toFixed(currency === "CNY" ? 2 : 4);
 const moneyParts = costs =>
   Object.entries(costs || {}).sort().map(([c, v]) => money(c, v)).join(" + ") || "—";
