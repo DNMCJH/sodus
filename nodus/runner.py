@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, lineage, memory, meter, pet, policy, pricing, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, harness, lineage, memory, meter, pet, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -109,6 +109,31 @@ def _digest(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+#: The worker prompt as a template. Hashed by `harness.version_of` so the
+#: brief has an identity: editing this text is a new harness version, and there
+#: is no hand-bumped number to forget.
+PROMPT_TEMPLATE = """你是 Sodus 里负责执行任务的 agent（{agent}）。
+
+## 任务
+{goal}
+
+## 验收标准
+{acceptance}
+{extra}{known}{previous}
+## 工作目录
+{cwd}
+
+## 规则
+- 只做完成任务必需的事，不要顺手重构成无关代码。
+- 结束时用三句话说明：做了什么、产出了什么、下一位该接什么。
+- 如果无法完成，直接说明卡在哪里，不要假装完成。
+"""
+
+#: The identity of the template above. Recorded as `run.harness` on every new
+#: run, so `nodus debug harness-stats` can compare outcomes across versions.
+BRIEF_VERSION = harness.version_of(PROMPT_TEMPLATE)
+
+
 def build_prompt(
     task: dict,
     handoff: str,
@@ -127,22 +152,15 @@ def build_prompt(
     # Only when there is something to say. An empty section would teach the
     # worker that this part of the brief is noise.
     known = f"\n{memory.strip()}\n" if memory.strip() else ""
-    return f"""你是 Sodus 里负责执行任务的 agent（{agent}）。
-
-## 任务
-{task.get('goal', '')}
-
-## 验收标准
-{task.get('acceptance') or '未提供，按任务目标自行判断'}
-{extra}{known}{previous}
-## 工作目录
-{cwd}
-
-## 规则
-- 只做完成任务必需的事，不要顺手重构成无关代码。
-- 结束时用三句话说明：做了什么、产出了什么、下一位该接什么。
-- 如果无法完成，直接说明卡在哪里，不要假装完成。
-"""
+    return PROMPT_TEMPLATE.format(
+        agent=agent,
+        goal=task.get("goal", ""),
+        acceptance=task.get("acceptance") or "未提供，按任务目标自行判断",
+        extra=extra,
+        known=known,
+        previous=previous,
+        cwd=cwd,
+    )
 
 
 def recent_handoff(task_id: str) -> str:
@@ -586,6 +604,17 @@ class Runner:
                 "cwd": str(workdir),
                 "task": task["id"],
                 **({"session_id": session_id} if session_id else {}),
+            },
+        )
+        # The brief's identity, once per run: a template change that did not
+        # change the version would make two harnesses look like one series.
+        self._emit(
+            rid,
+            "run.harness",
+            {
+                "brief_version": BRIEF_VERSION,
+                "agent": spec.name,
+                "route": route.name,
             },
         )
         db.update_run(rid, status="running", started_at=time.time())

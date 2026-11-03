@@ -91,6 +91,8 @@ DEBUG_COMMANDS = (
     "memory",
     # harness tributaries
     "observe",
+    # evidence: read-only harness fingerprints over run history
+    "harness-stats",
 )
 
 

@@ -1,5 +1,14 @@
 # 更新日志
 
+## 未发布
+
+- 新增只读的 harness 指纹与统计：`nodus debug harness-stats`。
+  - `nodus/harness.py`：brief 模板哈希（`version_of`）、run 的 harness 指纹（agent/route/model/provider/brief_version）、按 (harness 组件, cause) 聚合的统计。纯函数，不写库、不调度。
+  - `nodus/runner.py`：worker prompt 抽成 `PROMPT_TEMPLATE` 常量，版本是模板的哈希（改文案就换版本）；每个新 run 追加一条 `run.harness` 事件记录版本，历史 run 没这条事件时退回「未记录」，不猜。
+  - `nodus debug harness-stats [--by route|agent|model|provider|brief_version] [--kind work|chat|all] [--limit N]`：看「某条路线遇到某类失败时，跑完并且验证通过的比例」。**unverified 不进分母**（退出码不是验收证据），在跑的 run 不计。
+  - `nodus/db.py`：`event_payloads`（一次批量取某类事件）与 `count_runs`。
+  - 这条命令只提供计数，不做推荐、不改行为；候选 harness 的自动搜索没有做。
+
 ## 0.5.0（2026-11-03）
 
 产品名 Sodus，实现名 nodus。这一版只改**显示名和入口面**，不动模块位置、仓库目录和默认状态目录。

@@ -16,6 +16,7 @@ from ... import (
     decision,
     daemon,
     desk as desk_view,
+    harness,
     ledger,
     policy,
     providers,
@@ -26,6 +27,57 @@ from ... import (
     usage as usage_stats,
 )
 from ..client import call
+
+
+def harness_stats(args) -> int:
+    """Read-only evidence: which harness component goes with which failure cause.
+
+    Not a decision and not a recommendation. It answers one question with the
+    rows the database already has — "when this route hit this cause, how often
+    did the run actually pass" — so the next step (if any) is based on counts
+    rather than on a hunch about which model is "better".
+    """
+    kind = None if args.kind == "all" else args.kind
+    rows = db.list_runs(limit=max(1, args.limit), kind=kind)
+    if not rows:
+        print("没有 run 记录；先跑一个任务再看。")
+        return 0
+    ids = [str(row.get("id") or "") for row in rows]
+    verify = db.verify_states(ids)
+    briefs = {
+        rid: str(payload.get("brief_version") or "")
+        for rid, payload in db.event_payloads("run.harness", ids).items()
+    }
+    data = harness.stats(rows, verify, briefs, by=args.by)
+    groups = data["groups"]
+    width = max([len(str(g["key"])) for g in groups] + [9])
+    header = (
+        f"{'harness':<{width}}  {'cause':<10} {'runs':>5} {'passed':>7} {'red':>5}"
+        f" {'failed':>7} {'unverified':>11} {'pass':>6}"
+    )
+    total = db.count_runs(kind)
+    scope = "全部" if kind is None else kind
+    print(
+        f"harness-stats · 按 {args.by} · {scope} run 最近 {len(rows)}/{total} 条"
+        f"（在跑的 {data['live']} 条不计）"
+    )
+    print(header)
+    for g in groups:
+        rate = "-" if g["pass_rate"] is None else f"{g['pass_rate'] * 100:.0f}%"
+        print(
+            f"{str(g['key']):<{width}}  {str(g['cause']):<10} {g['runs']:>5}"
+            f" {g['passed']:>7} {g['red']:>5} {g['failed']:>7}"
+            f" {g['unverified']:>11} {rate:>6}"
+        )
+    t = data["totals"]
+    print(
+        f"合计 {t['runs']} 条已结束：passed {t['passed']} / red {t['red']} /"
+        f" failed {t['failed']} / unverified {t['unverified']}；"
+        "pass 只算 passed/(passed+red+failed)，unverified 不进分母。"
+    )
+    if all(g["key"] == harness.UNRECORDED for g in groups):
+        print("提示：这些 run 都没记录 harness 指纹；新 run 会带 run.harness 事件。")
+    return 0
 
 
 def add(sub) -> None:
@@ -58,6 +110,20 @@ def add(sub) -> None:
 
     p = sub.add_parser("balance", help="relay billing balance")
     p.set_defaults(func=balance)
+
+    p = sub.add_parser(
+        "harness-stats",
+        help="按路线/模型看每类失败的成功率（只读，不推荐任何改动）",
+    )
+    p.add_argument("--by", choices=harness.COMPONENTS, default="route")
+    p.add_argument("--limit", type=int, default=500, help="看最近多少条 run")
+    p.add_argument(
+        "--kind",
+        choices=("work", "chat", "all"),
+        default="work",
+        help="work 只算派出去的任务（默认）；chat 是桌宠碎碎念；all 全算",
+    )
+    p.set_defaults(func=harness_stats, needs_daemon=False)
 
     p = sub.add_parser(
         "usage",

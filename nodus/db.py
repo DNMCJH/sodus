@@ -787,6 +787,51 @@ def verify_states(run_ids: list[str]) -> dict[str, str]:
     return out
 
 
+def count_runs(kind: str | None = None) -> int:
+    """How many runs this workspace has, optionally of one kind.
+
+    `harness-stats` prints the window it looked at next to the whole history:
+    a table over "the last 200" that does not say so reads like the total.
+    """
+    where = ["workspace_id=?"]
+    args: list[Any] = [config.workspace_id()]
+    if kind:
+        where.append("COALESCE(NULLIF(kind, ''), 'work')=?")
+        args.append(kind)
+    with connect() as c:
+        row = c.execute("SELECT COUNT(*) FROM run WHERE " + " AND ".join(where), args).fetchone()
+    return int(row[0] if row else 0)
+
+
+def event_payloads(etype: str, run_ids: list[str]) -> dict[str, dict]:
+    """The first payload of one event type, per run, in one query.
+
+    `harness-stats` needs one recorded fact per run (the brief version). Calling
+    `events_filtered` per run would be N connections for one column, and a
+    report that is slow enough to skip is a report that does not get read.
+    """
+    if not run_ids:
+        return {}
+    marks = ",".join("?" * len(run_ids))
+    with connect() as c:
+        rows = c.execute(
+            f"SELECT run_id, payload_json FROM event"
+            f" WHERE type=? AND run_id IN ({marks}) ORDER BY seq",
+            (etype, *run_ids),
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for row in rows:
+        rid = str(row["run_id"] or "")
+        if rid in out:
+            continue
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        out[rid] = payload if isinstance(payload, dict) else {}
+    return out
+
+
 def update_run(rid: str, **fields: Any) -> None:
     if not fields:
         return

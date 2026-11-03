@@ -50,6 +50,7 @@ nodus/lineage.py      会话血缘：一次任务的所有 sitting / run / 成�
 nodus/meter.py        计费表：run 前后读端点的账
 nodus/pricing.py      标定单价：token → 钱（basis=list_price，峰值/空闲两档）
 nodus/ledger.py       usage_json 的唯一读法：解析、求和（含跑着的行的事件流）、分币种、缓存命中率
+nodus/harness.py      harness 指纹与只读证据：brief 模板哈希、按 (组件, cause) 聚合跑过没有（`nodus debug harness-stats`）
 nodus/usage.py        `nodus stats usage` 的薄壳：选行 + JSON 信封，算术在 ledger
 nodus/diagnosis.py    失败分类的唯一词表：13 cause / 4 class / 13 kind，以及每个 cause 的
                       problem / suggestion / advice / fix（建议句和停下的行的名词短语都从这里取）

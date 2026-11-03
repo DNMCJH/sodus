@@ -95,6 +95,18 @@ def test_the_prompt_reaches_opencode_as_an_argument(fake_opencode):
     assert "写一个 hello" in final
 
 
+def test_a_run_records_its_own_brief_version(fake_opencode):
+    """`run.harness` is what makes two prompt versions comparable later."""
+    task = db.create_task("记录 harness 指纹", acceptance="文件存在")
+    run = runner.RUNNER.start(task["id"], "fake-opencode", cwd=str(fake_opencode))
+    runner.RUNNER.wait(run["id"], timeout=60)
+
+    payload = db.event_payloads("run.harness", [run["id"]])[run["id"]]
+    assert payload["brief_version"] == runner.BRIEF_VERSION
+    assert payload["route"] == "fake-opencode"
+    assert payload["agent"] == "fake-opencode"
+
+
 def test_opencode_usage_is_summed_without_a_fake_cost(fake_opencode):
     task = db.create_task("do it")
     run = runner.RUNNER.start(task["id"], "fake-opencode", cwd=str(fake_opencode))
