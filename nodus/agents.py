@@ -34,11 +34,15 @@ CLAUDE_ARGS = [
     "bypassPermissions",
 ]
 
-#: opencode's headless contract. Two differences from the others matter:
-#: the message is a positional argument (not stdin), and the endpoint plus key
-#: come from its own config file, so the provider on the route only decides
-#: what Nodus meters the run against.
-OPENCODE_ARGS = ("opencode", "run", "--format", "json")
+#: opencode's headless contract. Three differences from the others matter:
+#: the message is a positional argument (not stdin), the endpoint plus key come
+#: from its own config file, so the provider on the route only decides what
+#: Nodus meters the run against, and permissions must be pre-approved here
+#: because there is no terminal to answer opencode's prompt. Without --auto a
+#: headless run gets "The user rejected permission to use this specific tool
+#: call" for every read, finishes with exit 0 and no answer — which is what
+#: made the flash runs look like the model returned nothing.
+OPENCODE_ARGS = ("opencode", "run", "--format", "json", "--auto")
 
 
 @dataclass(frozen=True)
