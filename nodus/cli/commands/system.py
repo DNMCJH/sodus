@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ... import (
     agents,
+    budget,
     config,
     db,
     decision,
@@ -472,6 +473,14 @@ def status(args) -> int:
         f"today          runs={sum(b['runs'] for b in today.values())} "
         f"in={total_in} out={total_out}"
     )
+    b = budget.check()
+    if b["limit"]:
+        soft = f" soft={b['soft_limit']:.2f}" if b.get("soft_limit") else ""
+        over = "  OVER" if b["over"] else ""
+        print(
+            f"budget         今日 ¥{b['spent']:.2f} / ¥{b['limit']:.2f}{soft} "
+            f"remaining=¥{b['remaining']:.2f}{over}"
+        )
     d = telemetry.decision_usage(1)
     print(f"jev today      calls={d['calls']} in={d['in']} out={d['out']}")
     b = telemetry.balance()

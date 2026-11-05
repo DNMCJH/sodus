@@ -243,14 +243,18 @@ class Runner:
         wait: float = 0.0,
         verify_run: bool | None = None,
         propose_run: bool = False,
+        allow_expensive: bool = False,
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
         # This refuses *new* runs only — killing a run that is mid-edit would
         # cost more than the money it saves.
-        spend = budget.check()
-        if spend["over"]:
-            raise RuntimeError(budget.refuse_message(spend))
+        # Checked against the *requested* route before anything is written: an
+        # expensive one must be refused before a task lookup, a profile write or
+        # a worktree is created, otherwise the refusal itself leaves debris.
+        spend = budget.check(route=route_name, model=model, allow_expensive=allow_expensive)
+        if spend["over"] or spend["gated"]:
+            raise RuntimeError(budget.blocked_message(spend))
         profiles.ensure_ready()
         if verify_run is None:
             verify_run = AUTO_VERIFY and config.auto_verify()
@@ -281,6 +285,15 @@ class Runner:
                 model=route.model,
                 effort=route.effort,
             )
+        # The hard ceiling above stops runaway spend; this one keeps a single
+        # expensive run from eating a day that was already half spent. It is
+        # checked after the route is known (auto resolves above) and before any
+        # run row exists, so a refusal leaves nothing behind.
+        gated = budget.check(
+            route=route.name, model=route.model or model, allow_expensive=allow_expensive
+        )
+        if gated["gated"]:
+            raise RuntimeError(budget.blocked_message(gated))
         gap = routes.problems(route)
         if gap:
             raise RuntimeError(f"route {route.name} is not usable: {', '.join(gap)}")

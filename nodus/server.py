@@ -2421,6 +2421,7 @@ class Handler(BaseHTTPRequestHandler):
                     provider=body.get("provider", ""),
                     verify_run=body.get("verify"),
                     propose_run=bool(body.get("propose", False)),
+                    allow_expensive=bool(body.get("allow_expensive", False)),
                     include_memory=not bool(body.get("no_memory", False)),
                 )
             except (ValueError, RuntimeError) as exc:

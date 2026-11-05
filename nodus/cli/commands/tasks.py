@@ -44,6 +44,11 @@ def add(sub) -> None:
     p.add_argument("--effort", default="")
     p.add_argument("--model", default="", help="pin the model for this run only")
     p.add_argument(
+        "--allow-expensive",
+        action="store_true",
+        help="run an expensive route even after today's soft budget is used up",
+    )
+    p.add_argument(
         "--propose",
         action="store_true",
         help="work in an isolated git worktree and produce a mergeable proposal",
@@ -121,6 +126,7 @@ def run(args) -> int:
         "verify": not args.no_verify,
         "propose": args.propose,
         "no_memory": args.no_memory,
+        "allow_expensive": args.allow_expensive,
     }
 
     if args.continue_run:

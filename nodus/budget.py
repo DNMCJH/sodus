@@ -43,6 +43,56 @@ def limit() -> float:
     return 0.0
 
 
+def soft_limit() -> float:
+    """The spend at which expensive routes stop being allowed (0.0 = off).
+
+    A single ceiling is too blunt for a machine that runs cheap models all day
+    and an expensive one once a week: either the cap blocks the cheap work, or
+    it lets one opus run eat the whole day. The soft limit is the middle line —
+    cheap routes keep running up to the hard ceiling, expensive ones need an
+    explicit opt-in after this much is already spent.
+    """
+    raw = config.load_config().get(DEFAULT_KEY) or {}
+    if isinstance(raw, dict):
+        try:
+            return max(0.0, float(raw.get("soft_cny") or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
+
+
+def expensive_routes() -> tuple[str, ...]:
+    """Route names that only run past the soft limit with an explicit opt-in."""
+    raw = config.load_config().get(DEFAULT_KEY) or {}
+    if isinstance(raw, dict):
+        names = raw.get("expensive_routes") or ()
+        if isinstance(names, (list, tuple)):
+            return tuple(str(name).strip() for name in names if str(name).strip())
+    return ()
+
+
+def expensive_models() -> tuple[str, ...]:
+    """Model-name prefixes that count as expensive wherever they are pinned.
+
+    A route name is not enough: `claude` can run sonnet or opus depending on
+    what the CLI defaults to, and `--model` can pin an expensive model on a
+    cheap route. Prefix matching keeps the config short ("claude-opus") while
+    still catching the versioned names the vendors record.
+    """
+    raw = config.load_config().get(DEFAULT_KEY) or {}
+    if isinstance(raw, dict):
+        names = raw.get("expensive_models") or ()
+        if isinstance(names, (list, tuple)):
+            return tuple(str(name).strip() for name in names if str(name).strip())
+    return ()
+
+
+def model_is_expensive(model: str) -> bool:
+    if not model:
+        return False
+    return any(model.startswith(prefix) for prefix in expensive_models())
+
+
 def day_start(now: float | None = None) -> float:
     """Local midnight for `now` (the same boundary the board's money uses)."""
     now = time.time() if now is None else now
@@ -65,17 +115,49 @@ def spent(now: float | None = None) -> float:
     return ledger.spent(rows, CURRENCY, unrecorded_is=CURRENCY)
 
 
-def check(now: float | None = None) -> dict:
+def check(
+    now: float | None = None,
+    route: str = "",
+    model: str = "",
+    allow_expensive: bool = False,
+) -> dict:
     """Can another run start right now, and what do the numbers look like?"""
     cap = limit()
+    soft = soft_limit()
     used = spent(now)
     over = bool(cap) and used >= cap
+    route_expensive = bool(route) and route in expensive_routes()
+    model_expensive = model_is_expensive(model)
+    expensive = route_expensive or model_expensive
+    match = "model" if model_expensive else ("route" if route_expensive else "")
+    gated = expensive and bool(soft) and used >= soft and not allow_expensive
     return {
         "limit": cap,
+        "soft_limit": soft,
         "spent": round(used, 6),
         "over": over,
         "remaining": round(max(0.0, cap - used), 6) if cap else None,
+        "expensive": expensive,
+        "gated": gated,
+        "match": match,
+        "route": route,
+        "model": model,
     }
+
+
+def blocked_message(info: dict) -> str:
+    """Why the run was refused, in the terms the operator set."""
+    if info.get("over"):
+        return refuse_message(info)
+    if info.get("match") == "model":
+        subject = info.get("model") or "this model"
+    else:
+        subject = info.get("route") or info.get("model") or "this run"
+    return (
+        f"{subject} is expensive and today's spend is already "
+        f"{info['spent']:.2f} {CURRENCY} (soft limit {info['soft_limit']:.2f}); "
+        f"pass --allow-expensive for a deliberate one-off, or use a cheaper route"
+    )
 
 
 def refuse_message(info: dict) -> str:
