@@ -14,6 +14,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import config
+from ..daemon import write_state
 
 BASE = "http://127.0.0.1:4199"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,11 @@ def ensure_daemon(port: int = 4199) -> None:
     with four concurrent `nodus run`, the first one to finish took the daemon
     (and the other three watchers) down with it. The daemon outlives every
     client, so it has to be a separate process.
+
+    The pid we spawn is written to `daemon.json`, the state `nodus down` reads.
+    Before this, a daemon started by this path could only be stopped by hand:
+    `nodus down` found no record and the next `nodus up` reported a pid that
+    was already dead.
     """
     if alive(port):
         return
@@ -42,7 +48,7 @@ def ensure_daemon(port: int = 4199) -> None:
     if os.name == "nt":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-c", _SERVE_SNIPPET, str(port)],
             cwd=str(REPO_ROOT),
             stdin=subprocess.DEVNULL,
@@ -57,6 +63,7 @@ def ensure_daemon(port: int = 4199) -> None:
         log.close()
     for _ in range(60):
         if alive(port):
+            write_state(proc.pid, port)
             return
         time.sleep(0.1)
     raise RuntimeError(f"nodusd failed to start; see {log_path}")
