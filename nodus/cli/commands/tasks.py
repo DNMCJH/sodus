@@ -198,7 +198,10 @@ def run(args) -> int:
             )
             return 1
         body["task_id"] = args.task
-        body["route"] = route or "claude"
+        # Empty means "whatever the daemon's configured default is": the
+        # operator sets it in config.routing.default, and duplicating that
+        # decision here is how the two silently disagreed about "claude".
+        body["route"] = route
 
     r = call("POST", "/runs", body)
     print(f"run {r['id']} ({r.get('route') or body.get('route') or ''})")

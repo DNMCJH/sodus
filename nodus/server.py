@@ -2408,7 +2408,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 run = runner.RUNNER.start(
                     task_id=body.get("task_id", ""),
-                    route_name=body.get("route") or body.get("agent") or "claude",
+                    route_name=body.get("route") or body.get("agent") or config.default_route(),
                     cwd=body.get("cwd"),
                     parent_run_id=body.get("parent_run_id"),
                     note=body.get("note", ""),

@@ -119,6 +119,22 @@ def active_profile() -> str:
     return str(load_config().get("profile") or "default")
 
 
+def default_route() -> str:
+    """Which route a bare `nodus run` uses when the caller names none.
+
+    A setting, not a capability: the route table owns what exists, this owns
+    what is picked by default. Kept out of `routes.py` so the default can be
+    changed without editing the route table, and so a benchmark/replay that
+    loads routes from a scratch home still resolves the operator's default.
+    """
+    routing = load_config().get("routing") or {}
+    if isinstance(routing, dict):
+        value = routing.get("default")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "claude"
+
+
 def ensure_dirs() -> None:
     for d in (HOME, HOME / "profiles", HOME / "tasks", HOME / "runs", HOME / "briefs", state_dir()):
         d.mkdir(parents=True, exist_ok=True)
