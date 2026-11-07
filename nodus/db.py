@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import socket
 import sqlite3
@@ -12,6 +14,34 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+
+MEMORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_episode (
+  id TEXT PRIMARY KEY, task_id TEXT, run_id TEXT, workspace TEXT, route TEXT,
+  verdict TEXT, cause TEXT, cost REAL, tokens INTEGER, started_at REAL,
+  ended_at REAL, summary TEXT, lessons_json TEXT, evidence_json TEXT, created_at REAL
+);
+CREATE TABLE IF NOT EXISTS memory_candidate (
+  id TEXT PRIMARY KEY, workspace TEXT, kind TEXT, key TEXT, text TEXT,
+  sources_json TEXT, hash TEXT, status TEXT, version INTEGER, supersedes TEXT,
+  expires_at REAL, hits INTEGER, last_seen REAL, created_at REAL, updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS memory_exposure (
+  id TEXT PRIMARY KEY, candidate_id TEXT, task_id TEXT, run_id TEXT, channel TEXT, at REAL
+);
+CREATE TABLE IF NOT EXISTS dream_batch (
+  id TEXT PRIMARY KEY, status TEXT, cursor TEXT, started_at REAL,
+  finished_at REAL, stats_json TEXT
+);
+CREATE TABLE IF NOT EXISTS memory_fts_map (
+  candidate_id TEXT PRIMARY KEY, rowid INTEGER NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_memory_episode_run ON memory_episode(run_id);
+CREATE INDEX IF NOT EXISTS idx_memory_candidate_scope ON memory_candidate(workspace, status);
+CREATE INDEX IF NOT EXISTS idx_memory_candidate_hash ON memory_candidate(hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_candidate_dedupe ON memory_candidate(workspace, hash);
+CREATE INDEX IF NOT EXISTS idx_memory_exposure_candidate ON memory_exposure(candidate_id);
+"""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS session (
@@ -155,10 +185,29 @@ CREATE TABLE IF NOT EXISTS pipeline (
   started_at REAL,
   ended_at REAL
 );
--- Memory is not a table. Confirmed facts are appended to the project's
+-- Confirmed facts are appended to the project's
 -- AGENTS.md, where a human can read them, diff them and revert them
 -- (`memory.py`); `connect()` drops the old rows this table used to hold.
-"""
+""" + MEMORY_SCHEMA
+
+
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    # execute(), unlike executescript(), preserves the migration transaction.
+    for statement in MEMORY_SCHEMA.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+    for tokenizer in ("trigram", "unicode61"):
+        try:
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5("
+                f"text, key, kind, workspace, tokenize='{tokenizer}')"
+            )
+            break
+        except sqlite3.OperationalError as exc:
+            logging.getLogger(__name__).warning("Memory FTS %s unavailable: %s", tokenizer, exc)
+
+
+_MIGRATIONS = ((2, _migrate_v2),)
 
 
 class Busy(RuntimeError):
@@ -281,6 +330,18 @@ def connect() -> sqlite3.Connection:
             (config.workspace_id(),),
         )
     conn.commit()
+    try:
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            version = int(conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
+            for target, migrate in _MIGRATIONS:
+                if version < target:
+                    migrate(conn)
+                    conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(target),))
+                    version = target
+    except Exception:
+        conn.close()
+        raise
     _SCHEMA_READY.add(key)
     return conn
 
@@ -1147,3 +1208,111 @@ def update_pipeline(pid: str, **fields: Any) -> None:
     cols = ", ".join(f"{k}=?" for k in fields)
     with connect() as c:
         c.execute(f"UPDATE pipeline SET {cols} WHERE id=?", (*fields.values(), pid))
+
+
+# ---- rebuildable memory staging (AGENTS.md remains the fact source) ----
+
+_EPISODE_FIELDS = set("task_id run_id workspace route verdict cause cost tokens started_at ended_at summary lessons_json evidence_json created_at".split())
+_CANDIDATE_FIELDS = set("workspace kind key text sources_json hash status supersedes expires_at hits last_seen created_at updated_at".split())
+
+
+def _memory_insert(c, table, fields):
+    columns = ", ".join(fields)
+    c.execute(f"INSERT INTO {table} ({columns}) VALUES ({', '.join('?' for _ in fields)})", tuple(fields.values()))
+
+
+def memory_add_episode(**fields) -> str:
+    """Append an episode; JSON fields accept serialized JSON strings."""
+    if fields.keys() - _EPISODE_FIELDS - {"id"}:
+        raise ValueError("Unknown episode fields")
+    row = {"id": new_id("episode"), "workspace": config.workspace_id(), "created_at": now(), **fields}
+    with connect() as c:
+        _memory_insert(c, "memory_episode", row)
+    return row["id"]
+
+
+def memory_episodes_after(seq: int, limit: int = 50) -> list[dict]:
+    """Return append-order episodes; `seq` is an exclusive rowid watermark."""
+    with connect() as c:
+        return [dict(r) for r in c.execute("SELECT rowid AS seq, * FROM memory_episode WHERE rowid>? ORDER BY rowid LIMIT ?", (seq, max(0, limit)))]
+
+
+def _memory_index(c, cid):
+    exists = c.execute("SELECT 1 FROM sqlite_master WHERE name='memory_fts'").fetchone()
+    if not exists:
+        return
+    old = c.execute("SELECT rowid FROM memory_fts_map WHERE candidate_id=?", (cid,)).fetchone()
+    if old:
+        c.execute("DELETE FROM memory_fts WHERE rowid=?", (old[0],))
+        c.execute("DELETE FROM memory_fts_map WHERE candidate_id=?", (cid,))
+    row = c.execute("SELECT text, key, kind, workspace FROM memory_candidate WHERE id=?", (cid,)).fetchone()
+    cursor = c.execute("INSERT INTO memory_fts(text, key, kind, workspace) VALUES(?,?,?,?)", tuple(row))
+    c.execute("INSERT INTO memory_fts_map(candidate_id, rowid) VALUES(?,?)", (cid, cursor.lastrowid))
+
+
+def memory_add_candidate(text: str, workspace: str | None = None, **fields) -> str:
+    """Insert once per workspace/hash, including concurrent callers."""
+    if fields.keys() - _CANDIDATE_FIELDS - {"id"}:
+        raise ValueError("Unknown candidate fields")
+    stamp = now()
+    row = {"id": new_id("candidate"), "workspace": workspace if workspace is not None else config.workspace_id(),
+           "kind": "lesson", "text": text, "hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+           "status": "proposed", "version": 1, "hits": 0, "created_at": stamp, "updated_at": stamp, **fields}
+    with connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        old = c.execute("SELECT id FROM memory_candidate WHERE workspace=? AND hash=?", (row["workspace"], row["hash"])).fetchone()
+        if old:
+            return old[0]
+        _memory_insert(c, "memory_candidate", row)
+        _memory_index(c, row["id"])
+    return row["id"]
+
+
+def memory_get_candidate(cid: str) -> dict | None:
+    with connect() as c:
+        row = c.execute("SELECT * FROM memory_candidate WHERE id=?", (cid,)).fetchone()
+        return dict(row) if row else None
+
+
+def memory_update_candidate(cid: str, expected_version: int, **fields) -> dict:
+    """Atomic compare-and-swap; missing or stale candidates raise ValueError."""
+    if fields.keys() - (_CANDIDATE_FIELDS - {"created_at"}):
+        raise ValueError("Unknown or immutable candidate fields")
+    if "text" in fields and "hash" not in fields:
+        fields["hash"] = hashlib.sha256(fields["text"].encode("utf-8")).hexdigest()
+    fields["updated_at"] = now()
+    with connect() as c:
+        assignments = ", ".join(f"{key}=?" for key in fields)
+        result = c.execute(f"UPDATE memory_candidate SET {assignments}, version=version+1 WHERE id=? AND version=?", (*fields.values(), cid, expected_version))
+        if result.rowcount != 1:
+            raise ValueError(f"Candidate version conflict: {cid}")
+        _memory_index(c, cid)
+        return dict(c.execute("SELECT * FROM memory_candidate WHERE id=?", (cid,)).fetchone())
+
+
+def memory_record_exposure(candidate_id: str, task_id: str | None, run_id: str | None, channel: str) -> str:
+    eid = new_id("exposure")
+    with connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        if not c.execute("SELECT 1 FROM memory_candidate WHERE id=?", (candidate_id,)).fetchone():
+            raise ValueError(f"Unknown candidate: {candidate_id}")
+        _memory_insert(c, "memory_exposure", dict(id=eid, candidate_id=candidate_id, task_id=task_id, run_id=run_id, channel=channel, at=now()))
+    return eid
+
+
+def memory_search_candidates(query: str, workspace: str | None = None, limit: int = 20) -> list[dict]:
+    """Literal phrase search; short CJK and tokenizer misses use substring LIKE."""
+    if not query.strip() or limit <= 0:
+        return []
+    scope = " AND c.workspace=?" if workspace is not None else ""
+    params = (workspace,) if workspace is not None else ()
+    with connect() as c:
+        if len(query) >= 3:
+            try:
+                rows = c.execute("SELECT c.* FROM memory_fts JOIN memory_fts_map m ON m.rowid=memory_fts.rowid JOIN memory_candidate c ON c.id=m.candidate_id WHERE memory_fts MATCH ?" + scope + " ORDER BY memory_fts.rank, c.id LIMIT ?", ('"' + query.replace('"', '""') + '"', *params, limit)).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+        literal = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        return [dict(r) for r in c.execute("SELECT c.* FROM memory_candidate c WHERE (c.text LIKE ? ESCAPE '!' OR c.key LIKE ? ESCAPE '!')" + scope + " ORDER BY c.id LIMIT ?", (f"%{literal}%", f"%{literal}%", *params, limit))]
