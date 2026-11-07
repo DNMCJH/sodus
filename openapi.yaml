@@ -881,6 +881,31 @@ paths:
           $ref: '#/components/responses/InternalError'
 
 
+  /asks:
+    get:
+      summary: List unexpired asks in a workspace (defaults to server workspace)
+      operationId: listAsks
+      parameters:
+        - in: query
+          name: workspace
+          schema: {type: string}
+      responses:
+        '200':
+          description: Unexpired asks, newest first; status uses the polling state mapping
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, status, created_at, expires_at]
+                  properties:
+                    id: {type: string}
+                    status: {type: string, enum: [queued, running, stalled, answered, promoted, failed]}
+                    created_at: {type: number}
+                    expires_at: {type: number}
+        '401': {description: Unauthorized}
+
   /ask:
     post:
       summary: Queue an isolated answer (24 hour TTL)

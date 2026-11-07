@@ -6,11 +6,11 @@ the spec says messages "are delimited by newlines, and MUST NOT contain
 embedded newlines". Anything written to stdout that is not a protocol message
 breaks the client, so stray prints are redirected to stderr while serving.
 
-The server owns its own SQLite connection and spawns runs in this process, so
-`nodus up` is not required. That also means a run started here lives only as
+Legacy tools own a SQLite connection and spawn runs in this process, so
+`nodus up` is not required for them. That also means a run started here lives only as
 long as this process: the daemon's startup reconciliation would treat it as an
-orphan. Nothing here goes through HTTP — it calls the same `db` / `runner`
-functions the daemon calls.
+orphan. Legacy tools call `db` / `runner` directly; ask tools use the daemon
+HTTP contract and require it to be running.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from . import config, db, ledger, memory, runner
 PROTOCOL_VERSION = "2024-11-05"
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
 #: What clients see as `serverInfo.name`. The product name; the tool names stay
-#: `nodus_*` on purpose (renaming them would break every saved client config).
+#: `nodus_*` for compatibility; ask tools also expose the new `sodus_*` names.
 SERVER_NAME = "sodus"
 
 #: `wait=true` blocks until the run leaves queued/running. A client-side tool
@@ -172,6 +172,17 @@ TOOLS: list[dict] = [
         ),
     },
 ]
+
+
+for _name, _description, _properties, _required in (
+    ("sodus_ask", "异步提问；返回 ask id，用 sodus_ask_status 轮询。需要 HTTP daemon。",
+     {key: {"type": "string"} for key in ("request_id", "text", "cwd", "route", "follow_up_of")},
+     ("request_id", "text")),
+    ("sodus_ask_status", "查询 ask 结果；过期返回 410 错误。", {"id": {"type": "string"}}, ("id",)),
+):
+    for _tool_name in (_name, _name.replace("sodus_", "nodus_", 1)):
+        TOOLS.append({"name": _tool_name, "description": _description,
+                      "inputSchema": _schema(_properties, _required)})
 
 
 # ---- argument parsing --------------------------------------------------
@@ -411,7 +422,42 @@ def _memory_candidates(args: dict) -> dict:
     }
 
 
+def _ask(args: dict) -> dict:
+    from .cli import client
+    body = {key: _string(args, key) for key in ("request_id", "text")}
+    for key in ("cwd", "route", "follow_up_of"):
+        if key in args:
+            body[key] = _string(args, key, required=False)
+    _no_extra(args)
+    body["origin"] = "mcp"
+    return client.call("POST", "/ask", body,
+                       headers={"X-Sodus-Depth": os.environ.get("NODUS_DEPTH", "0")})
+
+
+def _ask_status(args: dict) -> dict:
+    from urllib.parse import quote
+    from .cli import client
+    aid = _string(args, "id")
+    _no_extra(args)
+    return client.call("GET", "/ask/" + quote(aid, safe=""))
+
+
+def _deny_worker() -> None:
+    if os.environ.get("NODUS_ROLE") == "worker":
+        raise ToolError("recursion_denied")
+    try:
+        depth = int(os.environ.get("NODUS_DEPTH", "0"))
+    except ValueError:
+        raise ToolError("invalid_depth") from None
+    if depth >= 1:
+        raise ToolError("recursion_denied")
+
+
 _HANDLERS: dict[str, Callable[[dict], dict]] = {
+    "sodus_ask": _ask,
+    "nodus_ask": _ask,
+    "sodus_ask_status": _ask_status,
+    "nodus_ask_status": _ask_status,
     "nodus_task_create": _task_create,
     "nodus_run": _run,
     "nodus_run_status": _run_status,
@@ -448,8 +494,10 @@ def call_tool(name: Any, arguments: Any = None) -> dict:
         known = ", ".join(sorted(_HANDLERS))
         return _error_result(f"未知工具：{name}。可用：{known}")
     try:
+        if name in {"sodus_ask", "nodus_ask", "nodus_run", "nodus_task_create"}:
+            _deny_worker()
         return _text_result(handler(_arguments(arguments)))
-    except ToolError as exc:
+    except (ToolError, RuntimeError) as exc:
         return _error_result(str(exc))
     except Exception as exc:  # noqa: BLE001 - one bad tool must not end the server
         _log(f"{name} 执行异常：{type(exc).__name__}: {exc}")
@@ -478,6 +526,7 @@ def _initialize(params: dict) -> dict:
         "serverInfo": {"name": SERVER_NAME, "version": config.VERSION},
         "instructions": (
             "Sodus 把任务交给多个 agent，并用可执行证据验收。"
+            "用 sodus_ask 异步提问、sodus_ask_status 轮询（nodus_ask/nodus_ask_status 为别名）；"
             "先 nodus_task_create，再 nodus_run，用 nodus_run_status 看成本与 verify；"
             "nodus_proposals 列待人工处理的提案，nodus_cost_today 看今日花费。"
         ),

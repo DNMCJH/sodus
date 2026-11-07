@@ -2183,6 +2183,20 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path == "/asks":
+            from . import ask
+            workspace = (qs.get("workspace") or [config.workspace_id()])[0]
+            with db.connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM ask WHERE workspace_id=? AND expires_at>=? ORDER BY created_at DESC",
+                    (workspace, time.time()),
+                ).fetchall()
+            return _json(self, 200, [
+                {key: value for key, value in ask.view(dict(row)).items()
+                 if key in ("id", "status", "created_at", "expires_at")}
+                for row in rows
+            ])
+
         if path.startswith("/ask/") and len(path.split("/")) == 3:
             from . import ask
             code, payload = ask.get(path.split("/")[2])

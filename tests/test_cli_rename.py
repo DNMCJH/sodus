@@ -139,10 +139,13 @@ def test_the_missing_source_is_an_error_not_an_empty_migration(tmp_path, home, c
     assert not target.exists()
 
 
-def test_mcp_tool_names_stay_nodus():
+def test_mcp_legacy_names_and_ask_transition():
     names = [tool["name"] for tool in mcp.TOOLS]
     assert names, "the MCP server advertises no tools"
-    assert all(name.startswith("nodus_") for name in names), names
+    assert {name for name in names if not name.startswith("nodus_")} == {
+        "sodus_ask", "sodus_ask_status",
+    }
+    assert {"nodus_ask", "nodus_ask_status"} <= set(names)
 
     reply = mcp.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     listed = [tool["name"] for tool in reply["result"]["tools"]]

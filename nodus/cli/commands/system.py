@@ -454,6 +454,15 @@ def probe(args) -> int:
 
 
 def status(args) -> int:
+    from collections import Counter
+    from urllib.parse import urlencode
+    asks = call("GET", "/asks?" + urlencode({"workspace": config.workspace_id()}))
+    counts = Counter(row["status"] for row in asks)
+    print(
+        f"asks active    open={counts['queued']} "
+        f"running={counts['running'] + counts['stalled']} "
+        f"done={counts['answered'] + counts['promoted']} failed={counts['failed']}"
+    )
     latest = telemetry.last_probes()
     for name in sorted(providers.load()):
         r = latest.get(name)

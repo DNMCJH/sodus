@@ -60,11 +60,16 @@ def test_recursion_validation():
         assert ask.submit(body)[0] == 400
 
 
-def test_http_auth_and_contract():
+def test_http_auth_and_contract(monkeypatch):
     httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     base = f'http://127.0.0.1:{httpd.server_port}'
+    from nodus import mcp
+    from nodus.cli import client
+    monkeypatch.setattr(client, 'BASE', base)
+    monkeypatch.delenv('NODUS_ROLE', raising=False)
+    monkeypatch.setenv('NODUS_DEPTH', '0')
     def request(path, body=None, auth=True, depth='0'):
         headers = {'Content-Type': 'application/json', 'X-Sodus-Depth': depth}
         if auth:
@@ -77,19 +82,34 @@ def test_http_auth_and_contract():
         with response:
             return response.status, json.load(response)
     try:
+        assert request('/asks', auth=False)[0] == 401
+        assert request('/asks') == (200, [])
         assert request('/ask', {}, auth=False)[0] == 401
         assert request('/ask', {}, depth='1')[0] == 403
         code, row = request('/ask', dict(request_id='http', text='why'))
         assert code == 202
+        listed = request('/asks')[1]
+        assert len(listed) == 1
+        assert listed[0]['id'] == row['id']
+        assert set(listed[0]) == {'id', 'status', 'created_at', 'expires_at'}
+        assert request('/asks?workspace=another')[1] == []
+        assert request('/asks?workspace=ask-test')[1] == listed
         assert request('/ask', dict(request_id='http', text='why'))[0] == 200
         assert request('/ask', dict(request_id='http', text='other'))[0] == 409
         assert request(row['poll'])[0] == 200
+        mcp_result = mcp.call_tool('sodus_ask', {'request_id': 'http', 'text': 'why'})
+        assert not mcp_result['isError']
+        assert json.loads(mcp_result['content'][0]['text'])['id'] == row['id']
         assert request(row['poll']+'/promote', {})[0] == 400
         first = request(row['poll']+'/promote', dict(acceptance='pytest'))
         assert first[0] == 201
         assert request(row['poll']+'/promote', dict(acceptance='pytest')) == first
         db.ask_update(row['id'], expires_at=1)
+        assert request('/asks')[1] == []
         assert request(row['poll'])[0] == 410
+        expired = mcp.call_tool('sodus_ask_status', {'id': row['id']})
+        assert expired['isError']
+        assert expired['content'][0]['text'] == 'HTTP 410: {"error": "expired"}'
         assert request(row['poll']+'/promote', dict(acceptance='pytest'))[0] == 410
     finally:
         httpd.shutdown()
@@ -160,3 +180,22 @@ def test_worker_environment(monkeypatch):
     monkeypatch.setenv('NODUS_DEPTH', '2')
     env = agents.build_env(spec, provider, {})
     assert env['NODUS_ROLE'] == 'worker' and env['NODUS_DEPTH'] == '3'
+
+
+def test_status_asks_line(monkeypatch, capsys):
+    from nodus.cli.commands import system
+    from urllib.parse import parse_qs, urlparse
+    def request(method, path):
+        assert method == 'GET'
+        assert urlparse(path).path == '/asks'
+        assert parse_qs(urlparse(path).query)['workspace'] == [config.workspace_id()]
+        return [{'status': s} for s in ['queued', 'running', 'stalled', 'answered', 'promoted', 'failed']]
+    monkeypatch.setattr(system, 'call', request)
+    monkeypatch.setattr(system.providers, 'load', lambda: {})
+    monkeypatch.setattr(system.telemetry, 'last_probes', lambda: {})
+    monkeypatch.setattr(system.telemetry, 'usage_summary', lambda _: {})
+    monkeypatch.setattr(system.telemetry, 'decision_usage', lambda _: dict(calls=0, **{'in': 0, 'out': 0}))
+    monkeypatch.setattr(system.telemetry, 'balance', lambda: None)
+    monkeypatch.setattr(system.budget, 'check', lambda: {'limit': 0})
+    assert system.status(None) == 0
+    assert 'asks active    open=1 running=2 done=2 failed=1' in capsys.readouterr().out
