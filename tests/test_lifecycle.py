@@ -701,7 +701,7 @@ def test_accepted_by_upgrade_and_reconnect(home, version):
     for _ in range(3):
         db._SCHEMA_READY.clear()
         with db.connect() as c:
-            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '3'
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '4'
             assert [r[1] for r in c.execute('PRAGMA table_info(task)')].count('accepted_by') == 1
             if version:
                 assert tuple(c.execute("SELECT title,acceptance,accepted_by FROM task WHERE id='legacy'").fetchone()) == ('保留','pytest',None)

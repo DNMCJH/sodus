@@ -9,6 +9,7 @@ import os
 import socket
 import sqlite3
 import time
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -212,7 +213,19 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE task ADD COLUMN accepted_by TEXT CHECK (accepted_by IS NULL OR accepted_by='human')")
 
 
-_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3))
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS ask (
+      id TEXT PRIMARY KEY, request_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL, text TEXT NOT NULL, cwd TEXT, route TEXT,
+      origin TEXT, client TEXT, session_ref TEXT, follow_up_of TEXT, depth INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'queued', answer TEXT, run_id TEXT, promoted_task_id TEXT,
+      wrote_files INTEGER DEFAULT 0, cost REAL, error TEXT, created_at REAL NOT NULL,
+      expires_at REAL NOT NULL, updated_at REAL NOT NULL)""")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ask_request ON ask(workspace_id, request_id)")
+    conn.execute("CREATE TABLE IF NOT EXISTS ask_expired (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL)")
+
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4))
 
 
 class Busy(RuntimeError):
@@ -244,7 +257,16 @@ def describe_busy(cwd: str, holder: dict) -> str:
 _SCHEMA_READY: set[str] = set()
 
 
+_CONNECT_LOCK = threading.RLock()
+
+
 def connect() -> sqlite3.Connection:
+    # Concurrent first requests must not race WAL setup and schema migration.
+    with _CONNECT_LOCK:
+        return _connect()
+
+
+def _connect() -> sqlite3.Connection:
     path = config.HOME / "nodus.sqlite3"
     key = str(path)
     ready = key in _SCHEMA_READY
@@ -1321,3 +1343,79 @@ def memory_search_candidates(query: str, workspace: str | None = None, limit: in
                 pass
         literal = query.replace("!", "!!").replace("%", "!%").replace("_", "!_")
         return [dict(r) for r in c.execute("SELECT c.* FROM memory_candidate c WHERE (c.text LIKE ? ESCAPE '!' OR c.key LIKE ? ESCAPE '!')" + scope + " ORDER BY c.id LIMIT ?", (f"%{literal}%", f"%{literal}%", *params, limit))]
+
+
+def ask_get(aid: str) -> dict:
+    with connect() as c:
+        row = c.execute("SELECT * FROM ask WHERE id=? AND workspace_id=?", (aid, config.workspace_id())).fetchone()
+    return dict(row) if row else {}
+
+
+def ask_get_by_request(request_id: str) -> dict:
+    with connect() as c:
+        row = c.execute("SELECT * FROM ask WHERE workspace_id=? AND request_id=?", (config.workspace_id(), request_id)).fetchone()
+    return dict(row) if row else {}
+
+
+def ask_create(request_id: str, text: str, payload_hash: str, **fields) -> tuple[dict, bool]:
+    stamp = now()
+    row = dict(id=new_id("ask"), request_id=request_id, workspace_id=config.workspace_id(),
+               text=text, payload_hash=payload_hash, created_at=stamp, expires_at=stamp+86400,
+               updated_at=stamp, status="queued", **fields)
+    try:
+        with connect() as c:
+            old = c.execute("SELECT id FROM ask WHERE workspace_id=? AND request_id=? AND expires_at<?",
+                            (config.workspace_id(), request_id, stamp)).fetchone()
+            if old:
+                c.execute("INSERT OR IGNORE INTO ask_expired VALUES(?,?)", (old[0], config.workspace_id()))
+                c.execute("DELETE FROM ask WHERE id=?", (old[0],))
+            c.execute(f"INSERT INTO ask ({','.join(row)}) VALUES ({','.join('?' for _ in row)})", tuple(row.values()))
+    except sqlite3.IntegrityError:
+        existing = ask_get_by_request(request_id)
+        if not existing:
+            raise
+        return existing, False
+    return ask_get(row['id']), True
+
+
+def ask_update(aid: str, **fields) -> None:
+    allowed = {'status','answer','run_id','promoted_task_id','wrote_files','cost','error','expires_at'}
+    if not fields.keys() <= allowed:
+        raise ValueError("invalid ask fields")
+    fields['updated_at'] = now()
+    with connect() as c:
+        c.execute(f"UPDATE ask SET {','.join(k+'=?' for k in fields)} WHERE id=? AND workspace_id=?",
+                  (*fields.values(), aid, config.workspace_id()))
+
+
+def ask_promote(aid: str, acceptance: str, route: str | None = None) -> str:
+    if not isinstance(acceptance, str) or not acceptance.strip():
+        raise ValueError("acceptance required")
+    with connect() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute("SELECT * FROM ask WHERE id=? AND workspace_id=?", (aid, config.workspace_id())).fetchone()
+        if not row:
+            raise KeyError(aid)
+        if row['expires_at'] < now():
+            raise TimeoutError(aid)
+        if row['promoted_task_id']:
+            return row['promoted_task_id']
+        tid = new_id('task')
+        goal = row['text'] + "\n\nAnswer:\n" + (row['answer'] or '')
+        if route:
+            goal += "\nRequested route: " + route
+        c.execute("INSERT INTO task(id,workspace_id,title,goal,acceptance,created_at) VALUES(?,?,?,?,?,?)",
+                  (tid, config.workspace_id(), row['text'][:60], goal, acceptance, now()))
+        c.execute("UPDATE ask SET promoted_task_id=?,updated_at=? WHERE id=?", (tid, now(), aid))
+    return tid
+
+
+def ask_is_expired(aid: str) -> bool:
+    with connect() as c:
+        return c.execute("SELECT 1 FROM ask_expired WHERE id=? AND workspace_id=?", (aid, config.workspace_id())).fetchone() is not None
+
+
+def ask_sweep() -> int:
+    with connect() as c:
+        c.execute("INSERT OR IGNORE INTO ask_expired SELECT id,workspace_id FROM ask WHERE expires_at<?", (now(),))
+        return c.execute("DELETE FROM ask WHERE expires_at<?", (now(),)).rowcount

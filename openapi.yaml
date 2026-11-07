@@ -880,6 +880,110 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+
+  /ask:
+    post:
+      summary: Queue an isolated answer (24 hour TTL)
+      parameters:
+        - in: header
+          name: X-Sodus-Depth
+          schema: {type: integer, default: 0}
+          description: Values at least one are rejected to prevent recursion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, text]
+              properties:
+                request_id: {type: string, minLength: 1}
+                text: {type: string, minLength: 1}
+                cwd: {type: string}
+                route: {type: string}
+                follow_up_of: {type: string}
+                origin: {type: string, enum: [http, cli, mcp]}
+                client: {type: string}
+                session_ref: {}
+      responses:
+        '200': {description: Existing request with identical canonical payload}
+        '202':
+          description: Queued answer
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, request_id, status, poll]
+                properties:
+                  id: {type: string}
+                  request_id: {type: string}
+                  status: {type: string, const: queued}
+                  poll: {type: string}
+        '400': {description: Invalid request}
+        '401': {description: Unauthorized}
+        '403': {description: recursion_denied}
+        '409': {description: request_id_conflict (includes existing id and payload_hash)}
+  /ask/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    get:
+      summary: Poll answer status
+      responses:
+        '200':
+          description: Answer state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, answer, run_id, task_id, wrote_files, cost, expires_at]
+                properties:
+                  id: {type: string}
+                  status: {type: string, enum: [queued, running, stalled, answered, failed, promoted, expired]}
+                  answer: {type: [string, 'null']}
+                  run_id: {type: [string, 'null']}
+                  task_id: {type: [string, 'null']}
+                  wrote_files: {type: boolean}
+                  cost: {type: [number, 'null']}
+                  expires_at: {type: number}
+        '401': {description: Unauthorized}
+        '404': {description: Unknown ask}
+        '410': {description: Expired ask, including swept ids}
+  /ask/{id}/promote:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: {type: string}
+    post:
+      summary: Idempotently promote an answer into a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [acceptance]
+              properties:
+                acceptance: {type: string, minLength: 1}
+                route: {type: string}
+      responses:
+        '201':
+          description: Created or previously promoted task
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task_id]
+                properties:
+                  task_id: {type: string}
+        '400': {description: Acceptance is required}
+        '401': {description: Unauthorized}
+        '404': {description: Unknown ask}
+        '410': {description: Expired ask}
+
 components:
   securitySchemes:
     bearerAuth:

@@ -245,6 +245,7 @@ class Runner:
         verify_run: bool | None = None,
         propose_run: bool = False,
         allow_expensive: bool = False,
+        kind: str = "work",
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
@@ -330,6 +331,7 @@ class Runner:
         # The why is written before the worker spawns, so the event stream
         # answers "why this route" even while the run is still going. Doing it
         # after `thread.start()` would race the worker for the same `seq`.
+        db.update_run(run["id"], kind=kind)
         self._record_policy(run["id"], route_decision)
         # The sitting row exists already (it was created with the task). Record
         # how this run got here before the worker spawns, so `nodus lineage`

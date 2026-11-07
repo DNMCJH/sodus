@@ -2183,6 +2183,11 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path.startswith("/ask/") and len(path.split("/")) == 3:
+            from . import ask
+            code, payload = ask.get(path.split("/")[2])
+            return _json(self, code, payload)
+
         if path == "/favicon.ico":
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -2394,6 +2399,15 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
         except json.JSONDecodeError:
             return _json(self, 400, {"error": "invalid json"})
+
+        if path == "/ask":
+            from . import ask
+            code, payload = ask.submit(body, self.headers.get("X-Sodus-Depth", "0"))
+            return _json(self, code, payload)
+        if path.startswith("/ask/") and path.endswith("/promote") and len(path.split("/")) == 4:
+            from . import ask
+            code, payload = ask.promote(path.split("/")[2], body)
+            return _json(self, code, payload)
 
         if path == "/tasks":
             task = db.create_task(
