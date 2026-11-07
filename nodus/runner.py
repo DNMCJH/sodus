@@ -254,6 +254,12 @@ class Runner:
         # Checked against the *requested* route before anything is written: an
         # expensive one must be refused before a task lookup, a profile write or
         # a worktree is created, otherwise the refusal itself leaves debris.
+        if kind == "dream":
+            from . import dream
+            with db.connect() as c:
+                dream._check_tokens(c)
+            if not route_name:
+                route_name = config.dream_route()
         spend = budget.check(route=route_name, model=model, allow_expensive=allow_expensive)
         if spend["over"] or spend["gated"]:
             raise RuntimeError(budget.blocked_message(spend))

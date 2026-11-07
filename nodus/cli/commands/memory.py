@@ -18,6 +18,14 @@ def add(sub) -> None:
     p.set_defaults(func=memory_help, needs_daemon=False)
     nested = p.add_subparsers(dest="memory_cmd", metavar="<sources|harvest|adopt>", required=True)
 
+    d = nested.add_parser("dream", help="consolidate episodes into staged candidates")
+    mode = d.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--now", action="store_true")
+    mode.add_argument("--dry-run", action="store_true")
+    d.add_argument("--limit", type=int, default=50)
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(func=memory_dream, needs_daemon=False)
+
     s = nested.add_parser("sources", help="which memory files were found, and how big")
     s.add_argument("--project", default="", help="project directory; default is cwd")
     s.set_defaults(func=memory_sources, needs_daemon=False)
@@ -124,4 +132,15 @@ def memory_adopt(args) -> int:
         print(f"采纳 {result['added']} 条 → {result['path']}")
     else:
         print(f"没有新内容：这些已经在 {result['path']} 里了")
+    return 0
+
+
+def memory_dream(args) -> int:
+    from ... import dream
+    if args.dry_run:
+        result = dream.dry_run(args.limit)
+    else:
+        batch = dream.plan(limit=args.limit)
+        result = dream.count(dream.extract(batch)) if batch else {"status": "idle"}
+    print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 2))
     return 0

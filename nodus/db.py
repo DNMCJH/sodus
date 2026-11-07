@@ -225,7 +225,30 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE TABLE IF NOT EXISTS ask_expired (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL)")
 
 
-_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4))
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(dream_batch)")}
+    additions = {"workspace_id": "TEXT", "cursor_from": "INTEGER", "cursor_to": "INTEGER",
+                 "output_json": "TEXT", "ops_json": "TEXT", "memory_version": "INTEGER",
+                 "run_id": "TEXT", "target_path": "TEXT", "hash_before": "TEXT",
+                 "hash_after": "TEXT", "error": "TEXT", "started_at": "REAL", "ended_at": "REAL"}
+    for name, kind in additions.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE dream_batch ADD COLUMN {name} {kind}")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_dream_range ON dream_batch(workspace_id,cursor_from,cursor_to)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS candidate_evidence (
+      candidate_id TEXT NOT NULL REFERENCES memory_candidate(id),
+      episode_id TEXT NOT NULL REFERENCES memory_episode(id), lineage_root TEXT NOT NULL,
+      exposed INTEGER DEFAULT 0, created_at REAL, PRIMARY KEY(candidate_id,episode_id))""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_evidence_candidate ON candidate_evidence(candidate_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_candidate_evidence_episode ON candidate_evidence(episode_id)")
+    conn.execute("INSERT OR IGNORE INTO meta VALUES('memory_version','0')")
+    conn.execute("INSERT OR IGNORE INTO meta VALUES(?, '0')", ('dream_cursor:' + config.workspace_id(),))
+
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5))
+
+
+SCHEMA_VERSION = max(version for version, _ in _MIGRATIONS)
 
 
 class Busy(RuntimeError):
