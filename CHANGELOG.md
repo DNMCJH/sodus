@@ -1,5 +1,16 @@
 # 更新日志
 
+## 0.6.0（2026-11-08）
+
+围绕记忆闭环和轻量提问入口的一次功能版，汇总 W0–W3：
+
+- `/ask` 提供 HTTP 异步提问、幂等请求、状态轮询和人工验收后 promote；MCP 同时提供 `sodus_ask` / `sodus_ask_status`。
+- 记忆暂存层增加 episode、candidate、exposure 与 dream batch；可 dry-run/执行 dream plan、extract、count，支持历史 episode 回放。
+- L3 事实通过 marker 区块写入 `AGENTS.md`，支持 reindex、apply/adopt 与版本 rollback；life-cycle 状态派生覆盖 stalled、unverified 等状态。
+- daemon 增加每日 dream 触发；保留失败占用当日触发窗口的已知语义，详见 handoff。
+
+版本统一为 0.6.0；新增 `sodus debug memory-stats` 只读记忆 rot 指标和发行 e2e 门禁。
+
 ## 0.5.1（2026-11-08）
 
 0.5.0 之后的稳定化版本：不新增子系统，补默认路由、预算软闸门、opencode 权限与 daemon 状态一致性，让 sodus 可以交给其它会话稳定使用。

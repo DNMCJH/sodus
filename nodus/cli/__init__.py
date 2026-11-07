@@ -90,6 +90,7 @@ DEBUG_COMMANDS = (
     "proposal",
     # remembered facts
     "memory",
+    "memory-stats",
     # harness tributaries
     "observe",
     # evidence: read-only harness fingerprints over run history
