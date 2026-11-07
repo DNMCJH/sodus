@@ -1938,7 +1938,13 @@ def _memory_board(limit: int = 300) -> list[dict]:
             for row in staged:
                 row['evidence_count'] = c.execute('SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0', (row['id'],)).fetchone()[0]
                 row.update(sources=[],conflict=False,adopted=False)
-        if staged: return staged[:limit]
+        harvested = [
+            {"id": row["id"], "text": row["text"], "sources": row["sources"],
+             "conflict": row["conflict"], "adopted": row["adopted"]}
+            for row in rows if not row["adopted"]
+        ]
+        merged = staged + [row for row in harvested if row['text'] not in {x['text'] for x in staged}]
+        return merged[:limit]
     except Exception:  # noqa: BLE001 - the board outranks this section
         return []
     return [
@@ -2337,7 +2343,7 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, 200, board_state())
 
         if path == "/memory/candidates":
-            workspace = (qs.get("workspace") or [memory.saved_project()])[0]
+            workspace = (qs.get("workspace") or [config.workspace_id()])[0]
             status = (qs.get("status") or [""])[0]
             with db.connect() as c:
                 sql = "SELECT * FROM memory_candidate WHERE workspace=?"
@@ -2346,7 +2352,8 @@ class Handler(BaseHTTPRequestHandler):
                 rows = [dict(r) for r in c.execute(sql + " ORDER BY updated_at DESC", args)]
             for row in rows:
                 row["provenance"] = json.loads(row.get("sources_json") or "[]")
-                row["evidence_count"] = len(row["provenance"]) if isinstance(row["provenance"], list) else 0
+                with db.connect() as c:
+                    row["evidence_count"] = c.execute("SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0", (row["id"],)).fetchone()[0]
             return _json(self, 200, rows)
 
         if path == "/tasks":

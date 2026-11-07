@@ -46,6 +46,32 @@ def test_extract_replay_and_gate(monkeypatch):
     assert dream.plan() is None
 
 
+@pytest.mark.parametrize('raw,ok', [
+    ('```json\n{"candidates":[{"text":"fenced"}]}\n```', True),
+    ('garbage', False),
+    ('{"candidates":[{}]}', False),
+    ('[]', False),
+])
+def test_parse_output_schema_and_fenced_json(raw, ok):
+    if ok:
+        assert dream._parse_output(raw)['candidates'][0]['text'] == 'fenced'
+    else:
+        with pytest.raises((ValueError, json.JSONDecodeError, TypeError)):
+            dream._parse_output(raw)
+
+
+def test_extract_invalid_output_fails_and_allows_replan(monkeypatch):
+    episode('bad-output')
+    monkeypatch.setattr(dream, 'extract_model', lambda *_: 'not json')
+    batch = dream.plan()
+    failed = dream.extract(batch)
+    assert failed['status'] == 'failed' and failed['error']
+    monkeypatch.setattr(dream, 'extract_model', lambda *_: '```json\n{"candidates": []}\n```')
+    retry = dream.plan()
+    assert retry['id'] == batch['id'] and retry['status'] == 'planned'
+    assert dream.extract(retry)['status'] == 'extracted'
+
+
 def test_count_atomic_threshold_exposure_and_self_evidence(monkeypatch):
     from nodus import memory
     text = '数据库迁移需要事务'

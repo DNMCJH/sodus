@@ -107,3 +107,15 @@ def test_review_controls_and_board(tmp_path):
         assert "','"+action+"')" in ui.PAGE
     assert 'encodeURIComponent(id)' in ui.PAGE
     assert '版本已变化，请刷新后重试' in ui.PAGE
+
+
+def test_memory_board_merges_staged_and_harvest(monkeypatch, tmp_path):
+    from nodus import memory, server
+    staged = db.memory_add_candidate('same fact', workspace=str(tmp_path))
+    harvest = [{'id':'h', 'text':'harvest fact', 'sources':[], 'conflict':False, 'adopted':False},
+               {'id':'dup', 'text':'same fact', 'sources':[], 'conflict':False, 'adopted':False}]
+    monkeypatch.setattr(memory, 'saved_project', lambda: tmp_path)
+    monkeypatch.setattr(memory, 'harvest', lambda _: harvest)
+    rows = server._memory_board()
+    assert {r['text'] for r in rows} == {'same fact', 'harvest fact'}
+    assert any(r['id'] == staged for r in rows)

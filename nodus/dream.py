@@ -72,6 +72,10 @@ def plan(workspace=None, limit=50):
         existing = c.execute("SELECT * FROM dream_batch WHERE workspace_id=? AND cursor_from=? AND status IN ('planned','extracted') ORDER BY cursor_to LIMIT 1", (workspace, cursor)).fetchone()
         if existing:
             return dict(existing)
+        failed = c.execute("SELECT * FROM dream_batch WHERE workspace_id=? AND cursor_from=? AND status='failed' ORDER BY cursor_to LIMIT 1", (workspace, cursor)).fetchone()
+        if failed:
+            c.execute("UPDATE dream_batch SET status='planned', output_json=NULL, error=NULL, run_id=NULL, ended_at=NULL WHERE id=?", (failed['id'],))
+            return dict(c.execute('SELECT * FROM dream_batch WHERE id=?', (failed['id'],)).fetchone())
         _check_tokens(c)
         rows = c.execute('SELECT rowid FROM memory_episode WHERE workspace=? AND rowid>? ORDER BY rowid LIMIT ?', (workspace, cursor, limit)).fetchall()
         if not rows:
@@ -121,9 +125,33 @@ def extract(batch):
         output = extract_model(episodes, row) if episodes else '{"candidates":[]}'
         if not isinstance(output, str):
             output = json.dumps(output, ensure_ascii=False)
+        try:
+            _parse_output(output)
+        except (ValueError, json.JSONDecodeError, TypeError) as exc:
+            with db.connect() as c:
+                c.execute("UPDATE dream_batch SET output_json=?,status='failed',error=? WHERE id=?", (output, str(exc), row['id']))
+                return _get(c, row)
         with db.connect() as c:
             c.execute("UPDATE dream_batch SET output_json=?,status='extracted',error=NULL WHERE id=? AND output_json IS NULL", (output,row['id']))
             return _get(c, row)
+
+
+def _parse_output(raw):
+    text = str(raw).strip()
+    if text.startswith('```'):
+        lines = text.splitlines()
+        if lines and lines[0].strip().lower().startswith('```json'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines).strip()
+    payload = json.loads(text)
+    if not isinstance(payload, dict) or not isinstance(payload.get('candidates'), list):
+        raise ValueError('schema requires candidates list')
+    for item in payload['candidates']:
+        if not isinstance(item, dict) or not isinstance(item.get('text'), str):
+            raise ValueError('candidate requires text')
+    return payload
 
 
 def count(batch):
@@ -135,7 +163,7 @@ def count(batch):
             return row
         if row['status'] != 'extracted':
             raise ValueError('batch must be extracted')
-        payload = json.loads(row['output_json'])
+        payload = _parse_output(row['output_json'])
         candidates = payload['candidates'] if isinstance(payload, dict) else payload
         eligible = {e['id']: e for e in _episodes(c, row)}
         for item in candidates:

@@ -35,6 +35,30 @@ def test_idempotency_conflict_expiry_and_workspace(monkeypatch):
     assert ask.get('missing')[0] == 404
 
 
+def test_view_maps_failed_run_to_failed_ask(monkeypatch):
+    row = dict(id='a', status='running', run_id='r', expires_at=9999999999, promoted_task_id=None, wrote_files=0)
+    monkeypatch.setattr(db, 'get_run', lambda _: {'status':'failed'})
+    assert ask.view(row)['status'] == 'failed'
+
+
+def test_memory_candidates_default_workspace_and_evidence(monkeypatch):
+    cid = db.memory_add_candidate('dream candidate', workspace=config.workspace_id())
+    with db.connect() as c:
+        c.execute("INSERT INTO candidate_evidence(candidate_id,episode_id,lineage_root,exposed,created_at) VALUES(?,?,?,?,?)",
+                  (cid, 'episode-1', 'lineage-1', 0, db.now()))
+    httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True); thread.start()
+    try:
+        req = urllib.request.Request(f'http://127.0.0.1:{httpd.server_port}/memory/candidates',
+                                     headers={'Authorization':'Bearer '+config.token()})
+        with urllib.request.urlopen(req) as response:
+            rows = json.load(response)
+        row = next(r for r in rows if r['id'] == cid)
+        assert row['evidence_count'] == 1
+    finally:
+        httpd.shutdown(); httpd.server_close(); thread.join()
+
+
 def test_concurrent_creation_and_promotion():
     with ThreadPoolExecutor(max_workers=6) as pool:
         rows = list(pool.map(lambda _: ask.submit(dict(request_id='race', text='why')), range(12)))

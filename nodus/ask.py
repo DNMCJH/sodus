@@ -14,7 +14,7 @@ def view(row: dict) -> dict:
     result = dict(row)
     status = row['status']
     run = db.get_run(row['run_id']) if row.get('run_id') else {}
-    if run and status in ('queued', 'running') and run['status'] in ('queued', 'running', 'stalled'):
+    if run and status in ('queued', 'running'):
         status = run['status']
     result['status'] = lifecycle.ask_state(
         {'status': 'completed' if status == 'answered' else status},
