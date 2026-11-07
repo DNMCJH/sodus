@@ -29,6 +29,8 @@ board at most 30, best first — a queue nobody scrolls is the same as no queue.
 from __future__ import annotations
 
 import hashlib
+import json
+import time
 import os
 import re
 from datetime import date
@@ -40,6 +42,100 @@ from . import config
 #: Where adopted facts live in the project's AGENTS.md. One heading, matched
 #: exactly, because a human is expected to edit this file by hand.
 SECTION = "## 已验证事实"
+MARK_BEGIN = "<!-- sodus:facts:begin -->"
+MARK_END = "<!-- sodus:facts:end -->"
+
+def marker_span(text: str):
+    """Return body line indexes for the managed facts block."""
+    lines = text.splitlines()
+    try:
+        b = next(i for i, line in enumerate(lines) if line.strip() == MARK_BEGIN)
+        e = next(i for i in range(b + 1, len(lines)) if lines[i].strip() == MARK_END)
+    except StopIteration:
+        return None
+    return b, e
+
+def marker_body(text: str) -> str:
+    span = marker_span(text)
+    if span is None:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[span[0] + 1:span[1]])
+
+def marker_hash(text: str) -> str:
+    return hashlib.sha256(marker_body(text).encode("utf-8")).hexdigest()
+
+def ensure_marker(text: str) -> tuple[str, bool]:
+    """Migrate the verified-facts section once, preserving surrounding text."""
+    if marker_span(text):
+        return text, False
+    lines = text.splitlines()
+    try:
+        heading = next(i for i, line in enumerate(lines) if line.strip() == SECTION)
+    except StopIteration:
+        lines += (["", SECTION] if lines else [SECTION])
+        heading = len(lines) - 1
+    end = len(lines)
+    for i in range(heading + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    body = lines[heading + 1:end]
+    while body and not body[0].strip(): body.pop(0)
+    while body and not body[-1].strip(): body.pop()
+    out = lines[:heading + 1] + [MARK_BEGIN] + body + [MARK_END] + lines[end:]
+    return "\n".join(out).rstrip() + "\n", True
+
+def _state_home():
+    return config.HOME / "memory"
+
+def apply_ops(target, ops, batch_id=None, project_dir=None):
+    """唯一的 marker apply 路径: lock, journal, staging, replace, DB update."""
+    from . import db
+    target = Path(target).resolve(); batch_id = batch_id or db.new_id("batch")
+    root = target.parent
+    text = target.read_text(encoding="utf-8") if target.exists() else ""
+    text, migrated = ensure_marker(text)
+    before = marker_hash(text)
+    key = f"l3_hash:{target}"
+    with db.connect() as c:
+        saved = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    if saved and saved[0] != before:
+        raise RuntimeError("AGENTS.md drift detected")
+    lines = text.splitlines(); span = marker_span(text); body = lines[span[0]+1:span[1]]
+    for op in ops:
+        val = op.get("text", "")
+        if op.get("op") == "add" and val and val not in body: body.append(val)
+        elif op.get("op") in ("retire", "remove"):
+            body = [x for x in body if val not in x]
+    new_lines = lines[:span[0]+1] + body + lines[span[1]:]
+    after_text = "\n".join(new_lines).rstrip() + "\n"; after = marker_hash(after_text)
+    ok, holder = db.lock_path(str(root), batch_id)
+    if not ok: return {"status":"staged", "holder":holder, "batch_id":batch_id}
+    journal_dir = _state_home() / "journal"; journal_dir.mkdir(parents=True, exist_ok=True)
+    staging = str(target) + ".sodus-staging"; journal = journal_dir / f"{batch_id}.json"
+    payload = {"batch_id":batch_id,"target":str(target),"hash_before":before,"hash_after":after,"staging":staging,"ops":ops}
+    with journal.open("w", encoding="utf-8") as f: json.dump(payload, f, ensure_ascii=False); f.flush(); os.fsync(f.fileno())
+    Path(staging).write_text(after_text, encoding="utf-8"); fd=os.open(staging, os.O_RDONLY); os.fsync(fd); os.close(fd); os.replace(staging, target)
+    with db.connect() as c:
+        c.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, after))
+        c.execute("INSERT INTO meta(key,value) VALUES('memory_version','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
+    journal.unlink(missing_ok=True); db.release_lock_for_cwd(str(root))
+    return {"status":"applied", "batch_id":batch_id, "hash":after}
+
+def recover_journals():
+    """Complete or rewind interrupted applies; safe to call repeatedly."""
+    out=[]; d=_state_home()/"journal"
+    if not d.exists(): return out
+    for jp in d.glob("*.json"):
+        try: j=json.loads(jp.read_text(encoding="utf-8")); target=Path(j["target"]); current=marker_hash(target.read_text(encoding="utf-8"))
+        except Exception: continue
+        if current == j["hash_after"]:
+            jp.unlink(missing_ok=True); out.append((j["batch_id"],"applied"))
+        elif current == j["hash_before"]:
+            Path(j.get("staging","")).unlink(missing_ok=True); jp.unlink(missing_ok=True); out.append((j["batch_id"],"staged"))
+        else: out.append((j["batch_id"],"failed"))
+    return out
 
 #: Same fact, said twice. Above this the two candidates are merged and the
 #: second source is remembered instead of being shown as a duplicate row.

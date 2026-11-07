@@ -26,6 +26,14 @@ def add(sub) -> None:
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=memory_dream, needs_daemon=False)
 
+    r = nested.add_parser("reindex", help="refresh the marker hash after manual edits")
+    r.add_argument("--project", default="")
+    r.set_defaults(func=memory_reindex, needs_daemon=False)
+    rb = nested.add_parser("rollback", help="rollback memory to a recorded version")
+    rb.add_argument("--to", type=int, required=True)
+    rb.add_argument("--project", default="")
+    rb.set_defaults(func=memory_rollback, needs_daemon=False)
+
     s = nested.add_parser("sources", help="which memory files were found, and how big")
     s.add_argument("--project", default="", help="project directory; default is cwd")
     s.set_defaults(func=memory_sources, needs_daemon=False)
@@ -144,3 +152,17 @@ def memory_dream(args) -> int:
         result = dream.count(dream.extract(batch)) if batch else {"status": "idle"}
     print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 2))
     return 0
+
+def memory_reindex(args) -> int:
+    root = _root(args); path = memory._project(root) / "AGENTS.md"
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    text, _ = memory.ensure_marker(text)
+    from ... import db
+    with db.connect() as c:
+        c.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (f"l3_hash:{path.resolve()}", memory.marker_hash(text)))
+    path.write_text(text, encoding="utf-8")
+    print(json.dumps({"ok": True, "path": str(path)})); return 0
+
+def memory_rollback(args) -> int:
+    root = _root(args)
+    raise ValueError("rollback requires recorded L3 batches; use memory.apply_ops with a batch history")

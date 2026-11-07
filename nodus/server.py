@@ -2330,6 +2330,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/board":
             return _json(self, 200, board_state())
 
+        if path == "/memory/candidates":
+            workspace = (qs.get("workspace") or [memory.saved_project()])[0]
+            status = (qs.get("status") or [""])[0]
+            with db.connect() as c:
+                sql = "SELECT * FROM memory_candidate WHERE workspace=?"
+                args = [workspace]
+                if status: sql += " AND status=?"; args.append(status)
+                rows = [dict(r) for r in c.execute(sql + " ORDER BY updated_at DESC", args)]
+            for row in rows:
+                row["provenance"] = json.loads(row.get("sources_json") or "[]")
+                row["evidence_count"] = len(row["provenance"]) if isinstance(row["provenance"], list) else 0
+            return _json(self, 200, rows)
+
         if path == "/tasks":
             return _json(self, 200, db.list_tasks())
 
@@ -2503,6 +2516,27 @@ class Handler(BaseHTTPRequestHandler):
                 _log("memory: nothing to adopt")
             return _json(self, 200, result)
 
+        if path.startswith("/memory/candidates/"):
+            cid = path.rsplit("/", 1)[-1]; action = body.get("action", "")
+            row = db.memory_get_candidate(cid)
+            if not row: return _json(self, 404, {"error":"not found"})
+            try: version = int(body.get("version"))
+            except (TypeError, ValueError): return _json(self, 400, {"error":"version required"})
+            if version != int(row.get("version", 0)): return _json(self, 409, {"error":"candidate version conflict", "candidate":row})
+            if action == "edit":
+                text = str(body.get("text") or "").strip()
+                if not text: return _json(self, 400, {"error":"text required"})
+                try:
+                    new_id = db.memory_add_candidate(text, row.get("workspace"), kind=row.get("kind","lesson"), sources_json=json.dumps({"edited_from":cid,"sources":json.loads(row.get("sources_json") or "[]")}, ensure_ascii=False))
+                    db.memory_update_candidate(cid, version, status="rejected")
+                except ValueError as exc: return _json(self, 409, {"error":str(exc)})
+                return _json(self, 200, {"ok":True,"id":new_id,"edited_from":cid})
+            if action not in ("adopt", "reject", "retire"): return _json(self, 400, {"error":"unknown action"})
+            status = {"adopt":"adopted", "reject":"rejected", "retire":"retire_proposed"}[action]
+            try: updated = db.memory_update_candidate(cid, version, status=status)
+            except ValueError as exc: return _json(self, 409, {"error":str(exc)})
+            return _json(self, 200, updated)
+
         if path.startswith("/runs/") and path.endswith("/stop"):
             rid = path.split("/")[2]
             return _json(self, 200, {"stopped": runner.RUNNER.stop(rid)})
@@ -2564,6 +2598,10 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     config.ensure_dirs()
     profiles.ensure_ready()
     db.connect().close()
+    try:
+        memory.recover_journals()
+    except Exception as exc:
+        _log(f"memory recovery: {exc}")
     # A daemon that just started owns no runs: anything still marked running
     # belongs to a process that is gone. Reap before accepting work, so a
     # restart never leaves clients waiting on a corpse.
