@@ -31,6 +31,12 @@ opus 评审结论「修完再合并」。已修并补回归测试：
 - 手改 facts 区块后旧的 adopt/harvest 会报错（M4）；run 事后 verify 转绿不会进 dream 证据集（M6）；rot 的 near-duplicate 恒为 0（只统计 hash 冲突）。
 - 评审低危：哈希口径（原文 sha256 vs `_norm`）、edit 两事务可能留孤儿候选、`ask_sweep` 无调用者、`ask_promote` 的 route 只进 goal 文本。
 
+## 数据库兼容
+
+- 真实 `~/.nodus/nodus.sqlite3` 夜间已被 0.6 的 worktree 命令升级到 schema v5（只增表，不删列）。用 0.5.1 代码跑 `nodus doctor` 对本机 v5 DB 仍全 PASS（tasks=202 runs=439），所以 main 的服务没坏；回退前仍建议备份该文件。
+- 手工做了真正的 v1→v5 冒烟：用 0.5.1 代码在 temp home 建库得到 schema v1 / 12 张表；再用 0.6.0 代码打开并升级为 schema v5 / 26 张表，task/run 行数不变。
+- 注意 `release_check.ps1` 里的 DB 冒烟复制的是本机库（现在已经是 v5），因此它是“v5 前后一致性”检查；v1→v5 的迁移本身由 `tests/test_*` 的模拟旧库用例 + 上述手工冒烟覆盖。
+
 ## 合并与回滚
 
 - 合并：review 后 `git checkout main && git merge --no-ff feat/sodus-0.6`，然后跑 `scripts/release_check.ps1` 与全量 pytest；不要直接 fast-forward 掉评审记录。
@@ -43,3 +49,4 @@ opus 评审结论「修完再合并」。已修并补回归测试：
 - 版本一致：pyproject / `nodus.__version__` / openapi.info.version / `tests/test_sodus_compat.py` = 0.6.0。
 - 分支：`git log --oneline v0.5.1..feat/sodus-0.6`；关键提交：设计 `9fbb308`、W1a `7612fa6`、W1b `c6a6324`、W1c `f18ac3d`、W2a `dada068`、W2b `b85b5ad`、W3a `3960d1c`、W3b `6431a25`、W3c `b333e41`、0.6.0 发行 `181f5fd`、评审修复 `5783bc5`。
 - 各阶段证据：`reports/W1a..W4-report.md`、`reports/opus-review-0.6.md`、`reports/FIX-report.md`、`reports/FIX-tests-report.md`、`reports/2026-11-08_ab-power.md`。
+- 手工 v1→v5 冒烟：0.5.1 代码建库 schema_version=1 / 12 tables；0.6.0 打开后 schema_version=5 / 26 tables，tasks/runs 不变。
