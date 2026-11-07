@@ -741,7 +741,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 
 - Windows 上子进程可能继承 stdout 管道不释放，runner 用 2s 退出宽限兜底，不是完美方案。
 - codex 的 bypass 参数等于关掉沙箱，只在受控 cwd 下用。
-- 还没有 SSE 客户端和 UI，`nodus watch` 是轮询（0.5s）。
+- CLI 的 `nodus watch` 仍是轮询（0.5s），没有 SSE 客户端；看板 UI 由 daemon 的 `/board` 提供。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
 - dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。没有 per-run effort 入口。
 - ~~dsh 没有隔离配置目录，跑的时候带着你的全局 AGENTS.md、skills 和 MCP~~ —— 2026-10-21 量过，这个判断是错的：

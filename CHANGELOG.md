@@ -1,7 +1,24 @@
 # 更新日志
 
-## 未发布
+## 0.5.1（2026-11-08）
 
+0.5.0 之后的稳定化版本：不新增子系统，补默认路由、预算软闸门、opencode 权限与 daemon 状态一致性，让 sodus 可以交给其它会话稳定使用。
+
+### 默认路由
+- `config.routing.default` 决定不带 `--route` 时的 route（当前 `sol`），`sodus run` 不再硬编码 claude；`config.default_route()` 缺失时退回 claude，老配置行为不变。
+- `server.py` 的默认 route 同样从配置读取；新增 `tests/test_default_route.py`。
+
+### 预算软闸门
+- `budget.soft_cny`：当日花费过软线后，`opus` / `claude` 两类 route 和 `claude-opus*` 模型需要显式 `--allow-expensive` 才会派发；硬上限 `daily_cny` 语义不变。
+- `sodus run --allow-expensive`、`POST /runs` 的 `allow_expensive`、`sodus status` 的 `soft=` 行同步加上；新增 4 个预算测试。
+
+### opencode
+- `opencode run` 加 `--auto`：headless 下读取类工具不再被静默拒绝（此前表现为「无输出」而不是权限错误）。
+
+### daemon 状态
+- CLI 自动拉起 daemon 时把实际 pid 写回 `daemon.json`；此前 `ensure_daemon` 只启动不记账，`down`/`up` 会指向已死 pid。新增回归测试。
+
+### harness 统计
 - 新增只读的 harness 指纹与统计：`nodus debug harness-stats`。
   - `nodus/harness.py`：brief 模板哈希（`version_of`）、run 的 harness 指纹（agent/route/model/provider/brief_version）、按 (harness 组件, cause) 聚合的统计。纯函数，不写库、不调度。
   - `nodus/runner.py`：worker prompt 抽成 `PROMPT_TEMPLATE` 常量，版本是模板的哈希（改文案就换版本）；每个新 run 追加一条 `run.harness` 事件记录版本，历史 run 没这条事件时退回「未记录」，不猜。

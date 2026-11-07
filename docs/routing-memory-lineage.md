@@ -78,11 +78,11 @@ session ──resume──> session ──branch──> session
 
 | 块 | 状态 |
 |---|---|
-| 能力路由 | 在写（`policy.py`）——先规则+Jev 复核，评测数据后接 |
-| 评测集 | 在写（`eval/tasks` + `nodus bench`）——6 个带隐藏测试的任务 |
-| 记忆汇总 | 在写（`memory.py`：sources / harvest / conflicts / adopt + 看板审核） |
-| 会话血缘 | **未开始**，只有设计 |
-| 自动蒸馏记忆 | **未开始**，且刻意保守：规则只负责"找出来"，写不写由人点 |
+| 能力路由 | 已实现（`policy.assess` / `recommend` 接进 `runner --agent auto` 和 `sodus route-for`） |
+| 评测集 | 已实现（`eval/tasks` 12 个带隐藏测试的任务 + `nodus bench`） |
+| 记忆汇总 | 已实现（`memory.py`：sources / harvest / conflicts / adopt + 看板审核） |
+| 会话血缘 | 已实现（`lineage.py` + `sodus debug lineage`） |
+| 自动蒸馏记忆 | 仍在设计（0.6）：规则只负责"找出来"，写不写由人点；"做梦"巩固见 2026-11-08 设计评审 |
 
 > 记忆不再有 SQLite 表。事实写在项目 `AGENTS.md` 的「已验证事实」里，带日期和来源；
 > 旧的三档（private/project/public）、`context_for` 注入和 `nodus memory add/recall`

@@ -1,6 +1,6 @@
 # Nodus 架构
 
-> 版本 0.4.0（主干，未发版）· 2026-11-03 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
+> 版本 0.5.1（主干）· 2026-11-08 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
 > 2026-11-03 校准：补齐 0.4.0 之后进主干的模块（observe / ledger / usage / telemetry / budget / policy /
 > recover / memory / lineage / bench / llm / jobs / harness_status / lifecycle），把已实现的 ADR 标出来，
 > 第 7 节改成真实现状。同一天新增 `nodus/lifecycle.py`（状态机，只定义不迁移调用方）和
