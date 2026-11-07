@@ -16,7 +16,7 @@ def test_schema_and_reconnect():
     for _ in range(3):
         db._SCHEMA_READY.clear()  # exercise migration rather than the fast path
         with db.connect() as c:
-            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '2'
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '3'
             names = {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
             assert {'memory_episode', 'memory_candidate', 'memory_exposure', 'dream_batch', 'memory_fts', 'memory_fts_map'} <= names
             assert 'trigram' in c.execute("SELECT sql FROM sqlite_master WHERE name='memory_fts'").fetchone()[0]
@@ -33,7 +33,7 @@ def test_v1_upgrade_preserves_rows():
         db._SCHEMA_READY.clear()
         with db.connect() as c:
             assert c.execute("SELECT title FROM task WHERE id='old'").fetchone()[0] == '保留'
-            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '2'
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '3'
 
 
 def test_episode_cursor():

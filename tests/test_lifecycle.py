@@ -646,3 +646,117 @@ def test_twenty_real_runs_agree_with_recover_lineage_and_the_board(history):
             "history held a run that was retry-pending at failure time, but the"
             f" sample judged none that way: {tokens_at_failure}"
         )
+
+# ---- Sodus 0.6 derived task/ask contract --------------------------------
+
+@pytest.mark.parametrize('status,verify,review,accepted,expected', [
+    (None, None, None, None, 'open'),
+    ('queued', None, None, None, 'running'),
+    ('running', None, None, None, 'running'),
+    ('stalled', None, None, None, 'stalled'),
+    ('failed', 'failed', None, None, 'failed'),
+    ('completed', 'red', 'accept', 'human', 'failed'),
+    *[('completed', 'pass', r, None, 'needs_review') for r in ('revise','reject','unparsed','unknown')],
+    ('completed', 'pass', None, None, 'done'),
+    ('completed', 'pass', 'accept', None, 'done'),
+    ('completed', 'unverified', None, None, 'unverified'),
+    ('completed', 'unverified', 'accept', 'human', 'unverified'),
+])
+def test_task_mapping(status, verify, review, accepted, expected):
+    task = {'accepted_by': accepted}
+    runs = [{'id': 'work', 'status': status}] if status else []
+    reviews = [{'verdict': review}] if review else []
+    assert lifecycle.task_state(task, runs, reviews, verify) == expected
+    assert task == {'accepted_by': accepted}
+
+
+def test_task_latest_work_and_targeted_review():
+    runs = [dict(id='old', status='failed', started_at=1),
+            dict(id='new', status='completed', started_at=2),
+            dict(id='review', kind='review', status='failed', started_at=3)]
+    reviews = [dict(target_run='new', verdict='revise', ts=1),
+               dict(target_run='new', verdict='accept', ts=2),
+               dict(target_run='old', verdict='reject', ts=3)]
+    assert lifecycle.task_state({}, runs, reviews, {'new': 'ok'}) == 'done'
+
+
+@pytest.mark.parametrize('status,expected', [('queued','queued'), ('running','running'),
+    ('stalled','stalled'), ('completed','answered'), ('failed','failed')])
+def test_ask_mapping(status, expected):
+    assert lifecycle.ask_state({'status':status}, expires_at=10, now=10) == expected
+    assert lifecycle.ask_state({'status':status}, 'task', 10, 10) == 'promoted'
+    assert lifecycle.ask_state({'status':status}, 'task', 10, 11) == 'expired'
+
+
+@pytest.mark.parametrize('version', [None, '1', '2'])
+def test_accepted_by_upgrade_and_reconnect(home, version):
+    config.ensure_dirs()
+    path = config.HOME / 'nodus.sqlite3'
+    if version:
+        with sqlite3.connect(path) as c:
+            c.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+                            "CREATE TABLE task(id TEXT PRIMARY KEY, workspace_id TEXT, session_id TEXT, title TEXT, goal TEXT, acceptance TEXT, status TEXT DEFAULT 'open', budget_json TEXT, created_at REAL);"
+                            "INSERT INTO task(id,title,acceptance) VALUES('legacy','保留','pytest');")
+            c.execute("INSERT INTO meta VALUES('schema_version',?)", (version,))
+    for _ in range(3):
+        db._SCHEMA_READY.clear()
+        with db.connect() as c:
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '3'
+            assert [r[1] for r in c.execute('PRAGMA table_info(task)')].count('accepted_by') == 1
+            if version:
+                assert tuple(c.execute("SELECT title,acceptance,accepted_by FROM task WHERE id='legacy'").fetchone()) == ('保留','pytest',None)
+    task = db.create_task('confirmation', acceptance='pytest')
+    db.update_task(task['id'], accepted_by='human')
+    assert db.get_task(task['id'])['accepted_by'] == 'human'
+    assert db.get_task(task['id'])['acceptance'] == 'pytest'
+
+
+@pytest.mark.parametrize('verify', ['ok', 'none', 'red'])
+def test_lineage_matches_task_derivation(verify):
+    run = dict(id='work', status='completed')
+    row = lineage._run_summary(run, verify)
+    state = lifecycle.task_state({}, [run], verify=verify)
+    assert row['ok'] == (state == 'done')
+    assert row['unverified'] == (state == 'unverified')
+
+@pytest.mark.parametrize('green,review,expected', [(True,'accept','done'), (True,'revise','needs_review'), (False,'revise','failed')])
+def test_fix_cache_uses_task_mapping(home, monkeypatch, green, review, expected):
+    from nodus import fix
+    task = db.create_task('repair', 'pytest')
+    target = db.create_run(task['id'], 'codex', str(home))
+    db.update_run(target['id'], status='completed')
+    monkeypatch.setattr(fix, 'latest_review', lambda *a: dict(verdict='revise', target_run=target['id'], reviewer='claude'))
+    monkeypatch.setattr(fix, 'pick_fixer', lambda *a: 'codex')
+    monkeypatch.setattr(fix.verify, 'detect', lambda *a: {'cmd':['pytest']})
+    monkeypatch.setattr(fix.verify, 'test_file_hashes', lambda *a: {})
+    monkeypatch.setattr(fix.verify, 'run', lambda *a: {'ok':green, 'exit':0 if green else 1})
+    monkeypatch.setattr(fix.verify, 'persist', lambda *a, **k: {})
+    def start(tid, agent, cwd, **kwargs):
+        run = db.create_run(tid, agent, cwd)
+        db.update_run(run['id'], status='completed')
+        return db.get_run(run['id'])
+    monkeypatch.setattr(fix.RUNNER, 'start', start)
+    monkeypatch.setattr(fix.RUNNER, 'wait', lambda rid, **k: db.get_run(rid))
+    monkeypatch.setattr(fix.review_mod, 'run_review', lambda *a, **k: dict(ok=True, verdict=review, target_run=target['id']))
+    fix.run_fix(target['id'], rounds=1)
+    assert db.get_task(task['id'])['status'] == expected
+
+
+@pytest.mark.parametrize('review,expected', [('accept','done'), ('revise','needs_review')])
+def test_tdd_cache_uses_task_mapping(home, monkeypatch, review, expected):
+    from nodus import tdd
+    task = db.create_task('implement', 'pytest')
+    monkeypatch.setattr(tdd, 'plan', lambda *a: {'cmd':['pytest']})
+    monkeypatch.setattr(tdd.verify, 'test_file_hashes', lambda *a: {})
+    checks = iter([{'ok':False,'tail':'red'}, {'ok':True,'tail':'green'}])
+    monkeypatch.setattr(tdd.verify, 'run', lambda *a: next(checks))
+    monkeypatch.setattr(tdd.verify, 'persist', lambda *a, **k: {})
+    def start(tid, agent, cwd, **kwargs):
+        run = db.create_run(tid, agent, cwd)
+        db.update_run(run['id'], status='completed')
+        return db.get_run(run['id'])
+    monkeypatch.setattr(tdd.RUNNER, 'start', start)
+    monkeypatch.setattr(tdd.RUNNER, 'wait', lambda rid: db.get_run(rid))
+    monkeypatch.setattr(tdd.review_mod, 'run_review', lambda *a, **k: dict(ok=True, verdict=review))
+    tdd.run_tdd(task['id'], home, review=True)
+    assert db.get_task(task['id'])['status'] == expected

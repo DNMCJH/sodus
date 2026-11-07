@@ -18,12 +18,8 @@ Run states::
 `completed` is an exit code, not a success: it says the process exited 0. The
 question "was the result actually verified" belongs to `verify` and `lineage`,
 and is deliberately not part of this table. A run that stops making progress is
-`stalled`, not `running`: the runner already enforces that idea with a
-no-output kill (`runner.IDLE_TIMEOUT`, default 900s) and `db.stale_runs()` finds
-the same situation for a dead owner. Neither writes the state today -- the
-runner records `failed` with a timeout cause and `reconcile` reaps the row --
-so `stalled` exists here as the target of that migration rather than as a claim
-that the column already holds it.
+`stalled`, not `running`: `watchdog.mark_stalled` writes that state when
+progress stops. The runner may subsequently settle a killed worker as failed. Task verification remains a separate derived fact.
 
 Proposal states::
 
@@ -43,8 +39,8 @@ this table does not contradict them.
 
 New code that needs a run's state, or needs to know whether a person has to
 act, must be built on this module instead of writing a fifth predicate. The
-existing call sites are not migrated in this commit -- behaviour is unchanged
-on purpose; `docs/overlap-audit.md` records who still reads what until they are.
+task cache writers in `tdd`/`fix` and the lineage verification buckets use
+`task_state`; `needs_attention` remains the run-level recovery/board answer.
 """
 
 from __future__ import annotations
@@ -240,3 +236,48 @@ def needs_attention(run: Mapping[str, Any], facts: Mapping[str, Any]) -> str:
     if gate in SETTLED_GATES:
         return "done"
     return ""
+
+
+def task_state(task: Mapping[str, Any], runs, reviews=(), verify=None) -> str:
+    """Derive §3.2 state from the newest work run; never mutate human acceptance.
+
+    Runs/reviews may be unordered. Verify is a verdict or a run-id -> verdict
+    mapping (including db.verify_states' ok/none vocabulary). Reviews carry
+    target_run and ts; an untargeted verdict describes the selected run.
+    """
+    work = [r for r in runs if (r.get("kind") or "work") == "work"]
+    if not work:
+        return "open"
+    run = max(work, key=lambda r: r.get("started_at") or r.get("created_at") or 0)
+    status = run.get("status")
+    if status in ("queued", "running"):
+        return "running"
+    if status in ("stalled", "failed"):
+        return status
+    if status != "completed":
+        raise ValueError(f"unknown run status: {status!r}")
+    verdict = verify.get(run.get("id"), "unverified") if isinstance(verify, Mapping) else verify
+    verdict = {"ok": "pass", "none": "unverified", None: "unverified"}.get(verdict, verdict)
+    if verdict in ("red", "failed"):
+        return "failed"
+    if verdict == "unverified":
+        return "unverified"
+    if verdict != "pass":
+        raise ValueError(f"unknown verify verdict: {verdict!r}")
+    relevant = [r for r in reviews if not r.get("target_run") or r["target_run"] == run.get("id")]
+    review = max(relevant, key=lambda r: r.get("ts") or 0) if relevant else None
+    return "done" if review is None or review.get("verdict") == "accept" else "needs_review"
+
+
+def ask_state(run: Mapping[str, Any], promoted_task_id=None, expires_at=None, now=None) -> str:
+    """Derive ask state without reading a clock; expiry outranks promotion."""
+    if now is not None and expires_at is not None and now > expires_at:
+        return "expired"
+    if promoted_task_id:
+        return "promoted"
+    status = run.get("status")
+    if status in ("queued", "running", "stalled", "failed"):
+        return status
+    if status == "completed":
+        return "answered"
+    raise ValueError(f"unknown ask run status: {status!r}")

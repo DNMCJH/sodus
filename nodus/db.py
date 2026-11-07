@@ -207,7 +207,12 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
             logging.getLogger(__name__).warning("Memory FTS %s unavailable: %s", tokenizer, exc)
 
 
-_MIGRATIONS = ((2, _migrate_v2),)
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    if "accepted_by" not in {row[1] for row in conn.execute("PRAGMA table_info(task)")}:
+        conn.execute("ALTER TABLE task ADD COLUMN accepted_by TEXT CHECK (accepted_by IS NULL OR accepted_by='human')")
+
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3))
 
 
 class Busy(RuntimeError):

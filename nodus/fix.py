@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import db, verify
+from . import db, verify, lifecycle
 from . import review as review_mod
 from .runner import RUNNER
 
@@ -230,7 +230,16 @@ def run_fix(
         and review.get("verdict") == "accept"
         and not final.get("tests_changed")
     )
-    db.update_task(task["id"], status="done" if result["ok"] else "needs_review")
+    work = db.get_run(final["fix_run"]) if final else target
+    verdict = "pass" if final and final["verify"]["ok"] else "unverified"
+    final_review = dict(review)
+    # Fix reviews target the original run but judge the repaired tree.
+    final_review.pop("target_run", None)
+    if not result["ok"] and final_review.get("verdict") == "accept":
+        final_review["verdict"] = "unknown"
+    if final and not final["verify"]["ok"]:
+        verdict = "red"
+    db.update_task(task["id"], status=lifecycle.task_state(task, [work], [final_review], verdict))
     return result
 
 
