@@ -169,3 +169,51 @@ def count(batch):
 
 import threading
 _extract_lock = threading.Lock()
+
+
+def apply_approved():
+    """Only explicit human approvals are eligible for L3 writes."""
+    from . import memory
+    root = memory.saved_project()
+    with db.connect() as c:
+        rows = c.execute("SELECT * FROM memory_candidate WHERE workspace IN (?,?) AND status IN ('adopted','retire_proposed')", (str(root),config.workspace_id())).fetchall()
+    ops = [dict(op='add' if r['status']=='adopted' else 'retire',text='- '+r['text'],candidate_id=r['id']) for r in rows]
+    if ops:
+        target = root/'AGENTS.md'
+        existing = memory.marker_body(target.read_text(encoding='utf-8')) if target.exists() else ''
+        ops = [op for op in ops if op['op']=='retire' or op['text'] not in existing.splitlines()]
+        if ops: return memory.apply_ops(target,ops)
+    return {'status':'idle'}
+
+
+def daily_once(today=None):
+    """Claim one local calendar day before work; failures never hot-loop."""
+    from datetime import date
+    today = today or date.today().isoformat()
+    key = 'dream_last_run:'+config.workspace_id()
+    with db.connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT 1 FROM run WHERE status IN ('queued','running') LIMIT 1").fetchone():
+            return {'status':'busy'}
+        last = c.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone()
+        if last and last[0] == today: return {'status':'already_run'}
+        _check_tokens(c)
+        c.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,today))
+    batch = plan()
+    result = count(extract(batch)) if batch else {'status':'idle'}
+    applied = apply_approved()
+    return dict(batch=result,apply=applied)
+
+
+def _daily_loop(log):
+    import time
+    while True:
+        try: daily_once()
+        except Exception as exc: log(f'dream daily failed: {type(exc).__name__}: {exc}')
+        time.sleep(300)
+
+
+def start_daily(log=lambda message: None):
+    thread = threading.Thread(target=_daily_loop,args=(log,),name='dream-daily',daemon=True)
+    thread.start()
+    return thread

@@ -1933,6 +1933,12 @@ def _memory_board(limit: int = 300) -> list[dict]:
     """
     try:
         rows = memory.harvest(memory.saved_project())
+        with db.connect() as c:
+            staged = [dict(r) for r in c.execute("SELECT * FROM memory_candidate WHERE workspace IN (?,?) AND status IN ('proposed','adopted','retire_proposed')", (str(memory.saved_project()),config.workspace_id()))]
+            for row in staged:
+                row['evidence_count'] = c.execute('SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0', (row['id'],)).fetchone()[0]
+                row.update(sources=[],conflict=False,adopted=False)
+        if staged: return staged[:limit]
     except Exception:  # noqa: BLE001 - the board outranks this section
         return []
     return [
@@ -2529,6 +2535,9 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     new_id = db.memory_add_candidate(text, row.get("workspace"), kind=row.get("kind","lesson"), sources_json=json.dumps({"edited_from":cid,"sources":json.loads(row.get("sources_json") or "[]")}, ensure_ascii=False))
                     db.memory_update_candidate(cid, version, status="rejected")
+                    if new_id != cid:
+                        with db.connect() as c:
+                            c.execute('INSERT OR IGNORE INTO candidate_evidence SELECT ?,episode_id,lineage_root,exposed,created_at FROM candidate_evidence WHERE candidate_id=?', (new_id,cid))
                 except ValueError as exc: return _json(self, 409, {"error":str(exc)})
                 return _json(self, 200, {"ok":True,"id":new_id,"edited_from":cid})
             if action not in ("adopt", "reject", "retire"): return _json(self, 400, {"error":"unknown action"})
@@ -2652,6 +2661,8 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         from . import observe_sync
 
         observe_sync.start(log=_log)
+        from . import dream
+        dream.start_daily(log=_log)
     except Exception:  # noqa: BLE001 - observation is a supplement, not the server
         pass
     if sys.stderr.isatty():  # a detached daemon writes to the log, not the console

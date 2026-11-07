@@ -165,4 +165,5 @@ def memory_reindex(args) -> int:
 
 def memory_rollback(args) -> int:
     root = _root(args)
-    raise ValueError("rollback requires recorded L3 batches; use memory.apply_ops with a batch history")
+    print(json.dumps(memory.rollback(memory._project(root) / "AGENTS.md", args.to), ensure_ascii=False))
+    return 0

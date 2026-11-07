@@ -606,7 +606,7 @@ async function api(path, method = "GET", body) {
   const r = await fetch(path, { method, headers: H, body: body ? JSON.stringify(body) : undefined });
   const text = await r.text();
   let data; try { data = JSON.parse(text); } catch { data = { error: text.slice(0, 300) }; }
-  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  if (!r.ok) throw new Error(("HTTP " + r.status + ": " + (data.error || "request failed")));
   return data;
 }
 function flash(msg, bad) {
@@ -1074,15 +1074,29 @@ function renderMemory() {
   const head = `<div class="mem-head"><span>采纳后写进对应 AGENTS.md，带日期和来源；重复的不会写第二遍。</span>
     <button class="primary" onclick="adoptMemory(null)">全部采纳</button></div>`;
   const body = rows.map(c => `<div class="mem-row">
-      <div><div class="mem-text">${esc(c.text)}</div>
+      <div><div class="mem-text">${esc(c.text)}</div>${c.version ? `<div>${esc(c.status)} · 独立证据 ${c.evidence_count || 0}</div>` : ""}
         <div class="mem-src">${(c.sources || []).map(s => esc(srcLabel(s))).join(" · ")}</div></div>
       <div>${c.conflict ? '<span class="mem-flag" title="同主题下另有一条相反的说法，采纳前先看两条">冲突</span>' : ""}</div>
-      <div><button onclick="adoptMemory('${esc(c.id)}')">采纳</button></div>
+      <div><button onclick="adoptMemory('${esc(c.id)}')">采纳</button>${c.version ? `<button onclick="reviewMemory('${esc(c.id)}','reject')">拒绝</button><button onclick="reviewMemory('${esc(c.id)}','edit')">编辑</button><button onclick="reviewMemory('${esc(c.id)}','retire')">退役</button>` : ""}</div>
     </div>`).join("");
   $("memory").innerHTML = `<div class="mem-list">${head}${body}</div>`;
 }
 
+async function reviewMemory(id, action) {
+  const c = ((state.board || {}).memory_candidates || []).find(c => c.id === id);
+  if (!c) return;
+  const body = {action, version: c.version};
+  if (action === "edit") { body.text = prompt("编辑候选", c.text); if (!body.text) return; }
+  try {
+    await api("/memory/candidates/" + encodeURIComponent(id), "POST", body);
+    flash("审核已保存；批准的变更由 dream 落盘"); refresh();
+  } catch(e) { flash(e.message.includes("409") ? "版本已变化，请刷新后重试" : e.message, true); }
+}
+
 async function adoptMemory(id) {
+  const reviewRows = ((state.board || {}).memory_candidates || []).filter(c => c.version && (!id || c.id === id));
+  if (reviewRows.length) { for (const c of reviewRows) await reviewMemory(c.id, "adopt"); return; }
+
   const pending = ((state.board || {}).memory_candidates || []).filter(c => !c.adopted);
   const ids = id ? [id] : pending.map(c => c.id);
   if (!ids.length) return;

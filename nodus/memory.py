@@ -89,53 +89,123 @@ def ensure_marker(text: str) -> tuple[str, bool]:
 def _state_home():
     return config.HOME / "memory"
 
-def apply_ops(target, ops, batch_id=None, project_dir=None):
-    """唯一的 marker apply 路径: lock, journal, staging, replace, DB update."""
+def _finish_apply(c, payload):
     from . import db
-    target = Path(target).resolve(); batch_id = batch_id or db.new_id("batch")
-    root = target.parent
-    text = target.read_text(encoding="utf-8") if target.exists() else ""
-    text, migrated = ensure_marker(text)
-    before = marker_hash(text)
-    key = f"l3_hash:{target}"
-    with db.connect() as c:
-        saved = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    if saved and saved[0] != before:
-        raise RuntimeError("AGENTS.md drift detected")
-    lines = text.splitlines(); span = marker_span(text); body = lines[span[0]+1:span[1]]
-    for op in ops:
-        val = op.get("text", "")
-        if op.get("op") == "add" and val and val not in body: body.append(val)
-        elif op.get("op") in ("retire", "remove"):
-            body = [x for x in body if val not in x]
-    new_lines = lines[:span[0]+1] + body + lines[span[1]:]
-    after_text = "\n".join(new_lines).rstrip() + "\n"; after = marker_hash(after_text)
-    ok, holder = db.lock_path(str(root), batch_id)
-    if not ok: return {"status":"staged", "holder":holder, "batch_id":batch_id}
-    journal_dir = _state_home() / "journal"; journal_dir.mkdir(parents=True, exist_ok=True)
-    staging = str(target) + ".sodus-staging"; journal = journal_dir / f"{batch_id}.json"
-    payload = {"batch_id":batch_id,"target":str(target),"hash_before":before,"hash_after":after,"staging":staging,"ops":ops}
-    with journal.open("w", encoding="utf-8") as f: json.dump(payload, f, ensure_ascii=False); f.flush(); os.fsync(f.fileno())
-    Path(staging).write_text(after_text, encoding="utf-8"); fd=os.open(staging, os.O_RDONLY); os.fsync(fd); os.close(fd); os.replace(staging, target)
-    with db.connect() as c:
-        c.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, after))
-        c.execute("INSERT INTO meta(key,value) VALUES('memory_version','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
-    journal.unlink(missing_ok=True); db.release_lock_for_cwd(str(root))
-    return {"status":"applied", "batch_id":batch_id, "hash":after}
+    bid = payload['batch_id']
+    row = c.execute('SELECT memory_version FROM dream_batch WHERE id=?', (bid,)).fetchone()
+    if row and row[0] is not None:
+        return row[0]
+    c.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='memory_version'")
+    version = int(c.execute("SELECT value FROM meta WHERE key='memory_version'").fetchone()[0])
+    c.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+              ('l3_hash:'+payload['target'], payload['hash_after']))
+    c.execute("INSERT OR IGNORE INTO dream_batch(id,status,workspace_id) VALUES(?,'staged',?)", (bid,config.workspace_id()))
+    c.execute("UPDATE dream_batch SET status='applied',ops_json=?,memory_version=?,target_path=?,hash_before=?,hash_after=?,ended_at=? WHERE id=?",
+              (json.dumps(payload['ops'],ensure_ascii=False),version,payload['target'],payload['hash_before'],payload['hash_after'],db.now(),bid))
+    for op in payload['ops']:
+        if op.get('candidate_id'):
+            c.execute("UPDATE memory_candidate SET status=?,version=version+1,updated_at=? WHERE id=?",
+                      ('adopted' if op['op']=='add' else 'retired',db.now(),op['candidate_id']))
+    return version
+
+
+def apply_ops(target, ops, batch_id=None, project_dir=None):
+    """The single locked, journalled L3 write path, including rollback."""
+    from . import db
+    target = Path(target).resolve()
+    batch_id = batch_id or db.new_id('batch')
+    root = str(target.parent)
+    ok, holder = db.lock_path(root, batch_id)
+    if not ok:
+        return {'status':'staged','holder':holder,'batch_id':batch_id}
+    try:
+        with db.connect() as c:
+            done = c.execute('SELECT memory_version FROM dream_batch WHERE id=?', (batch_id,)).fetchone()
+            if done and done[0] is not None:
+                return {'status':'applied','batch_id':batch_id,'memory_version':done[0]}
+            saved = c.execute('SELECT value FROM meta WHERE key=?', ('l3_hash:'+str(target),)).fetchone()
+        text, _ = ensure_marker(target.read_text(encoding='utf-8') if target.exists() else '')
+        before = marker_hash(text)
+        if saved and saved[0] != before:
+            raise RuntimeError('AGENTS.md drift detected; run sodus memory reindex first')
+        lines = text.splitlines()
+        begin, end = marker_span(text)
+        body = lines[begin+1:end]
+        # First history entry captures pre-existing facts as replayable baseline.
+        with db.connect() as c:
+            first = not c.execute('SELECT 1 FROM dream_batch WHERE target_path=? AND memory_version IS NOT NULL', (str(target),)).fetchone()
+        recorded = ([{'op':'replace','lines':list(body)}] if first else []) + list(ops)
+        for op in ops:
+            val = op.get('text','')
+            if op['op'] == 'replace': body = list(op['lines'])
+            elif op['op'] == 'add' and val and val not in body: body.append(val)
+            elif op['op'] in ('retire','remove'): body = [x for x in body if x != val]
+        after_text = '\n'.join(lines[:begin+1]+body+lines[end:]).rstrip()+'\n'
+        journal_dir = _state_home()/'journal'
+        journal_dir.mkdir(parents=True,exist_ok=True)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        journal = journal_dir/(batch_id+'.json')
+        staging = str(target)+'.sodus-staging'
+        payload = dict(batch_id=batch_id,target=str(target),hash_before=before,hash_after=marker_hash(after_text),staging=staging,ops=recorded)
+        with journal.open('w',encoding='utf-8') as f:
+            json.dump(payload,f,ensure_ascii=False); f.flush(); os.fsync(f.fileno())
+        with open(staging,'w',encoding='utf-8',newline='') as f:
+            f.write(after_text); f.flush(); os.fsync(f.fileno())
+        os.replace(staging,target)
+        with db.connect() as c:
+            version = _finish_apply(c,payload)
+        journal.unlink(missing_ok=True)
+        return dict(status='applied',batch_id=batch_id,memory_version=version)
+    finally:
+        db.release_lock_for_cwd(root)
+
 
 def recover_journals():
-    """Complete or rewind interrupted applies; safe to call repeatedly."""
-    out=[]; d=_state_home()/"journal"
-    if not d.exists(): return out
-    for jp in d.glob("*.json"):
-        try: j=json.loads(jp.read_text(encoding="utf-8")); target=Path(j["target"]); current=marker_hash(target.read_text(encoding="utf-8"))
-        except Exception: continue
-        if current == j["hash_after"]:
-            jp.unlink(missing_ok=True); out.append((j["batch_id"],"applied"))
-        elif current == j["hash_before"]:
-            Path(j.get("staging","")).unlink(missing_ok=True); jp.unlink(missing_ok=True); out.append((j["batch_id"],"staged"))
-        else: out.append((j["batch_id"],"failed"))
+    from . import db
+    out = []
+    for jp in (_state_home()/'journal').glob('*.json'):
+        j = json.loads(jp.read_text(encoding='utf-8'))
+        target = Path(j['target'])
+        ok, _ = db.lock_path(str(target.parent),j['batch_id'])
+        if not ok: continue
+        try:
+            current = marker_hash(target.read_text(encoding='utf-8') if target.exists() else '')
+            if current == j['hash_after']:
+                with db.connect() as c: _finish_apply(c,j)
+                status = 'applied'
+            elif current == j['hash_before']: status = 'staged'
+            else: status = 'failed'
+            if status != 'failed':
+                Path(j['staging']).unlink(missing_ok=True)
+                jp.unlink(missing_ok=True)
+            out.append((j['batch_id'],status))
+        finally: db.release_lock_for_cwd(str(target.parent))
     return out
+
+
+def rollback(target, version):
+    from . import db
+    target = Path(target).resolve()
+    with db.connect() as c:
+        current = int(c.execute("SELECT value FROM meta WHERE key='memory_version'").fetchone()[0])
+        if version < 1 or version > current:
+            raise ValueError('unknown memory version')
+        rows = c.execute('SELECT ops_json FROM dream_batch WHERE target_path=? AND memory_version<=? ORDER BY memory_version', (str(target),version)).fetchall()
+    if not rows: raise ValueError('no recorded history for target at this version')
+    body = []
+    for row in rows:
+        for op in json.loads(row[0]):
+            if op['op']=='replace': body = list(op['lines'])
+            elif op['op']=='add' and op['text'] not in body: body.append(op['text'])
+            elif op['op'] in ('retire','remove'): body = [x for x in body if x != op['text']]
+    with db.connect() as c:
+        candidates = c.execute('SELECT * FROM memory_candidate WHERE workspace IN (?,?)', (str(target.parent),config.workspace_id())).fetchall()
+    ops = [{'op':'replace','lines':body}]
+    for row in candidates:
+        if row['status'] in ('adopted','retired','retire_proposed'):
+            line = '- '+row['text']
+            ops.append(dict(op='add' if line in body else 'retire',text=line,candidate_id=row['id']))
+    return apply_ops(target,ops)
 
 #: Same fact, said twice. Above this the two candidates are merged and the
 #: second source is remembered instead of being shown as a duplicate row.
@@ -1007,18 +1077,9 @@ def _append(path: Path, items: list[tuple[str, str]]) -> dict:
     if not fresh:
         return {"path": str(path), "added": 0, "already": len(items)}
 
-    lines = text.splitlines()
-    span = _section(text)
-    if span is None:
-        while lines and not lines[-1].strip():
-            lines.pop()
-        head = ["", SECTION, ""] if lines else [SECTION, ""]
-        lines = lines + head + fresh
-    else:
-        _, end = span
-        lines = lines[:end] + fresh + lines[end:]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = apply_ops(path, [dict(op='add',text=line) for line in fresh])
+    if result['status'] != 'applied':
+        raise RuntimeError('memory writer busy; retry after the active run')
     return {"path": str(path), "added": len(fresh), "already": len(items) - len(fresh)}
 
 
