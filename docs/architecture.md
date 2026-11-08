@@ -379,3 +379,25 @@ ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个*
 - `sodus` 包接管各模块（现在只是入口面，模块仍在 `nodus/`）；仓库目录改名是阶段 D，单独立项。
 - 0.6（`feat/sodus-0.6`，未合并）：单入口 `/ask`、任务状态派生、记忆暂存层与 dream。设计与分周计划见
   `docs/sodus-0.6-design.md`，对应 ADR-019 / ADR-020。
+
+
+### Lightweight state and board presentation (0.7.0-b)
+
+`GET /state` is a token-authenticated, read-only snapshot for panels and pets.
+`nodus/state.py` queries live queued/running/stalled runs (newest 20), uncapped
+running/queued counts and retained asks on each request. `asks.open` means queued,
+`asks.done` means answered; it does not expire or mutate records. Today includes
+workspace runs of every kind plus observed sessions, on the same local-day ledger
+basis as `/cost/today` and MCP `nodus_cost_today`; `CNY` has no FX conversion and
+`unpriced` counts missing prices. No per-agent expansion is built.
+Today, open proposal count and pending database memory candidate count are cached
+for 1.5 seconds, keyed by database home, workspace, local day and saved project.
+Pending memory means proposed/retire_proposed, excluding already adopted facts and
+filesystem harvest. `needs_you` follows board's 50-work-run window and capped open
+proposal list; `unverifiable` is the board section count (0 or 1), not run count.
+It never calls full `board_state`, git, evidence rendering or harness probes.
+
+`nodus/board.py` owns board projections, evidence, wording and the HTML serialization
+entry; `nodus/ui.py` retains the unchanged page template. `/board` and Python
+`server.board_state` keep their existing response keys, and existing pet/statuslight
+readers keep their behavior. HTTP routing, authentication and SSE stay in server.

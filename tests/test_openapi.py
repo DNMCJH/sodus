@@ -78,6 +78,7 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/favicon.ico"),
         ("get", "/openapi.yaml"),
         ("get", "/board"),
+        ("get", "/state"),
         ("get", "/cost/today"),
         ("get", "/memory/harvest"),
         ("get", "/memory/candidates"),
@@ -165,3 +166,14 @@ def test_openapi_yaml_is_served_without_a_token():
         httpd.server_close()
         thread.join(timeout=10)
     assert body == SPEC.read_bytes()
+
+
+def test_state_contract_is_authenticated_and_structured(spec):
+    operation = spec["paths"]["/state"]["get"]
+    assert operation.get("security", spec["security"]) == [{"bearerAuth": []}]
+    schema = spec["components"]["schemas"]["State"]
+    assert set(schema["required"]) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
+    assert schema["properties"]["running"]["maxItems"] == 20
+    for name in ("counts", "today", "asks", "memory"):
+        item = schema["properties"][name]
+        assert set(item["required"]) == set(item["properties"])
