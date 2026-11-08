@@ -40,6 +40,10 @@ print(c.execute("select count(*) from run").fetchone()[0])
     Copy-Item $sourceDb (Join-Path $stateHome 'nodus.sqlite3')
     $before = & $python -c $pyCounts (Join-Path $stateHome 'nodus.sqlite3')
   }
+  # The schema version is a property of the release being tested, not a literal
+  # that has to be edited every time a migration lands.
+  $expectedSchema = (& $vp -c "from nodus import db; print(db.SCHEMA_VERSION)").Trim()
+  if (-not $expectedSchema) { throw 'could not read db.SCHEMA_VERSION' }
   $env:SODUS_HOME = $stateHome
   $doctor = & $vp -m sodus doctor 2>&1; if ($LASTEXITCODE -ne 0) { throw 'doctor failed' }
   $doctorText = ($doctor -join "`n")
@@ -48,7 +52,7 @@ print(c.execute("select count(*) from run").fetchone()[0])
   }
   if (Test-Path (Join-Path $stateHome 'nodus.sqlite3')) {
     $after = & $python -c $pyAfter (Join-Path $stateHome 'nodus.sqlite3')
-    if ($after[0] -ne '5' -or $after[1] -ne $before[0] -or $after[2] -ne $before[1]) { throw '0.5.1 DB upgrade smoke failed' }
+    if ($after[0] -ne $expectedSchema -or $after[1] -ne $before[0] -or $after[2] -ne $before[1]) { throw "DB upgrade smoke failed (schema $($after[0]) != $expectedSchema, or task/run counts changed)" }
   }
   $mcp = "{`"jsonrpc`":`"2.0`",`"id`":1,`"method`":`"initialize`",`"params`":{`"protocolVersion`":`"2024-11-05`",`"capabilities`":{},`"clientInfo`":{`"name`":`"release-check`",`"version`":`"1`"}}}`n{`"jsonrpc`":`"2.0`",`"id`":2,`"method`":`"tools/list`"}`n"
   $mcpOutput = $mcp | & $vp -m sodus mcp
