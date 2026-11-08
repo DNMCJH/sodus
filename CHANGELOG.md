@@ -1,6 +1,15 @@
 # 更新日志
 
-## 0.7.0（2026-11-09）
+## 0.7.1（2026-11-09）
+
+正式启用前的稳定性/安全版，汇总 0.7.0 发布前复查的两份 review：
+
+- daemon 单实例：独占 bind（Windows `SO_EXCLUSIVEADDRUSE`）+ 先 bind 后 reconcile/recover + 启动锁；`auto-recover` 改为配置项、默认关闭。
+- 安全：Host 头校验（拒绝非 loopback，防 DNS rebinding）；approve 前复核 HEAD/AGENTS 哈希与 plan hash；超时会终止 worker（杀进程树）；`mcp install` 合并用户 env、原子写；DSH 缺失记为 skipped。
+- 质量信号：Windows 控制台终止码归为 infra 失败并自动重试 verify 一次，不再误判测试红；review 异步化 + 超时。
+- planner 完善：validator 增加 base_sha 漂移 warning、AGENTS.md 哈希、acceptance 命令白名单；review 异步；plan_execution 走 schema v7；CLI reconcile 经 daemon。
+- 已知阻塞（0.7.2）：worker env 白名单与 plan/review 只读沙箱、独立批准身份；plan 节点执行/物化/replan 未实现。因此 0.7.1 适合有人值守日常使用，不适合无人值守或自动批准执行。
+
 
 多宿主入口、核心契约与 planner 的第一个版本：
 
