@@ -53,7 +53,7 @@ def _text(proc: subprocess.CompletedProcess) -> str:
 def test_one_version_everywhere():
     # The bug this replaces: the package said 0.2.0 while the dist was 0.4.0.
     declared = _pyproject()["project"]["version"]
-    assert declared == "0.5.1"
+    assert declared == "0.6.0"
     assert nodus.__version__ == declared
     assert sodus.__version__ == declared
     assert config.VERSION == declared
@@ -81,13 +81,13 @@ def test_sodus_is_the_same_parser_under_another_name():
 def test_python_dash_m_sodus_prints_sodus():
     proc = _run("-m", "sodus", "--version")
     assert proc.returncode == 0, _text(proc)
-    assert _text(proc).strip() == "sodus 0.5.1"
+    assert _text(proc).strip() == "sodus 0.6.0"
 
 
 def test_python_dash_m_nodus_keeps_its_own_name():
     proc = _run("-m", "nodus", "--version")
     assert proc.returncode == 0, _text(proc)
-    assert _text(proc).strip() == "nodus 0.5.1"
+    assert _text(proc).strip() == "nodus 0.6.0"
 
 
 @pytest.fixture()

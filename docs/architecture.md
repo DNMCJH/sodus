@@ -5,6 +5,8 @@
 > recover / memory / lineage / bench / llm / jobs / harness_status / lifecycle），把已实现的 ADR 标出来，
 > 第 7 节改成真实现状。同一天新增 `nodus/lifecycle.py`（状态机，只定义不迁移调用方）和
 > `docs/overlap-audit.md`（谁在重复算同一件事）。
+> 2026-11-08 校准（`feat/sodus-0.6` 分支，W0 只改文档）：新增 ADR-019 / ADR-020，ADR 状态行改为逐条现状；
+> 第 2 节补上未列出的模块；第 7 节的 `DSH_HOME` 条目按 README 实测结论改写；0.6 设计见 `docs/sodus-0.6-design.md`。
 
 ## 1. 需求（先定边界）
 
@@ -67,6 +69,10 @@ nodus/harness_status.py 五个终端：装没装、在不在跑、今天多少�
 nodus/memory.py       记忆摘要：读各 harness 已有的 AGENTS/CLAUDE 文件，等人采纳
 nodus/bench.py        任务级评测：hidden_tests 打分，不看 agent 自述
 nodus/llm.py          宠物的一句话聊天：按 agent 走路由，限 400 token / 10 次每分钟
+nodus/mcp.py          MCP stdio 服务：nodus_task_create / run / run_status / proposals / cost_today /
+                      memory_remember / memory_candidates（2026-11-08 校准时补列）
+nodus/ui.py / desk.py / decision.py / pet.py / mood.py / statuslight.py  看板与桌面层：只读 server 的
+                      board_state / attention，不自己判状态（2026-11-08 校准时补列）
 nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁；`runs_in_window`
                       是「今天取哪些行」的唯一 SQL（看板、stats、预算闸、终端面板共用）
 nodus/config.py       路径、token、secrets、用户配置、当前 profile
@@ -181,8 +187,17 @@ ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` �
 
 ## 5. ADR（架构决策记录）
 
-状态：ADR-001 至 ADR-017 全部已实现；ADR-004 已被 ADR-016 取代，保留原文作为历史。
-ADR-018 是本次新增（只建立定义，未迁移调用方）。
+状态（2026-11-08 校准）：
+
+| ADR | 状态 |
+|---|---|
+| 001–003、005–017 | 已实现（主干 0.5.1） |
+| 004 | 已被 ADR-016 取代，保留原文作为历史 |
+| 018 | 已实现定义；`run.stalled` 的写方（watchdog）已接上，读方（recover / server / lineage）未迁移 |
+| 019 | 0.6 新增，已决定、未实现（`feat/sodus-0.6`，设计见 `docs/sodus-0.6-design.md`） |
+| 020 | 0.6 新增，已决定、未实现；扩展 ADR-018，不取代 |
+
+历史记录：0.5.0 时这一行写的是"ADR-001 至 ADR-017 全部已实现；ADR-018 是本次新增（只建立定义，未迁移调用方）"。
 
 **ADR-001 SQLite + WAL，单写者。已实现。** 单机单用户，状态量小，事务简单；WAL 让读不阻塞写。并发上限是真实的：10 个以上同时写没测过。
 
@@ -300,9 +315,40 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 `failed`（cause=timeout）。2026-11-03 的 `watchdog` 补上了这条边（见第 2 节），但 recover/server/lineage
 仍各自判断状态，迁移没有发生。
 
+
+**ADR-019 事实源与暂存层分离。已决定，未实现（0.6）。**
+0.5 的 `routing-memory-lineage.md` 写明"记忆不再有 SQLite 表"：事实写进项目 `AGENTS.md` 的「已验证事实」，
+人能读、能 diff、能回退。0.6 要做 dream（把结束的 run 巩固成候选），需要 episode、候选、证据、曝光、批次游标和
+全文索引，这些放进文件没法做事务和计数。两件事看似冲突，解法是把"事实"和"为产出事实而做的工作"分开：
+**`AGENTS.md` 的 marker 区块（`<!-- sodus:facts:begin/end -->`）是已采纳事实的唯一真源**；SQLite 只放可以从
+L0（run 目录、会话日志）和 L3（AGENTS.md）重建的暂存与索引——`episode` / `candidate` / `candidate_evidence` /
+`memory_exposure` / `dream_batch` / FTS。删库重建不丢任何已采纳事实；唯一不可重建的 exposure 丢失只会让退役更保守。
+配套规则：`meta.schema_version` 从 1 升到 2，迁移按版本函数顺序执行并有升级/重复升级/降级测试；Sodus 每次写区块后
+记区块 hash，写前重算，不一致（人手改过）就挂起该文件的 dream，`reindex` 以文件为准追上；所有 L3 写入（dream、
+看板采纳、退役、回滚）走同一条 staging + `os.replace` + recovery journal 路径，并经 `db.lock_path` 拿 ADR-012
+的写锁——这顺带补上 `memory.adopt` 现在不拿锁的缺口。回滚按 DB 里记录的 ops 重放到指定 `memory_version`，不依赖 git。
+旧的三档作用域与同 key 覆盖不恢复：作用域只剩项目文件 / 全局文件，覆盖改为"新采纳 + 旧退役提案"。
+代价：同一份事实有两种形态（文件里的文本、库里的索引），靠 hash 检测漂移而不是靠同步；人改文件后需要一次 reindex
+dream 才恢复；schema 迁移从"补列"升级为有版本号的框架，多一套要测的东西。
+
+**ADR-020 任务状态与入口边界。已决定，未实现（0.6）。**
+0.6 加一个对话入口（`POST /ask` / MCP `sodus_ask`），v0.1 草案给 ask 和 task 各写了一套状态机——那正是
+ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个**派生函数**，不增加可写状态表。
+`task_state` 由最新 work run 的状态 + verify verdict（pass / red / unverified / failed）+ review verdict + 人工确认
+算出（open / running / stalled / failed / needs_review / unverified / done），`task.status` 列只作为它的缓存写回；
+`ask_state` 由 ask 的 run + `promoted_task_id` + TTL 算出。run 的状态表不变，`completed` 仍只是"进程退出 0"。
+人工确认只记 `task.accepted_by='human'`，不把 `unverified` 变成 `done`——人工拍板不是验收通过（ADR-014）。
+入口边界同在这条 ADR：`/ask` 只产生回答，执行要显式 promote 成 task（必须带验收标准）；`request_id` + payload hash
+幂等，同 id 异 payload 返回 409，TTL 24 小时；没有推送，结果靠 `GET /ask/{id}` 与 `sodus status` 轮询，SSE 只服务
+看板，不写任何活跃 DSH 会话（ADR-005 不变）；worker 环境带 `NODUS_ROLE=worker` / `NODUS_DEPTH`，HTTP 带
+`X-Sodus-Depth`，worker 内禁用 ask 与派活，嵌套最多 1 层。ask 与 dream 都是 run（`kind='ask'` / `kind='dream'`），
+成本、预算闸、watchdog、回退全部复用。
+代价：`tdd`/`fix` 直接写 `task.status` 的地方要迁到派生函数，迁移前后要有对照测试；轮询意味着 DSH 用户要主动问
+"好了没"；防递归只拦经 MCP 或带头的调用，直接拿 token 打 HTTP 的 worker 拦不住（与 ADR-005 会话锁同属建议性约束）。
+
 ## 6. 质量门槛
 
-- `python -m pytest -q -o addopts=""`：880 条（2026-11-03，0.5.0；仓库 addopts 已含 `-q`，必须覆盖 addopts 才看得到摘要），
+- `python -m pytest -q -o addopts=""`：880 条（2026-11-03，0.5.0；2026-11-08 在 0.5.1 上收集到 896 条；仓库 addopts 已含 `-q`，必须覆盖 addopts 才看得到摘要），
   覆盖解析、策略、隔离、写锁、提案/合并（真 git 仓库）、会话、自动验收、daemon 作业、成本标定、报告、计费表、
   端点/路由/配置物化、自动恢复、状态机与真实历史回归、卡住检测，以及回退规则（真起子进程，不是 mock）。
 - `scripts/smoke_cli.ps1`：命令逐个 `--help` + 关键命令真实执行。
@@ -325,7 +371,11 @@ proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方�
 
 - 打包（PyInstaller / Go）。
 - 多租户鉴权（现在只有 workspace 字段）。
-- dsh 的 `DSH_HOME` 隔离：profile 层已经在了，缺的是 dsh 认哪个环境变量。
+- ~~dsh 的 `DSH_HOME` 隔离：profile 层已经在了，缺的是 dsh 认哪个环境变量。~~
+  2026-11-08 校准：这条前提已被 README「已知限制」的 2026-10-21 实测推翻——dsh 认 `DSH_HOME`，headless profile
+  本来就不加载全局配置，隔离无收益，所以不做。保留删除线作为历史。
 - 把现有调用方迁到 `lifecycle`：`recover` / `server` / `lineage` 仍在各自判状态，清单见 `docs/overlap-audit.md`。
   已收口的是「谁写状态」（watchdog）和「失败是多少」（board 唯一计数），读方的迁移还没做。
 - `sodus` 包接管各模块（现在只是入口面，模块仍在 `nodus/`）；仓库目录改名是阶段 D，单独立项。
+- 0.6（`feat/sodus-0.6`，未合并）：单入口 `/ask`、任务状态派生、记忆暂存层与 dream。设计与分周计划见
+  `docs/sodus-0.6-design.md`，对应 ADR-019 / ADR-020。

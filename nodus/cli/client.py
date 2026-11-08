@@ -74,7 +74,7 @@ _SERVE_SNIPPET = (
 )
 
 
-def call(method: str, path: str, body: dict | None = None, retries: int = 2):
+def call(method: str, path: str, body: dict | None = None, retries: int = 2, *, headers: dict | None = None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE + path,
@@ -83,6 +83,7 @@ def call(method: str, path: str, body: dict | None = None, retries: int = 2):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {config.token()}",
+            **(headers or {}),
         },
     )
     attempt = 0

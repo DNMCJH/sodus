@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import db, ledger
+from . import db, ledger, lifecycle
 
 #: Hard stop for any walk. A hand-edited or corrupted parent link must not turn
 #: `nodus lineage` into an infinite loop.
@@ -264,8 +264,8 @@ def _run_summary(run: dict, verify: str) -> dict:
         # a green test run. An unchecked run is neither success nor failure --
         # counting it as ok is how a route table learns the wrong lesson, so it
         # gets its own bucket.
-        "ok": status == "completed" and verify == "ok",
-        "unverified": status == "completed" and verify == "none",
+        "ok": lifecycle.task_state({}, [run], verify=verify) == "done",
+        "unverified": lifecycle.task_state({}, [run], verify=verify) == "unverified",
         "seconds": round(ended - started, 1) if ended and started else None,
         "cost": parsed.cost.amount,
         # "" (not "-"): this field is a run's own record, and the sentinel is a

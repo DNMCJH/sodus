@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import db, verify
+from . import db, verify, lifecycle
 from . import review as review_mod
 from .runner import RUNNER
 
@@ -97,7 +97,7 @@ def run_tdd(
     if writer_run.get("status") == "failed" and verify.test_file_hashes(cwd) == hashes_initial:
         result["stage"] = "writer_failed"
         result["error"] = writer_run.get("error") or "writer run failed and no test file changed"
-        db.update_task(task_id, status="failed")
+        db.update_task(task_id, status=lifecycle.task_state({}, [writer_run], verify="red"))
         return result
 
     red = verify.run(cmd, cwd)
@@ -107,7 +107,7 @@ def run_tdd(
     if red["ok"]:
         result["stage"] = "red_unexpected_pass"
         result["error"] = "test passed before implementation: feature exists or the test is vacuous"
-        db.update_task(task_id, status="failed")
+        db.update_task(task_id, status=lifecycle.task_state({}, [writer_run], verify="red"))
         return result
 
     hashes_before = verify.test_file_hashes(cwd)
@@ -148,7 +148,8 @@ def run_tdd(
     result["green"] = last
     result["ok"] = last["ok"]
     result["stage"] = "green" if last["ok"] else "retry_exhausted"
-    status = "done" if last["ok"] else "failed"
+    work = db.get_run(impl_run_id)
+    status = lifecycle.task_state({}, [work], verify="pass" if last["ok"] else "red")
     db.update_task(task_id, status=status)
 
     # 3. optional review by a different agent
@@ -159,8 +160,8 @@ def run_tdd(
             rev = {"ok": False, "error": str(exc)}
         result["review"] = rev
         if not rev.get("ok"):
-            db.update_task(task_id, status="needs_review")
+            db.update_task(task_id, status=lifecycle.task_state({}, [work], [{"verdict": "unknown"}], "pass"))
         elif rev.get("verdict") != "accept":
-            db.update_task(task_id, status="needs_review")
+            db.update_task(task_id, status=lifecycle.task_state({}, [work], [{"verdict": "unknown"}], "pass"))
 
     return result

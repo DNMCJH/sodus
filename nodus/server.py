@@ -1933,6 +1933,18 @@ def _memory_board(limit: int = 300) -> list[dict]:
     """
     try:
         rows = memory.harvest(memory.saved_project())
+        with db.connect() as c:
+            staged = [dict(r) for r in c.execute("SELECT * FROM memory_candidate WHERE workspace IN (?,?) AND status IN ('proposed','adopted','retire_proposed')", (str(memory.saved_project()),config.workspace_id()))]
+            for row in staged:
+                row['evidence_count'] = c.execute('SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0', (row['id'],)).fetchone()[0]
+                row.update(sources=[],conflict=False,adopted=False)
+        harvested = [
+            {"id": row["id"], "text": row["text"], "sources": row["sources"],
+             "conflict": row["conflict"], "adopted": row["adopted"]}
+            for row in rows if not row["adopted"]
+        ]
+        merged = staged + [row for row in harvested if row['text'] not in {x['text'] for x in staged}]
+        return merged[:limit]
     except Exception:  # noqa: BLE001 - the board outranks this section
         return []
     return [
@@ -2183,6 +2195,25 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path == "/asks":
+            from . import ask
+            workspace = (qs.get("workspace") or [config.workspace_id()])[0]
+            with db.connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM ask WHERE workspace_id=? AND expires_at>=? ORDER BY created_at DESC",
+                    (workspace, time.time()),
+                ).fetchall()
+            return _json(self, 200, [
+                {key: value for key, value in ask.view(dict(row)).items()
+                 if key in ("id", "status", "created_at", "expires_at")}
+                for row in rows
+            ])
+
+        if path.startswith("/ask/") and len(path.split("/")) == 3:
+            from . import ask
+            code, payload = ask.get(path.split("/")[2])
+            return _json(self, code, payload)
+
         if path == "/favicon.ico":
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -2311,6 +2342,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/board":
             return _json(self, 200, board_state())
 
+        if path == "/memory/candidates":
+            workspace = (qs.get("workspace") or [config.workspace_id()])[0]
+            status = (qs.get("status") or [""])[0]
+            with db.connect() as c:
+                sql = "SELECT * FROM memory_candidate WHERE workspace=?"
+                args = [workspace]
+                if status: sql += " AND status=?"; args.append(status)
+                rows = [dict(r) for r in c.execute(sql + " ORDER BY updated_at DESC", args)]
+            for row in rows:
+                row["provenance"] = json.loads(row.get("sources_json") or "[]")
+                with db.connect() as c:
+                    row["evidence_count"] = c.execute("SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0", (row["id"],)).fetchone()[0]
+            return _json(self, 200, rows)
+
         if path == "/tasks":
             return _json(self, 200, db.list_tasks())
 
@@ -2395,6 +2440,15 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return _json(self, 400, {"error": "invalid json"})
 
+        if path == "/ask":
+            from . import ask
+            code, payload = ask.submit(body, self.headers.get("X-Sodus-Depth", "0"))
+            return _json(self, code, payload)
+        if path.startswith("/ask/") and path.endswith("/promote") and len(path.split("/")) == 4:
+            from . import ask
+            code, payload = ask.promote(path.split("/")[2], body)
+            return _json(self, code, payload)
+
         if path == "/tasks":
             task = db.create_task(
                 goal=body.get("goal", ""),
@@ -2475,6 +2529,30 @@ class Handler(BaseHTTPRequestHandler):
                 _log("memory: nothing to adopt")
             return _json(self, 200, result)
 
+        if path.startswith("/memory/candidates/"):
+            cid = path.rsplit("/", 1)[-1]; action = body.get("action", "")
+            row = db.memory_get_candidate(cid)
+            if not row: return _json(self, 404, {"error":"not found"})
+            try: version = int(body.get("version"))
+            except (TypeError, ValueError): return _json(self, 400, {"error":"version required"})
+            if version != int(row.get("version", 0)): return _json(self, 409, {"error":"candidate version conflict", "candidate":row})
+            if action == "edit":
+                text = str(body.get("text") or "").strip()
+                if not text: return _json(self, 400, {"error":"text required"})
+                try:
+                    new_id = db.memory_add_candidate(text, row.get("workspace"), kind=row.get("kind","lesson"), sources_json=json.dumps({"edited_from":cid,"sources":json.loads(row.get("sources_json") or "[]")}, ensure_ascii=False))
+                    db.memory_update_candidate(cid, version, status="rejected")
+                    if new_id != cid:
+                        with db.connect() as c:
+                            c.execute('INSERT OR IGNORE INTO candidate_evidence SELECT ?,episode_id,lineage_root,exposed,created_at FROM candidate_evidence WHERE candidate_id=?', (new_id,cid))
+                except ValueError as exc: return _json(self, 409, {"error":str(exc)})
+                return _json(self, 200, {"ok":True,"id":new_id,"edited_from":cid})
+            if action not in ("adopt", "reject", "retire"): return _json(self, 400, {"error":"unknown action"})
+            status = {"adopt":"adopted", "reject":"rejected", "retire":"retire_proposed"}[action]
+            try: updated = db.memory_update_candidate(cid, version, status=status)
+            except ValueError as exc: return _json(self, 409, {"error":str(exc)})
+            return _json(self, 200, updated)
+
         if path.startswith("/runs/") and path.endswith("/stop"):
             rid = path.split("/")[2]
             return _json(self, 200, {"stopped": runner.RUNNER.stop(rid)})
@@ -2536,6 +2614,10 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     config.ensure_dirs()
     profiles.ensure_ready()
     db.connect().close()
+    try:
+        memory.recover_journals()
+    except Exception as exc:
+        _log(f"memory recovery: {exc}")
     # A daemon that just started owns no runs: anything still marked running
     # belongs to a process that is gone. Reap before accepting work, so a
     # restart never leaves clients waiting on a corpse.
@@ -2586,6 +2668,8 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
         from . import observe_sync
 
         observe_sync.start(log=_log)
+        from . import dream
+        dream.start_daily(log=_log)
     except Exception:  # noqa: BLE001 - observation is a supplement, not the server
         pass
     if sys.stderr.isatty():  # a detached daemon writes to the log, not the console

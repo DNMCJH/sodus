@@ -138,6 +138,20 @@ nodus.sqlite3                 全部状态
 
 ## 三层：CLI / 端点 / 路由组
 
+### 0.6 入口与记忆
+
+`/ask` 可异步提问并轮询回答；通过人工验收后再 promote 为任务。MCP 提供 `sodus_ask` 与 `sodus_ask_status`。
+
+```powershell
+sodus debug memory-stats --json
+sodus memory dream --dry-run
+sodus memory dream --now
+sodus memory reindex
+sodus memory rollback --to 1
+```
+
+记忆操作围绕 episode、候选与 `AGENTS.md` marker 展开；rollback 使用显式版本号。
+
 以前这三件事糊在一个对象里，叫 `AgentSpec`。结果 `minimax` 既是 agent 又是端点，
 加一个后端要改 `argv()` 的 if/elif 链，`Pricing` 挂在 agent 上，failover 无处安放——因为"端点"根本不是个东西。
 

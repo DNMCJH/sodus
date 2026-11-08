@@ -1,6 +1,6 @@
 """CLI assembly: one parser, one handler per command, no shared globals.
 
-The surface is deliberately small: eighteen top-level names, each one worth
+The surface is deliberately small: nineteen top-level names, each one worth
 remembering. Everything else still exists, one level down -- the long tail lives
 under `nodus debug <name>`, and the four report commands under
 `nodus stats <name>`. Old names keep working as hidden aliases, so an existing
@@ -34,6 +34,7 @@ TOP_LEVEL = (
     # judge: run the tests, review the work
     "verify",
     "review",
+    "dream",
     # stats: money, tokens, cache
     "stats",
     # integration
@@ -89,10 +90,12 @@ DEBUG_COMMANDS = (
     "proposal",
     # remembered facts
     "memory",
+    "memory-stats",
     # harness tributaries
     "observe",
     # evidence: read-only harness fingerprints over run history
     "harness-stats",
+    "replay-episodes",
 )
 
 
@@ -165,6 +168,7 @@ def build_parser(prog: str | None = None):
     from .commands import (
         bench,
         decisions,
+        dream,
         memory,
         migrate,
         observe,
@@ -178,7 +182,7 @@ def build_parser(prog: str | None = None):
 
     modules = (
         system, tasks, pipeline, sessions, decisions, topology, proposals,
-        bench, memory, migrate, observe,
+        bench, memory, migrate, observe, dream,
     )
 
     name = prog or _prog()

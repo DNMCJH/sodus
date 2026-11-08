@@ -204,6 +204,12 @@ def build_env(
         elif spec.vendor == "codex":
             env["CODEX_HOME"] = str(home)
     env["NODUS_RUN"] = "1"
+    env["NODUS_ROLE"] = "worker"
+    try:
+        depth = max(0, int(os.environ.get("NODUS_DEPTH", "0")))
+    except ValueError:
+        depth = 0
+    env["NODUS_DEPTH"] = str(depth + 1)
     return env
 
 

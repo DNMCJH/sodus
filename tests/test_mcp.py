@@ -11,6 +11,7 @@ import pytest
 from nodus import config, db, mcp
 
 EXPECTED_TOOLS = {
+    "sodus_ask", "sodus_ask_status", "nodus_ask", "nodus_ask_status",
     "nodus_task_create",
     "nodus_run",
     "nodus_run_status",
@@ -95,7 +96,7 @@ def test_tools_list_returns_every_tool(home):
     reply = call("tools/list")
     tools = reply["result"]["tools"]
     assert {item["name"] for item in tools} == EXPECTED_TOOLS
-    assert len(tools) == 7
+    assert len(tools) == 11
 
 
 def test_every_tool_has_an_object_input_schema(home):
@@ -314,3 +315,58 @@ def test_parse_error_does_not_end_the_session(home):
     assert len(replies) == 2
     assert replies[0]["error"]["code"] == -32700
     assert replies[1]["result"] == {}
+
+@pytest.mark.parametrize('name', ['sodus_ask', 'nodus_ask', 'nodus_run', 'nodus_task_create'])
+@pytest.mark.parametrize('role,depth', [('worker', '0'), ('user', '1'), ('user', '3'), ('worker', 'bad')])
+def test_worker_denied_before_any_side_effect(monkeypatch, name, role, depth):
+    from nodus.cli import client
+    def unexpected(*args, **kwargs):
+        pytest.fail('worker must not perform HTTP or dispatch')
+    monkeypatch.setattr(client, 'call', unexpected)
+    monkeypatch.setattr(db, 'create_task', unexpected)
+    monkeypatch.setattr(mcp.runner.RUNNER, 'start', unexpected)
+    monkeypatch.setenv('NODUS_ROLE', role)
+    monkeypatch.setenv('NODUS_DEPTH', depth)
+    result = tool(name)
+    assert result['result']['isError']
+    assert result['text'] == 'recursion_denied'
+
+
+@pytest.mark.parametrize('name', ['sodus_ask', 'nodus_ask'])
+@pytest.mark.parametrize('depth', [None, '0'])
+def test_ask_http_forwarding(monkeypatch, name, depth):
+    from nodus.cli import client
+    monkeypatch.delenv('NODUS_ROLE', raising=False)
+    if depth is None:
+        monkeypatch.delenv('NODUS_DEPTH', raising=False)
+    else:
+        monkeypatch.setenv('NODUS_DEPTH', depth)
+    args = dict(request_id='req-1', text='why?', cwd='A:/project', route='codex', follow_up_of='ask-1')
+    expected = dict(id='ask-2', status='queued', poll='/ask/ask-2')
+    def forward(method, path, body, *, headers):
+        assert (method, path) == ('POST', '/ask')
+        assert body == dict(args, origin='mcp')
+        assert headers == {'X-Sodus-Depth': '0'}
+        return expected
+    monkeypatch.setattr(client, 'call', forward)
+    assert tool(name, args)['payload'] == expected
+    assert mcp._HANDLERS['sodus_ask'] is mcp._HANDLERS['nodus_ask']
+
+
+@pytest.mark.parametrize('name', ['sodus_ask_status', 'nodus_ask_status'])
+def test_ask_status_expired_error_unchanged(monkeypatch, name):
+    from nodus.cli import client
+    monkeypatch.setenv('NODUS_ROLE', 'worker')
+    def forward(method, path):
+        assert (method, path) == ('GET', '/ask/ask-old')
+        raise RuntimeError('HTTP 410: {"error": "expired"}')
+    monkeypatch.setattr(client, 'call', forward)
+    result = tool(name, {'id': 'ask-old'})
+    assert result['result']['isError']
+    assert result['text'] == 'HTTP 410: {"error": "expired"}'
+
+
+def test_ask_status_success(monkeypatch):
+    from nodus.cli import client
+    monkeypatch.setattr(client, 'call', lambda *a: {'id': 'ask-1', 'status': 'answered', 'answer': 'yes'})
+    assert tool('sodus_ask_status', {'id': 'ask-1'})['payload']['answer'] == 'yes'

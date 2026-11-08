@@ -14,12 +14,14 @@ python -m nodus mcp        # 或装好之后：nodus mcp
 ```
 
 进程只从 stdin 读协议消息、往 stdout 写协议消息；日志一律走 stderr。它自己开
-SQLite 连接、自己起 worker，**不需要 `nodus up`**，也不经过 HTTP。
+SQLite 连接、自己起 worker；旧工具不需要 daemon。新增 ask 工具转发 HTTP，需先 `sodus up`。
 
 ## 工具
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
+| `sodus_ask`（别名 `nodus_ask`） | `request_id`、`text`（必填），`cwd`、`route`、`follow_up_of`（可选） | `POST /ask` 的 JSON（新建 202，幂等重试 200） |
+| `sodus_ask_status`（别名 `nodus_ask_status`） | `id` | `GET /ask/{id}` 的 JSON；过期 410 错误原文 |
 | `nodus_task_create` | `title`、`description`、`acceptance`（可选） | `task_id` + 任务记录 |
 | `nodus_run` | `task_id`、`route`（默认 claude）、`cwd`（默认进程 cwd）、`wait`（默认 false） | `run_id`、状态；`wait=true` 阻塞到结束 |
 | `nodus_run_status` | `run_id` | 状态、成本/币种/计价依据、`verify`（ok/red/none） |
@@ -91,11 +93,33 @@ stdout 会是三行 JSON（通知没有回复）；stderr 会有 `nodus mcp: rea
 
 ## 边界
 
-- **和 daemon 二选一。** MCP 进程自己起 run；daemon 启动时的对账会把"不是自己起的"
+- **旧工具和 daemon 二选一。** MCP 进程自己起 run；daemon 启动时的对账会把"不是自己起的"
   在线 run 当孤儿标失败。别在 MCP 有 run 在跑时开 `nodus up`。
 - **MCP 进程退出 = 它起的 run 失去所有者。** 长任务要么用 `wait=true`，要么保持
   客户端会话开着，之后用 `nodus_run_status` 轮询。真断了用 `nodus reconcile` 收尾。
 - stdio 是本地子进程协议，没有鉴权；不要把它包成网络端口暴露出去。
 - `cwd` 必须是已存在的目录，不会替你创建。
-- 这 5 个工具是只读 + 建任务/起 run；**合入/丢弃提案仍然只在 CLI**（`nodus merge` /
+- 工具提供查询、问答和建任务/起 run；**合入/丢弃提案仍然只在 CLI**（`nodus merge` /
   `nodus reject`），避免让模型自己批准自己的改动。
+
+
+## Ask 与递归保护
+
+`sodus_ask` 设置 `origin=mcp`，将进程 `NODUS_DEPTH`（默认 0）作为
+`X-Sodus-Depth` 转发；使用 CLI 同一 localhost 地址与 Bearer token。
+`NODUS_ROLE=worker` 或 `NODUS_DEPTH>=1` 时，`sodus_ask`、`nodus_ask`、
+`nodus_run`、`nodus_task_create` 在进程内返回 `isError=true`、`recursion_denied`，
+不会创建任务或发送 HTTP。状态查询仍可使用；不提供会话推送或写回。
+HTTP 仍兜底拒绝 depth>=1；直接 HTTP 故意省略深度头的 worker 是已知限制。
+
+`sodus status` 的 `asks active` 行统计当前 workspace 未过期（24 小时 TTL）的 asks：
+open=queued，running=running+stalled，done=answered+promoted，failed=failed。
+它调用鉴权的 `GET /asks?workspace=<workspace_id>`；省略 workspace 则用 daemon 的 workspace，
+响应只含 id/status/created_at/expires_at，按创建时间倒序，不含问题或答案。
+ask 运行归 daemon 所有，MCP 退出后仍可按 id 轮询；不要同时用旧 MCP run 工具起任务。
+
+
+Memory review (0.6) uses the dashboard or HTTP `GET /memory/candidates` and
+`POST /memory/candidates/{id}` with `{action, version, text?}`. Actions are
+`adopt`, `reject`, `edit`, `retire`; stale versions return 409. There is no new MCP
+review tool. Historical memory rollback is local CLI: `sodus memory rollback --to V`.

@@ -227,3 +227,12 @@ def load_secrets(ws: str | None = None) -> dict[str, str]:
         if os.environ.get(key):
             secrets_map[key] = os.environ[key]
     return secrets_map
+
+
+def dream_route() -> str:
+    value = (load_config().get("routing") or {}).get("dream")
+    return value.strip() if isinstance(value, str) and value.strip() else default_route()
+
+
+def dream_daily_tokens() -> int:
+    return max(0, int((load_config().get("memory") or {}).get("dream_daily_tokens", 100000)))

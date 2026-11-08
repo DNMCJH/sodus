@@ -43,3 +43,33 @@
 - `nodus debug` 里的 31 个命令也都能直接敲：`nodus lineage`、`nodus report`、
   `nodus probe`、`nodus sessions`……和 `nodus debug <name>` 是同一个 handler。
 - 这些名字不在 `--help` 里显示，但解析行为和以前完全一样。
+
+
+### Memory consolidation and rollback (0.6)
+
+```powershell
+sodus memory dream --dry-run --json
+sodus memory dream --now --limit 50 --json
+sodus memory reindex --project A:\path\project
+sodus memory rollback --to 2 --project A:\path\project
+```
+
+`dream --now` plans, extracts and counts evidence into staged candidates. The daemon
+runs consolidation when no queued/running run exists, once per local calendar day
+(persisted per workspace, including failed attempts). It then applies human-approved
+adoptions/retirements through the same journalled L3 writer. Extraction uses
+`routing.dream` (fallback `routing.default`); `memory.dream_daily_tokens` defaults to
+100000. At the daily token ceiling no new batch starts; an ongoing run is not killed.
+Failures are logged and do not stop the daemon. The scheduler checks every 300 seconds.
+
+Rollback replays recorded ops through the requested global memory version for the
+selected project's AGENTS.md, including the initial marker baseline, then performs
+a new apply: versions keep increasing and old batches remain intact. Other sections
+of the file are preserved. Invalid/unrecorded versions are rejected. Manual marker
+drift refuses writes with a request to run `memory reindex` first. Rollback does not
+require git. Versions predating recorded history cannot be reconstructed.
+
+The memory board exposes candidate status, independent evidence count, and
+adopt/reject/edit/retire actions. Edits carry evidence to the replacement candidate;
+stale versions return HTTP 409 and ask the operator to refresh. Approval queues the
+L3 change for the daemon; it never allows a model to approve its own facts.

@@ -25,6 +25,9 @@
 
 ## 二、记忆：三档作用域
 
+> 2026-11-08 校准：本节是 0.4 的历史设计，已被替代——三档作用域、同 key 覆盖和 `context_for` 注入随
+> 「记忆写进 AGENTS.md」删除（见第五节引文），0.6 的记忆分层见 `docs/sodus-0.6-design.md` §4 与 ADR-019。原文保留。
+
 | 作用域 | 谁写得进 | 谁读得到 | 典型内容 |
 |---|---|---|---|
 | `private` | 单个 agent | 只有它自己 | 它的工作习惯、踩过的坑、"这个项目里别用 X" |
@@ -58,6 +61,9 @@ session ──resume──> session ──branch──> session
 
 实现上不新建体系：`session` 表加 `parent_session_id` / `origin_run_id`，run 已有 `parent_run_id`，proposal 已有 `run_id`。查询层给一个 `nodus lineage <session|run>` 就够了。
 
+> 2026-11-08 校准：已按此实现——`session` 表有 `parent_session_id` / `origin_run_id` / `relation`（resume/branch/fresh），
+> `nodus/lineage.py` 提供 session / run / task 三种视图，命令是 `sodus debug lineage <ref>`。
+
 ## 四、三者怎么串起来
 
 一次派活的完整路径：
@@ -74,20 +80,25 @@ session ──resume──> session ──branch──> session
 
 第 7 步是这版的重点，而且**采纳这一下必须是人**。要小心：自动把 agent 的自述写成记忆，等于把错误固化。所以 `remember` 只写人被要求写的那一条，`harvest` 抽出来的候选一律先上板，等人点。
 
-## 五、当前进度（诚实版）
+## 五、当前进度（诚实版，2026-11-08 校准）
 
 | 块 | 状态 |
 |---|---|
 | 能力路由 | 已实现（`policy.assess` / `recommend` 接进 `runner --agent auto` 和 `sodus route-for`） |
 | 评测集 | 已实现（`eval/tasks` 12 个带隐藏测试的任务 + `nodus bench`） |
 | 记忆汇总 | 已实现（`memory.py`：sources / harvest / conflicts / adopt + 看板审核） |
-| 会话血缘 | 已实现（`lineage.py` + `sodus debug lineage`） |
-| 自动蒸馏记忆 | 仍在设计（0.6）：规则只负责"找出来"，写不写由人点；"做梦"巩固见 2026-11-08 设计评审 |
+| 会话血缘 | 已实现（`lineage.py` + `sodus debug lineage`；session 表的 `parent_session_id` / `origin_run_id` / `relation`） |
+| 自动蒸馏记忆 | 已定稿设计、未实现（0.6，`feat/sodus-0.6`）：episode → 候选 → 人采纳 → AGENTS.md，dream 只抽候选不采纳；见 `docs/sodus-0.6-design.md`、ADR-019/020 |
+| 单入口 `/ask` | 已定稿设计、未实现（0.6）：只回答，执行要 promote；轮询无推送；见设计文档 §2 |
 
 > 记忆不再有 SQLite 表。事实写在项目 `AGENTS.md` 的「已验证事实」里，带日期和来源；
 > 旧的三档（private/project/public）、`context_for` 注入和 `nodus memory add/recall`
 > 随这次改动删掉了。会读文件的 harness（claude/codex/dsh/opencode）不再需要注入，
 > 只有 `AgentSpec.reads_memory_files=False` 的路由才把这一节塞进 brief。
+>
+> 2026-11-08 补注（ADR-019）：0.6 会重新引入 SQLite 表，但**不是记忆表**——已采纳事实仍只在 AGENTS.md 的
+> marker 区块里；新表（episode / candidate / exposure / dream_batch / FTS）只是可从文件和 run 记录重建的暂存与索引。
+> 上面这段引文在 0.5 时成立，保留作为历史。
 
 ## 六、边界
 

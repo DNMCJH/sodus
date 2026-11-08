@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import queue
 import re
@@ -244,6 +245,7 @@ class Runner:
         verify_run: bool | None = None,
         propose_run: bool = False,
         allow_expensive: bool = False,
+        kind: str = "work",
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
@@ -252,6 +254,12 @@ class Runner:
         # Checked against the *requested* route before anything is written: an
         # expensive one must be refused before a task lookup, a profile write or
         # a worktree is created, otherwise the refusal itself leaves debris.
+        if kind == "dream":
+            from . import dream
+            with db.connect() as c:
+                dream._check_tokens(c)
+            if not route_name:
+                route_name = config.dream_route()
         spend = budget.check(route=route_name, model=model, allow_expensive=allow_expensive)
         if spend["over"] or spend["gated"]:
             raise RuntimeError(budget.blocked_message(spend))
@@ -329,6 +337,7 @@ class Runner:
         # The why is written before the worker spawns, so the event stream
         # answers "why this route" even while the run is still going. Doing it
         # after `thread.start()` would race the worker for the same `seq`.
+        db.update_run(run["id"], kind=kind)
         self._record_policy(run["id"], route_decision)
         # The sitting row exists already (it was created with the task). Record
         # how this run got here before the worker spawns, so `nodus lineage`
@@ -1052,6 +1061,11 @@ class Runner:
             provider=chosen["provider"],
         )
         mood = "done" if status == "completed" else "error"
+        try:
+            from .episodes import record_episode
+            record_episode(db.get_run(rid), verify_mark)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not record episode for %s", rid)
         if verify_mark == "red":
             mood = "error"
         elif status == "completed" and verify_mark == "none":
@@ -1135,6 +1149,11 @@ class Runner:
         self._emit(rid, "run.failed", {"error": message, "status": "failed"})
         db.release_write(rid)
         db.update_run(rid, status="failed", ended_at=time.time(), error=message)
+        try:
+            from .episodes import record_episode
+            record_episode(db.get_run(rid))
+        except Exception:
+            logging.getLogger(__name__).exception("Could not record episode for %s", rid)
 
     @staticmethod
     def _kill_tree(proc: subprocess.Popen) -> None:
@@ -1250,6 +1269,11 @@ class Runner:
                 pass
             db.release_write(rid)
             db.update_run(rid, status="failed", ended_at=time.time(), error=message)
+            try:
+                from .episodes import record_episode
+                record_episode(db.get_run(rid))
+            except Exception:
+                logging.getLogger(__name__).exception("Could not record episode for %s", rid)
             out.append({**run, "error": message, "salvaged": salvaged})
         return out
 
