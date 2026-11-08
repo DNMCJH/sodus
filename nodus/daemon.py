@@ -205,3 +205,32 @@ def stop(port: int = DEFAULT_PORT) -> dict:
         time.sleep(0.2)
     clear_state()
     return {"ok": not health(port), "stopped": True, "pid": pid}
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def instance_lock():
+    """Kernel-owned lock: released on crash, shared by every daemon port."""
+    config.HOME.mkdir(parents=True, exist_ok=True)
+    with (config.HOME / 'daemon.lock').open('a+b') as lock:
+        lock.seek(0)
+        if not lock.read(1):
+            lock.write(b'0')
+            lock.flush()
+        lock.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            if os.name == 'nt':
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)

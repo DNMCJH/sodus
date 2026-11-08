@@ -6,6 +6,7 @@ import errno
 import hmac
 import json
 import os
+import socket
 import queue
 import re
 import subprocess
@@ -225,6 +226,10 @@ class Handler(BaseHTTPRequestHandler):
     def _guard(self, handler) -> None:
         """Never let an exception take the connection (and the client) down."""
         try:
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1 or not re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?", hosts[0], re.IGNORECASE):
+                self.close_connection = True
+                return _json(self, 403, {"error": "forbidden Host"})
             handler()
         except Exception as exc:  # noqa: BLE001 - last line of defence
             # A client that hung up is not a server fault: no traceback for it.
@@ -588,6 +593,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, OSError) as exc:
                 return _json(self, 400, {'error': str(exc)})
 
+        if path == "/reconcile":
+            return _json(self, 200, runner.RUNNER.reconcile(float(body.get("stale", 300))))
+
         if path == "/ask":
             from . import ask
             code, payload = ask.submit(body, self.headers.get("X-Sodus-Depth", "0"))
@@ -757,6 +765,13 @@ class _QuietServer(ThreadingHTTPServer):
     still gets its full stack in the log.
     """
 
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
     def handle_error(self, request, client_address) -> None:
         if _is_disconnect(sys.exc_info()[1]):
             return
@@ -764,6 +779,14 @@ class _QuietServer(ThreadingHTTPServer):
 
 
 def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
+    from .daemon import instance_lock
+    config.ensure_dirs()
+    with instance_lock():
+        with _QuietServer((host, port), Handler) as server:
+            _serve_bound(server, port, host)
+
+
+def _serve_bound(server, port, host):
     if host not in ("127.0.0.1", "localhost", "::1") and not os.environ.get(
         "NODUS_ALLOW_REMOTE"
     ):
@@ -782,7 +805,6 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     from . import plan
     plan.reconcile()
     stalled = jobs.reap(db.list_pipelines("running"))
-    server = _QuietServer((host, port), Handler)
     server.daemon_threads = True
     # The pet doubles as a status light: when something new starts waiting on a
     # human, the desktop pet says so. Off with NODUS_STATUS_LIGHT=0 for anyone

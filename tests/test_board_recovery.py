@@ -49,7 +49,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     monkeypatch.setenv("NODUS_WORKSPACE", "ws-board-recovery")
     monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.delenv("NODUS_AUTO_RECOVER", raising=False)
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 

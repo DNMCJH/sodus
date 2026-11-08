@@ -124,7 +124,7 @@ def test_v5_migration(valid):
                 c.execute(
                     "SELECT value FROM meta WHERE key='schema_version'"
                 ).fetchone()[0]
-                == "6"
+                == "7"
             )
             assert (
                 c.execute("SELECT title FROM task WHERE id='old'").fetchone()[0]
@@ -524,3 +524,53 @@ def test_cli_poll_network_timeout(valid, monkeypatch, capsys):
     monkeypatch.setattr(client, 'call', call)
     assert main(['plan', 'new', 'goal']) == 1
     assert json.loads(capsys.readouterr().out)['status'] == 'failed'
+
+
+@pytest.mark.parametrize('change', ['hash', 'head', 'agents', 'warning'])
+def test_approval_revalidates(valid, change, monkeypatch):
+    import hashlib
+    value, repo = valid
+    if change == 'agents':
+        (repo / 'AGENTS.md').write_text('before')
+        value['recon']['agents_md'] = hashlib.sha256(b'before').hexdigest()
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status='reviewed')
+    with db.connect() as c:
+        c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', ('{"verdict":"approve"}', pid))
+        if change == 'hash':
+            c.execute("UPDATE plan SET hash='tampered' WHERE id=?", (pid,))
+    if change == 'head':
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-m', 'drift'], cwd=repo, check=True, capture_output=True)
+    if change == 'agents':
+        (repo / 'AGENTS.md').write_text('after')
+    if change == 'warning':
+        monkeypatch.setattr(plan, 'validate_plan', lambda value, cwd, warnings: warnings.append({'kind':'warning'}) or [])
+    with pytest.raises(ValueError):
+        plan.approve(pid, 'human')
+
+
+def test_timeout_stops_worker(valid, monkeypatch):
+    from nodus import runner
+    task = db.create_task('timeout')
+    run = db.create_run(task['id'], 'sol', cwd=str(valid[1]))
+    stopped = []
+    monkeypatch.setattr(runner.RUNNER, 'stop', lambda rid: stopped.append(rid))
+    with pytest.raises(TimeoutError):
+        plan._wait_run(run['id'], timeout=0)
+    assert stopped == [run['id']]
+    assert db.get_run(run['id'])['status'] == 'failed'
+
+
+def test_review_timeout_stops_and_finishes(valid, monkeypatch):
+    from nodus import runner
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    task = db.create_task('review timeout')
+    run = db.create_run(task['id'], 'sol', cwd=str(repo), kind='plan_review')
+    stopped = []
+    monkeypatch.setattr(runner.RUNNER, 'stop', lambda rid: stopped.append(rid))
+    monkeypatch.setattr(config, 'review_timeout', lambda: 0)
+    plan._finish_review(pid, run['id'])
+    assert stopped == [run['id']]
+    assert plan.get_plan(pid)['status'] == 'review_failed'
+    assert db.get_run(run['id'])['status'] == 'failed'

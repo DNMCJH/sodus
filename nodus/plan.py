@@ -316,14 +316,7 @@ def validate_plan(plan, cwd=".", warnings=None):
 
 # Additive execution metadata keeps the c1 plan contract and schema version intact.
 def _connect_meta():
-    c = db.connect()
-    columns = {row[1] for row in c.execute('PRAGMA table_info(plan)')}
-    if 'warnings_json' not in columns:
-        c.execute("ALTER TABLE plan ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'")
-    c.execute('''CREATE TABLE IF NOT EXISTS plan_execution (
-        plan_id TEXT PRIMARY KEY REFERENCES plan(id), cwd TEXT NOT NULL,
-        run_id TEXT, review_run_id TEXT, review_json TEXT)''')
-    return c
+    return db.connect()
 
 
 def _update(pid, **fields):
@@ -362,9 +355,13 @@ def _wait_run(rid, timeout=None):
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            runner.RUNNER.stop(rid)
+            db.update_run(rid, status='failed', ended_at=db.now(), error='planning deadline exceeded')
             raise TimeoutError('planning deadline exceeded')
         run = runner.RUNNER.wait(rid, timeout=min(remaining, 1), poll=min(remaining, 0.1))
         if time.monotonic() >= deadline:
+            runner.RUNNER.stop(rid)
+            db.update_run(rid, status='failed', ended_at=db.now(), error='planning deadline exceeded')
             raise TimeoutError('planning deadline exceeded')
         if run['status'] == 'completed':
             return
@@ -475,6 +472,16 @@ def approve(plan_id, by):
         raise ValueError('approval requires explicit by=human')
     if row['status'] != 'reviewed' or (row.get('review_json') or {}).get('verdict') != 'approve':
         raise ValueError('approval requires review verdict=approve (revise/reject cannot be approved)')
+    raw = json.dumps(row['plan_json'], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    if hashlib.sha256(raw.encode()).hexdigest() != row['hash']:
+        raise ValueError('plan hash mismatch')
+    warnings = []
+    errors = validate_plan(row['plan_json'], row['cwd'], warnings)
+    agents_path = Path(row['cwd']) / row['plan_json']['recon'].get('agents_md_path', 'AGENTS.md')
+    if agents_path.exists() and row['plan_json']['recon'].get('agents_md') is None:
+        raise ValueError('AGENTS.md hash required')
+    if errors or warnings:
+        raise ValueError('approval validation failed: ' + json.dumps(errors + warnings))
     _update(plan_id, status='approved', approved_by=by, approved_at=db.now())
     return get_plan(plan_id)
 

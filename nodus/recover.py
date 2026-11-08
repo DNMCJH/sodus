@@ -45,7 +45,7 @@ import re
 import threading
 import time
 
-from . import budget, db, diagnosis, ledger, routes
+from . import budget, config, db, diagnosis, ledger, routes
 
 #: The ceiling on automatic retries per chain. Three is the operator's line
 #: ("rerun is normal, unless two or three reruns still produce nothing"), but
@@ -110,7 +110,10 @@ def why_not_retried(run: dict) -> str:
 
 def enabled() -> bool:
     """Is automatic recovery on? The board uses this to avoid lying."""
-    return os.environ.get("NODUS_AUTO_RECOVER", "1") != "0"
+    override = os.environ.get("NODUS_AUTO_RECOVER")
+    if override is not None:
+        return override.lower() in ("1", "true", "yes", "on")
+    return bool(config.load_config().get("daemon", {}).get("auto_recover", False))
 
 
 def _cause(run: dict) -> str:

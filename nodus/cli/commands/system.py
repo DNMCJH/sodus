@@ -838,7 +838,7 @@ def _print_recommendation(recommendation: dict) -> None:
 
 
 def reconcile(args) -> int:
-    rows = runner.RUNNER.reconcile(args.stale)
+    rows = call("POST", "/reconcile", {"stale": args.stale})
     for r in rows:
         print(f"{r['id']}  {r['agent']:<7} {r['status']} -> failed  ({r['error']})")
     print(f"{len(rows)} run(s) marked failed")

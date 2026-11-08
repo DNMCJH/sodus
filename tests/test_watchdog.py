@@ -29,7 +29,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("NODUS_WATCHDOG", raising=False)
     monkeypatch.delenv("NODUS_STALL_SECONDS", raising=False)
     monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.delenv("NODUS_AUTO_RECOVER", raising=False)
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -292,7 +292,7 @@ def test_the_pet_light_does_not_call_a_stall_a_failure(home):
 
 
 def test_serve_starts_the_watchdog_unless_turned_off():
-    source = inspect.getsource(server.serve)
+    source = inspect.getsource(server._serve_bound)
     assert "watchdog.enabled()" in source
     assert "watchdog.start(log=_log)" in source
     assert "NODUS_WATCHDOG" in inspect.getsource(watchdog.enabled)

@@ -159,3 +159,8 @@ def test_file_hashes(cwd: Path, limit: int = 50) -> dict[str, str]:
         except OSError:
             continue
     return out
+
+
+def infra_failure(result):
+    code = result.get('exit')
+    return code in (-1, -2) or (isinstance(code, int) and (code & 0xffffffff) in (0xC000013A, 0xC0000142, 0xC0000005))
