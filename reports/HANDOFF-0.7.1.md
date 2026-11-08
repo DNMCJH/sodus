@@ -23,7 +23,7 @@
 | `/state` | ✅ version=0.7.1，字段完整 |
 | MCP 安装 | ✅ codex/claude/dsh 全部 configured，exit 0 |
 | reconcile | ✅ 经 daemon 执行返回 `0 run(s) marked failed` |
-| 预算 | ✅ 恢复 daily=50 / soft=20；daemon.auto_recover=false |
+| 预算 | ✅ 用户未定过预算：已移除 daily/soft 上限（无日上限），relay 余额是唯一硬约束；daemon.auto_recover=false |
 | release_check | ✅ PASS（构建、隔离安装、doctor、MCP、DB 升级、全量 pytest） |
 
 ## 已知缺口（0.7.2，阻塞无人值守）
@@ -32,7 +32,7 @@
 - 批准身份仍是 `--by human` 声明，同机同用户可读 token/文件，无法独立证明操作者——B4；0.7.1 只加了 plan hash/HEAD/AGENTS 复核。
 - plan 节点执行/物化/预算派发/replan 未实现；M4–M6 的 plan 仍是 review=revise，需修订后再批准。
 - DSH 的 MCP 条目已写入配置，但当前 DSH GUI 未重启，需重启生效。
-- 预算：今天已花费超过恢复后的 daily 50（历史消费 + 今日开发），在本地零点前 sodus 会拒绝新 run；这是预算门禁的正常行为。
+- 预算：用户确认没有定过预算。旧配置（2026-11-05 备份）里本来没有 budget；50/20 是后来开发 0.5.1 时写进 config 的保守值，0.7.1 已移除（daily/soft=0，无上限），relay 余额（当前约 105.6）是唯一硬约束。
 - `sodus serve` 第二个实例的报错是 instance_lock 的 PermissionError（行为正确、文案不理想）；DSH YAML 注释保留、DB 自动备份、verify 3221225786 根因仍在 0.7.2 清单。
 
 ## 高效性（尚无结论）
