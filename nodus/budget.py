@@ -17,6 +17,7 @@ Policy, deliberately small:
 from __future__ import annotations
 
 import os
+import json
 import time
 
 from . import config, db, ledger
@@ -115,11 +116,58 @@ def spent(now: float | None = None) -> float:
     return ledger.spent(rows, CURRENCY, unrecorded_is=CURRENCY)
 
 
+def model_family(model: str = "", route: str = "", usage_json=None, agent: str = "") -> str:
+    """Classify recorded model first, then the first attempt, then route/agent."""
+    if not model and usage_json:
+        try:
+            usage = json.loads(usage_json) if isinstance(usage_json, str) else usage_json
+            attempts = usage.get("attempts") or []
+            model = attempts[0].get("model") or "" if attempts else ""
+        except (ValueError, TypeError, AttributeError, IndexError):
+            model = ""
+    name = model.lower()
+    if name:
+        if any(x in name for x in ("claude", "opus", "sonnet", "haiku")):
+            return "claude"
+        if name.startswith("gpt") or any(x in name for x in ("gpt-", "o1", "o3", "o4", "o5", "codex")):
+            return "gpt"
+        return "other"
+    name = (route or agent).lower()
+    if any(x in name for x in ("opus", "claude", "sonnet")):
+        return "claude"
+    if any(x in name for x in ("sol", "codex", "terra")):
+        return "gpt"
+    return "other"
+
+
+def family_limits() -> dict[str, float]:
+    """Configured CNY soft ceilings; absent and zero values disable a family."""
+    raw = config.load_config().get(DEFAULT_KEY) or {}
+    raw = raw.get("soft_families", {}) if isinstance(raw, dict) else {}
+    result = {}
+    for family in ("claude", "gpt", "other"):
+        try:
+            result[family] = max(0.0, float(raw.get(family) or 0)) if isinstance(raw, dict) else 0.0
+        except (TypeError, ValueError):
+            result[family] = 0.0
+    return result
+
+
+def spent_by_family(now: float | None = None) -> dict[str, float]:
+    totals = dict.fromkeys(("claude", "gpt", "other"), 0.0)
+    for row in db.runs_in_window(day_start(now)):
+        family = model_family(row.get("model") or "", row.get("route") or "",
+                              row.get("usage_json"), row.get("agent") or "")
+        totals[family] += ledger.spent([row], CURRENCY, unrecorded_is=CURRENCY)
+    return totals
+
+
 def check(
     now: float | None = None,
     route: str = "",
     model: str = "",
     allow_expensive: bool = False,
+    agent: str = "",
 ) -> dict:
     """Can another run start right now, and what do the numbers look like?"""
     cap = limit()
@@ -130,6 +178,10 @@ def check(
     model_expensive = model_is_expensive(model)
     expensive = route_expensive or model_expensive
     match = "model" if model_expensive else ("route" if route_expensive else "")
+    family = model_family(model, route, agent=agent)
+    family_limit = family_limits()[family]
+    family_spent = spent_by_family(now)[family]
+    family_gated = bool(family_limit) and family_spent >= family_limit and not allow_expensive
     gated = expensive and bool(soft) and used >= soft and not allow_expensive
     return {
         "limit": cap,
@@ -138,7 +190,12 @@ def check(
         "over": over,
         "remaining": round(max(0.0, cap - used), 6) if cap else None,
         "expensive": expensive,
-        "gated": gated,
+        "gated": gated or family_gated,
+        "family": family,
+        "family_limit": family_limit,
+        "family_spent": round(family_spent, 6),
+        "family_gated": family_gated,
+        "agent": agent,
         "match": match,
         "route": route,
         "model": model,
@@ -149,6 +206,10 @@ def blocked_message(info: dict) -> str:
     """Why the run was refused, in the terms the operator set."""
     if info.get("over"):
         return refuse_message(info)
+    if info.get("family_gated"):
+        return (f"{info['family']} family spend reached its soft limit "
+                f"({info['family_spent']:.2f} / {info['family_limit']:.2f} {CURRENCY}); "
+                "pass --allow-expensive for a deliberate one-off")
     if info.get("match") == "model":
         subject = info.get("model") or "this model"
     else:

@@ -21,13 +21,14 @@ def _toml_string(value):
 
 def add_install(parser):
     sub = parser.add_subparsers(dest="mcp_command")
-    p = sub.add_parser("install", help="configure Codex / Claude / DSH MCP")
-    p.add_argument("--host", action="append", help="codex|claude|dsh; repeat or comma-separate (default: all)")
+    p = sub.add_parser("install", help="configure Codex / Claude / DSH / opencode MCP")
+    p.add_argument("--host", action="append", help="codex|claude|dsh|opencode; repeat or comma-separate (default: all)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--uninstall", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--dsh-home")
+    p.add_argument("--opencode-config", help="override opencode config file path")
     p.set_defaults(func=install, needs_daemon=False)
 
 
@@ -82,18 +83,22 @@ def _merge(host, text, uninstall):
             obj["mcp_servers"] = tables
         if before_other != after_other:
             raise ValueError("cannot safely preserve unrelated TOML settings")
-    elif host == "claude":
+    elif host in ("claude", "opencode"):
         data = json.loads(text) if text.strip() else {}
-        if not isinstance(data, dict) or not isinstance(data.get('mcpServers', {}), dict):
-            raise ValueError("mcpServers must be an object")
-        current = data.get('mcpServers', {}).get('sodus')
-        expected = dict(expected, type="stdio")
+        key = 'mcp' if host == 'opencode' else 'mcpServers'
+        if not isinstance(data, dict) or not isinstance(data.get(key, {}), dict):
+            raise ValueError(f"{key} must be an object")
+        current = data.get(key, {}).get('sodus')
+        if current is not None and not isinstance(current, dict):
+            raise ValueError("sodus must be an object")
+        expected = ({"type": "local", "command": [COMMAND, *ARGS], "enabled": True}
+                    if host == 'opencode' else dict(expected, type="stdio"))
         if uninstall:
-            data.get('mcpServers', {}).pop('sodus', None)
+            data.get(key, {}).pop('sodus', None)
         else:
             merged = dict(current or {})
             merged.update(expected)
-            data.setdefault('mcpServers', {})['sodus'] = merged
+            data.setdefault(key, {})['sodus'] = merged
             expected = merged
         updated = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
     else:
@@ -137,9 +142,9 @@ def _merge(host, text, uninstall):
 
 
 def install(args):
-    hosts = list(dict.fromkeys(h.strip() for item in (args.host or ['codex,claude,dsh']) for h in item.split(',')))
-    if any(h not in ('codex', 'claude', 'dsh') for h in hosts):
-        raise ValueError("--host must be codex|claude|dsh")
+    hosts = list(dict.fromkeys(h.strip() for item in (args.host or ['codex,claude,dsh,opencode']) for h in item.split(',')))
+    if any(h not in ('codex', 'claude', 'dsh', 'opencode') for h in hosts):
+        raise ValueError("--host must be codex|claude|dsh|opencode")
     failed = False
     for host in hosts:
         dsh_home = args.dsh_home or os.environ.get('DSH_HOME')
@@ -147,6 +152,8 @@ def install(args):
             print('dsh: missing — 跳过 DSH：未设置 DSH_HOME / --dsh-home')
             continue
         path = {'codex': Path.home() / '.codex/config.toml', 'claude': Path.home() / '.claude.json',
+                'opencode': Path(args.opencode_config or os.environ.get('OPENCODE_CONFIG') or
+                    str(Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'opencode/opencode.json')),
                 'dsh': Path(dsh_home or '.') / 'cordis.patch.yml'}[host]
         try:
             text = path.read_text(encoding='utf-8') if path.exists() else ''

@@ -9,6 +9,8 @@ from nodus.cli.commands import mcp
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
+    monkeypatch.delenv('OPENCODE_CONFIG', raising=False)
     monkeypatch.setenv('DSH_HOME', str(tmp_path / 'dsh'))
     return tmp_path
 
@@ -17,7 +19,7 @@ def run(host, *flags):
     return main(['mcp', 'install', '--host', host, *flags])
 
 
-@pytest.mark.parametrize('host,relative', [('codex','.codex/config.toml'), ('claude','.claude.json'), ('dsh','dsh/cordis.patch.yml')])
+@pytest.mark.parametrize('host,relative', [('opencode','.config/opencode/opencode.json'), ('codex','.codex/config.toml'), ('claude','.claude.json'), ('dsh','dsh/cordis.patch.yml')])
 def test_lifecycle(home, host, relative, capsys):
     path = home / relative
     assert run(host, '--check') == 1
@@ -58,7 +60,7 @@ def test_preserve_other_entries_and_backup(home, host, text):
         assert path.read_text(encoding='utf-8').startswith('# keep\n')
 
 
-@pytest.mark.parametrize('host,relative,bad', [('codex','.codex/config.toml','[bad'), ('claude','.claude.json','{"oops"'), ('dsh','dsh/cordis.patch.yml','insert: [')])
+@pytest.mark.parametrize('host,relative,bad', [('opencode','.config/opencode/opencode.json','{bad'), ('codex','.codex/config.toml','[bad'), ('claude','.claude.json','{"oops"'), ('dsh','dsh/cordis.patch.yml','insert: [')])
 def test_bad_files_not_overwritten(home, host, relative, bad):
     path = home / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +74,7 @@ def test_drift_multiple_hosts_and_missing_dsh(home, monkeypatch, capsys):
     (home / '.claude.json').write_text('{"mcpServers":{"sodus":{"command":"old"}}}', encoding='utf-8')
     assert run('claude', '--check') == 1
     assert 'drift' in capsys.readouterr().out
-    assert main(['mcp', 'install', '--host', 'codex,claude', '--host', 'dsh']) == 0
+    assert main(['mcp', 'install', '--host', 'codex,claude,opencode', '--host', 'dsh']) == 0
     assert main(['mcp', 'install', '--check']) == 0
     monkeypatch.delenv('DSH_HOME')
     assert run('dsh', '--check') == 0
@@ -128,3 +130,34 @@ def test_atomic_replace_failure_preserves_original(home, monkeypatch):
     assert run('claude') == 1
     assert path.read_bytes() == original
     assert list(path.parent.glob(path.name + '.*.tmp')) == []
+
+
+def test_opencode_merge_paths_and_secrets(home, monkeypatch, capsys):
+    path = home / 'xdg/opencode/opencode.json'
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(home / 'xdg'))
+    path.parent.mkdir(parents=True)
+    original = {'provider': {'apiKey': 'secret-do-not-print'}, 'mcp': {'other': {'type': 'remote'}}}
+    path.write_text(json.dumps(original), encoding='utf-8')
+    assert run('opencode') == 0
+    data = json.loads(path.read_text(encoding='utf-8'))
+    assert data['provider'] == original['provider']
+    assert data['mcp']['other'] == original['mcp']['other']
+    assert data['mcp']['sodus'] == {'type': 'local', 'command': [mcp.COMMAND, *mcp.ARGS], 'enabled': True}
+    assert 'secret-do-not-print' not in capsys.readouterr().out
+    assert run('opencode', '--uninstall') == 0
+    assert json.loads(path.read_text(encoding='utf-8')) == original
+    alternate = home / 'alternate.json'
+    monkeypatch.setenv('OPENCODE_CONFIG', str(alternate))
+    assert run('opencode') == 0 and alternate.exists()
+    override = home / 'override.json'
+    assert run('opencode', '--opencode-config', str(override)) == 0 and override.exists()
+
+
+def test_opencode_atomic_failure(home, monkeypatch):
+    path = home / '.config/opencode/opencode.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(mcp.os, 'replace', lambda *a: (_ for _ in ()).throw(OSError('replace failed')))
+    assert run('opencode') == 1
+    assert path.read_text(encoding='utf-8') == '{}'
+    assert not list(path.parent.glob('*.tmp'))

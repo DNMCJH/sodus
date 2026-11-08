@@ -128,3 +128,30 @@ def test_http_auth_errors_and_p95(home, mcp_http, capsys):
     with capsys.disabled():
         print(f"/state HTTP p95={p95:.3f}ms (20 serial requests, warm-up excluded)")
     assert p95 < 200
+
+
+
+def test_four_hosts_concurrent_state_and_task_creation(home, mcp_http):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    token = config.token()
+    barrier = Barrier(4)
+
+    def client(index):
+        barrier.wait(timeout=10)
+        snapshot = request(mcp_http, token=token)
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{mcp_http.server_port}/tasks',
+            data=json.dumps({'goal': f'host-{index}', 'acceptance': 'created'}).encode(),
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            method='POST')
+        with urllib.request.urlopen(req, timeout=15) as response:
+            assert response.status == 201
+            task = json.load(response)
+        assert request(mcp_http, token=token)['workspace_id'] == snapshot['workspace_id']
+        return task['id']
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        ids = list(pool.map(client, range(4)))
+    assert len(set(ids)) == 4
+    assert all(db.get_task(task_id) for task_id in ids)

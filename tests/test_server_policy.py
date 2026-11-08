@@ -34,7 +34,8 @@ def test_body_cap():
     assert server.body_allowed(-1) is False
 
 
-def test_non_loopback_bind_is_refused(monkeypatch):
+def test_non_loopback_bind_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
     monkeypatch.delenv("NODUS_ALLOW_REMOTE", raising=False)
     with pytest.raises(SystemExit):
         server.serve(port=1, host="0.0.0.0")

@@ -261,7 +261,7 @@ class Runner:
             if not route_name:
                 route_name = config.dream_route()
         spend = budget.check(route=route_name, model=model, allow_expensive=allow_expensive)
-        if spend["over"] or spend["gated"]:
+        if spend["over"] or (spend["gated"] and not spend["family_gated"]):
             raise RuntimeError(budget.blocked_message(spend))
         profiles.ensure_ready()
         if verify_run is None:
@@ -297,10 +297,11 @@ class Runner:
         # expensive run from eating a day that was already half spent. It is
         # checked after the route is known (auto resolves above) and before any
         # run row exists, so a refusal leaves nothing behind.
+        prof = profiles.read(profile_name0)
         gated = budget.check(
-            route=route.name, model=route.model or model, allow_expensive=allow_expensive
+            route=route.name, model=model or route.model or prof.model or "", agent=route.agent, allow_expensive=allow_expensive
         )
-        if gated["gated"]:
+        if gated["over"] or gated["gated"]:
             raise RuntimeError(budget.blocked_message(gated))
         gap = routes.problems(route)
         if gap:
