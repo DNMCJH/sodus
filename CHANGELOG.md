@@ -1,6 +1,12 @@
 # 更新日志
 
-## 0.7.1（2026-11-09）
+## 0.7.2（2026-11-09）
+
+- 预算改为按模型族软上限：Claude/opus 系 ¥100、GPT 系 ¥80、其它合并 ¥80（CNY，0/缺省=off）。只有软门禁，`--allow-expensive` 可豁免；没有日硬上限，relay 余额仍是真正硬约束。按已记账成本检查，不预留未来/在途成本。
+- `sodus mcp install --host opencode`：写 `~/.config/opencode/opencode.json` 的 `mcp.sodus`（local stdio），保留 provider 等其它字段，原子写 + 备份，支持 `--check`/`--uninstall`；四宿主（Claude Code/Codex/opencode/DSH）入口齐。
+- 四终端并发：文档说明多 MCP 客户端共用单 daemon、不同 cwd 并行、同一 cwd 写锁串行、SQLite 单写者；新增 in-process ThreadingHTTPServer 四线程并发测试。
+- 实机启用：`~/.nodus/config.json` 写 `budget.soft_families`；opencode MCP 条目由 `sodus mcp install --host opencode` 写入。
+
 
 正式启用前的稳定性/安全版，汇总 0.7.0 发布前复查的两份 review：
 

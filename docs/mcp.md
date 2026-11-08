@@ -38,7 +38,7 @@ python -m nodus mcp        # 或装好之后：nodus mcp
 ## 一条命令安装宿主配置
 
 ```powershell
-sodus mcp install --host codex,claude,dsh
+sodus mcp install --host codex,claude,dsh,opencode
 sodus mcp install --check
 sodus mcp install --uninstall --host claude
 ```
@@ -133,3 +133,31 @@ Memory review (0.6) uses the dashboard or HTTP `GET /memory/candidates` and
 `POST /memory/candidates/{id}` with `{action, version, text?}`. Actions are
 `adopt`, `reject`, `edit`, `retire`; stale versions return 409. There is no new MCP
 review tool. Historical memory rollback is local CLI: `sodus memory rollback --to V`.
+
+
+## opencode 与多终端并发
+
+`sodus mcp install --host opencode` 合并写入 `~/.config/opencode/opencode.json` 的 `mcp.sodus`：
+`{"type":"local","command":["<当前 Python 绝对路径>","-m","sodus","mcp"],"enabled":true}`。
+路径优先级为 `--opencode-config` > `OPENCODE_CONFIG` > `XDG_CONFIG_HOME/opencode/opencode.json` > 默认路径。
+保留 provider 与其它 MCP 条目；配置损坏时拒绝写入，修改前备份并原子替换。默认安装/检查包含 opencode；支持 `--check`、`--uninstall` 和 `--dry-run`，不输出 provider 密钥。
+
+Claude Code、Codex、opencode、DSH 四端各自启动的 MCP bridge 都只是 HTTP 客户端，连接同一配置 home 下的单实例、多线程 daemon。
+不同 cwd 的 run 可并行，同一 cwd 的写锁将写任务串行；SQLite WAL 支持并发读取，但数据库仍是单写者。
+每个新 run 启动时检查当日模型族软上限；正在执行的 run 不会被终止。
+这是已记账花费的软门禁，并非成本预留：并发启动或尚未回写的成本可能超过上限，relay 余额才是真正硬约束。
+
+## 模型族软预算
+
+在配置中显式设置（金额为 CNY）：
+
+```json
+{"budget":{"soft_families":{"claude":100,"gpt":80,"other":80}}}
+```
+
+每族缺省或 `0` 表示关闭；不自动开启日硬上限。模型优先取 run.model，再取 usage_json.attempts[0].model；
+claude/opus/sonnet/haiku 归 Claude，gpt 前缀或包含 gpt-/o1/o3/o4/o5/codex 归 GPT，其它归 other。
+无模型时按 route（缺失时 agent）兜底：opus/claude/sonnet 归 Claude，sol/codex/terra 归 GPT。
+今日按本地午夜统计，仅计 CNY；无币种成本沿用旧预算规则视为 CNY，无成本不估算，USD 不折算。
+某族达到上限后拒绝该族新 run，`--allow-expensive` 可一次性豁免族软门禁和旧 expensive 门禁。
+旧 `budget.daily_cny` / `budget.soft_cny` 仍兼容；显式日硬上限不能用该参数豁免。

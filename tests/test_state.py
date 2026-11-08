@@ -45,7 +45,7 @@ def test_schema_counts_and_ledger(home, monkeypatch):
     monkeypatch.setattr(board, "board_state", lambda *a: pytest.fail("full board called"))
     got = state.snapshot(now)
     assert set(got) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
-    assert got["version"] == "0.7.1"
+    assert got["version"] == "0.7.2"
     assert len(got["running"]) == 3
     assert set(got["running"][0]) == {"id", "task_id", "agent", "route", "started_at", "cwd"}
     assert got["counts"] == {"running": 1, "queued": 1, "needs_you": 0, "unverifiable": 1,
@@ -122,9 +122,36 @@ def test_http_auth_errors_and_p95(home, mcp_http, capsys):
     elapsed = []
     for _ in range(20):
         start = time.perf_counter()
-        assert request(mcp_http, token=token)["version"] == "0.7.1"
+        assert request(mcp_http, token=token)["version"] == "0.7.2"
         elapsed.append((time.perf_counter()-start)*1000)
     p95 = sorted(elapsed)[math.ceil(len(elapsed)*.95)-1]
     with capsys.disabled():
         print(f"/state HTTP p95={p95:.3f}ms (20 serial requests, warm-up excluded)")
     assert p95 < 200
+
+
+
+def test_four_hosts_concurrent_state_and_task_creation(home, mcp_http):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    token = config.token()
+    barrier = Barrier(4)
+
+    def client(index):
+        barrier.wait(timeout=10)
+        snapshot = request(mcp_http, token=token)
+        req = urllib.request.Request(
+            f'http://127.0.0.1:{mcp_http.server_port}/tasks',
+            data=json.dumps({'goal': f'host-{index}', 'acceptance': 'created'}).encode(),
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            method='POST')
+        with urllib.request.urlopen(req, timeout=15) as response:
+            assert response.status == 201
+            task = json.load(response)
+        assert request(mcp_http, token=token)['workspace_id'] == snapshot['workspace_id']
+        return task['id']
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        ids = list(pool.map(client, range(4)))
+    assert len(set(ids)) == 4
+    assert all(db.get_task(task_id) for task_id in ids)

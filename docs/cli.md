@@ -76,7 +76,7 @@ L3 change for the daemon; it never allows a model to approve its own facts.
 
 ### mcp install
 
-`sodus mcp install --host codex|claude|dsh` 配置 MCP 宿主；可逗号分隔或重复 `--host`。`--check` 检查状态，`--uninstall` 删除 Sodus 条目，`--dry-run` 预览。
+`sodus mcp install --host codex|claude|dsh|opencode` 配置 MCP 宿主；可逗号分隔或重复 `--host`。`--check` 检查状态，`--uninstall` 删除 Sodus 条目，`--dry-run` 预览。
 
 ### Plan generation and approval (0.7.0-c2a)
 
@@ -92,3 +92,5 @@ Validate, import, show and list run locally; import writes directly to local SQL
 as a transitional behavior.
 The default planner route is `opus`, configurable as `routing.planner` in config.json.
 Planning/review request read-only behavior but do not enforce a filesystem sandbox.
+
+`mcp install` 默认包含 opencode；`--opencode-config PATH` 覆盖其配置路径，也支持 `OPENCODE_CONFIG` / `XDG_CONFIG_HOME`。详见 [MCP 文档](mcp.md)。
