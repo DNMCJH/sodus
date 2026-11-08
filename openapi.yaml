@@ -47,6 +47,68 @@ tags:
   - name: memory
   - name: events
 paths:
+  /cost/today:
+    get:
+      operationId: costToday
+      summary: Local-day costs grouped by agent
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/remember:
+    post:
+      operationId: memoryRemember
+      summary: Remember a verified project fact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: {type: string}
+                source: {type: string, default: agent}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/harvest:
+    get:
+      operationId: memoryHarvest
+      summary: Read harness memory candidates
+      parameters:
+        - {in: query, name: project, schema: {type: string}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+        - {in: query, name: conflicts_only, schema: {type: boolean, default: false}}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/candidates:
+    get:
+      operationId: memoryCandidates
+      summary: Read staged database candidates
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: array, items: {type: object}}
+        '400':
+          description: Invalid arguments
   /:
     get:
       tags: [public]
@@ -1502,6 +1564,9 @@ components:
         output_tokens、cache_read、cost、currency、cost_basis。
       required: [id, workspace_id, agent, status, cwd]
       properties:
+        mcp:
+          type: object
+          description: Compatibility status payload for MCP clients (GET run detail).
         id:
           type: string
         workspace_id:

@@ -6,11 +6,7 @@ the spec says messages "are delimited by newlines, and MUST NOT contain
 embedded newlines". Anything written to stdout that is not a protocol message
 breaks the client, so stray prints are redirected to stderr while serving.
 
-Legacy tools own a SQLite connection and spawn runs in this process, so
-`nodus up` is not required for them. That also means a run started here lives only as
-long as this process: the daemon's startup reconciliation would treat it as an
-orphan. Legacy tools call `db` / `runner` directly; ask tools use the daemon
-HTTP contract and require it to be running.
+All tools forward to the daemon HTTP API; the daemon owns runs and storage.
 """
 
 from __future__ import annotations
@@ -22,7 +18,10 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, db, ledger, memory, runner
+from . import config
+from .cli import client
+import time
+from urllib.parse import quote, urlencode
 
 PROTOCOL_VERSION = "2024-11-05"
 SUPPORTED_VERSIONS = (PROTOCOL_VERSION,)
@@ -244,21 +243,8 @@ def _task_create(args: dict) -> dict:
     description = _string(args, "description")
     acceptance = _string(args, "acceptance", required=False, default="")
     _no_extra(args)
-    task = db.create_task(
-        goal=description,
-        acceptance=acceptance,
-        title=title,
-    )
-    if not task:
-        raise ToolError("任务写入后读不回来")
-    return {
-        "task_id": task["id"],
-        "title": task.get("title") or "",
-        "description": task.get("goal") or description,
-        "acceptance": task.get("acceptance") or "",
-        "status": task.get("status") or "open",
-        "created_at": task.get("created_at"),
-    }
+    task = _http("POST", "/tasks", {"goal": description, "acceptance": acceptance, "title": title})
+    return {"task_id": task["id"], "description": task.get("goal", description), **task}
 
 
 def _run(args: dict) -> dict:
@@ -272,18 +258,14 @@ def _run(args: dict) -> dict:
     if not cwd.is_dir():
         raise ToolError(f"cwd 不是已存在的目录：{cwd}")
 
-    run = runner.RUNNER.start(
-        task_id=task_id,
-        route_name=route,
-        cwd=str(cwd.resolve()),
-    )
-    if wait:
-        run = runner.RUNNER.wait(run["id"], timeout=max(1, int(WAIT_TIMEOUT)))
+    run = _http("POST", "/runs", {"task_id": task_id, "route": route, "cwd": str(cwd.resolve())})
+    deadline = time.monotonic() + max(0, WAIT_TIMEOUT)
     payload = _status_payload(run["id"])
+    while wait and payload["status"] in ("queued", "running") and time.monotonic() < deadline:
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+        payload = _status_payload(run["id"])
     payload["waited"] = wait
     if wait:
-        # A timed-out wait is not a failure, but the caller must not read
-        # "returned after wait=true" as "the run is finished".
         payload["wait_timed_out"] = payload["status"] in ("queued", "running")
     return payload
 
@@ -294,132 +276,50 @@ def _run_status(args: dict) -> dict:
     return _status_payload(run_id)
 
 
+def _http(method, path, body=None, **kwargs):
+    try:
+        if body is None:
+            return client.call(method, path, **kwargs)
+        return client.call(method, path, body, **kwargs)
+    except (RuntimeError, OSError) as exc:
+        if "unreachable" in str(exc) or isinstance(exc, OSError):
+            raise ToolError(f"daemon 不可用，请先运行 sodus up：{exc}") from None
+        raise
+
+
 def _status_payload(run_id: str) -> dict:
-    run = db.get_run(run_id)
+    run = _http("GET", "/runs/" + quote(run_id, safe=""))
     if not run:
         raise ToolError(f"没有这个 run：{run_id}")
-
-    usage = ledger.parse(run.get("usage_json"))
-    verify = db.verify_states([run_id]).get(run_id, "none")
-    handoff = config.HOME / "runs" / run_id / "handoff.md"
-    started = run.get("started_at")
-    ended = run.get("ended_at")
-    return {
-        "run_id": run["id"],
-        "task_id": run.get("task_id") or "",
-        "status": run.get("status") or "",
-        "agent": run.get("agent") or "",
-        "route": run.get("route") or run.get("agent") or "",
-        "provider": run.get("provider") or "",
-        "cwd": run.get("cwd") or "",
-        "started_at": started,
-        "ended_at": ended,
-        "duration_s": round(ended - started, 3) if started and ended else None,
-        "error": run.get("error") or "",
-        # Same shape as always: counts are zero when unrecorded (a caller
-        # adding them up wants a number), money is None when unpriced, and an
-        # unrecorded currency stays "" rather than becoming the ledger's "-".
-        "usage": {
-            "input_tokens": int(usage.tokens.input or 0),
-            "output_tokens": int(usage.tokens.output or 0),
-            "cache_read": int(usage.tokens.cache_read or 0),
-            "cache_write": int(usage.tokens.cache_write or 0),
-            "cost": usage.cost.amount,
-            "currency": usage.cost.currency or "",
-            "cost_basis": usage.cost.basis or "",
-        },
-        "verify": {
-            "state": verify,
-            "meaning": runner.VERIFY_TEXT.get(verify, verify),
-        },
-        "handoff": str(handoff) if handoff.exists() else "",
-    }
+    return run.get("mcp", run)
 
 
 def _proposals(args: dict) -> dict:
     _no_extra(args)
-    rows = db.list_proposals("open")
-    out = []
-    for row in rows:
-        out.append(
-            {
-                "proposal_id": row.get("id") or "",
-                "run_id": row.get("run_id") or "",
-                "task_id": row.get("task_id") or "",
-                "branch": row.get("branch") or "",
-                "stat": row.get("stat") or "",
-                "patch": row.get("patch_path") or "",
-                "files": [
-                    {
-                        "path": item.get("path") or "",
-                        "added": item.get("added", 0),
-                        "removed": item.get("removed", 0),
-                    }
-                    for item in (row.get("files") or [])
-                ],
-                "created_at": row.get("created_at"),
-            }
-        )
-    return {"count": len(out), "proposals": out}
+    rows = _http("GET", "/proposals")
+    return {"count": len(rows), "proposals": [dict(row, proposal_id=row["id"], patch=row.get("patch_path", "")) for row in rows]}
 
 
 def _cost_today(args: dict) -> dict:
     _no_extra(args)
-    # The board already answers "today, per agent" (server._today): reusing it
-    # keeps the MCP number identical to the one on the first screen instead of
-    # growing a second definition of "today" that drifts at midnight.
-    from . import server
-
-    board = server.board_state()
-    today = board["today"]
-    return {
-        "day": board["day"],
-        "runs": today["runs"],
-        "priced": today["priced"],
-        "unpriced": today["unpriced"],
-        "totals": today["totals"],
-        "by_agent": today["by_agent"],
-        "basis": today["basis"],
-    }
+    return _http("GET", "/cost/today")
 
 
 def _memory_remember(args: dict) -> dict:
     text = _string(args, "text")
     source = _string(args, "source", required=False, default="agent") or "agent"
     _no_extra(args)
-    try:
-        return memory.remember(text, source=source)
-    except (ValueError, OSError) as exc:
-        raise ToolError(str(exc)) from None
+    return _http("POST", "/memory/remember", {"text": text, "source": source})
 
 
 def _memory_candidates(args: dict) -> dict:
     project = _string(args, "project", required=False)
     limit = _integer(args, "limit", default=50)
-    conflicts_only = _boolean(args, "conflicts_only", default=False)
+    conflicts_only = _boolean(args, "conflicts_only")
     _no_extra(args)
-    try:
-        rows = memory.harvest(project or None)
-    except OSError as exc:
-        raise ToolError(str(exc)) from None
-    if conflicts_only:
-        rows = [row for row in rows if row["conflict"]]
-    rows = rows[: max(0, limit)]
-    return {
-        "count": len(rows),
-        "project": memory.project_root(project or None),
-        "candidates": [
-            {
-                "id": row["id"],
-                "text": row["text"],
-                "sources": row["sources"],
-                "conflict": row["conflict"],
-                "adopted": row["adopted"],
-            }
-            for row in rows
-        ],
-        "adopt_hint": "采纳由人做：看看板「记忆待审」或 nodus debug memory adopt <id>",
-    }
+    if not 1 <= limit <= 500:
+        raise ToolError("limit 必须在 1 到 500 之间")
+    return _http("GET", "/memory/harvest?" + urlencode(dict(project=project, limit=limit, conflicts_only=str(conflicts_only).lower())))
 
 
 def _ask(args: dict) -> dict:
@@ -430,7 +330,7 @@ def _ask(args: dict) -> dict:
             body[key] = _string(args, key, required=False)
     _no_extra(args)
     body["origin"] = "mcp"
-    return client.call("POST", "/ask", body,
+    return _http("POST", "/ask", body,
                        headers={"X-Sodus-Depth": os.environ.get("NODUS_DEPTH", "0")})
 
 
@@ -439,7 +339,7 @@ def _ask_status(args: dict) -> dict:
     from .cli import client
     aid = _string(args, "id")
     _no_extra(args)
-    return client.call("GET", "/ask/" + quote(aid, safe=""))
+    return _http("GET", "/ask/" + quote(aid, safe=""))
 
 
 def _deny_worker() -> None:

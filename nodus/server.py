@@ -2131,6 +2131,48 @@ def _sse(handler: BaseHTTPRequestHandler, run_id: str | None, after: int) -> Non
         runner.BUS.unsubscribe(q)
 
 
+def mcp_status_payload(run_id: str) -> dict:
+    run = db.get_run(run_id)
+    if not run:
+        raise ValueError(f"没有这个 run：{run_id}")
+
+    usage = ledger.parse(run.get("usage_json"))
+    verify = db.verify_states([run_id]).get(run_id, "none")
+    handoff = config.HOME / "runs" / run_id / "handoff.md"
+    started = run.get("started_at")
+    ended = run.get("ended_at")
+    return {
+        "run_id": run["id"],
+        "task_id": run.get("task_id") or "",
+        "status": run.get("status") or "",
+        "agent": run.get("agent") or "",
+        "route": run.get("route") or run.get("agent") or "",
+        "provider": run.get("provider") or "",
+        "cwd": run.get("cwd") or "",
+        "started_at": started,
+        "ended_at": ended,
+        "duration_s": round(ended - started, 3) if started and ended else None,
+        "error": run.get("error") or "",
+        # Same shape as always: counts are zero when unrecorded (a caller
+        # adding them up wants a number), money is None when unpriced, and an
+        # unrecorded currency stays "" rather than becoming the ledger's "-".
+        "usage": {
+            "input_tokens": int(usage.tokens.input or 0),
+            "output_tokens": int(usage.tokens.output or 0),
+            "cache_read": int(usage.tokens.cache_read or 0),
+            "cache_write": int(usage.tokens.cache_write or 0),
+            "cost": usage.cost.amount,
+            "currency": usage.cost.currency or "",
+            "cost_basis": usage.cost.basis or "",
+        },
+        "verify": {
+            "state": verify,
+            "meaning": runner.VERIFY_TEXT.get(verify, verify),
+        },
+        "handoff": str(handoff) if handoff.exists() else "",
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -2342,6 +2384,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/board":
             return _json(self, 200, board_state())
 
+        if path == "/cost/today":
+            start, day = _day_start(time.time())
+            with db.connect() as conn:
+                today = _today(conn, start)
+            return _json(self, 200, {"day": day, **today})
+
+        if path == "/memory/harvest":
+            project = (qs.get("project") or [None])[0]
+            try:
+                limit = int((qs.get("limit") or ["50"])[0])
+                if not 1 <= limit <= 500:
+                    raise ValueError("limit must be between 1 and 500")
+                rows = memory.harvest(project)
+                if (qs.get("conflicts_only") or ["false"])[0] == "true":
+                    rows = [r for r in rows if r["conflict"]]
+                rows = rows[:limit]
+                return _json(self, 200, {"count": len(rows), "project": str(memory.project_root(project)), "candidates": rows,
+                    "adopt_hint": "采纳由人做：看看板或 sodus debug memory adopt <id>"})
+            except (ValueError, OSError) as exc:
+                return _json(self, 400, {"error": str(exc)})
+
         if path == "/memory/candidates":
             workspace = (qs.get("workspace") or [config.workspace_id()])[0]
             status = (qs.get("status") or [""])[0]
@@ -2376,6 +2439,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3:
                 _fresh_cache()
                 run = db.get_run(rid)
+                if not run:
+                    return _json(self, 404, {"error": f"run not found: {rid}"})
+                run["mcp"] = mcp_status_payload(rid)
                 if run.get("status") == "failed":
                     # The log view and the board must agree on why something
                     # failed; the wording lives in recover.py, not in the page.
@@ -2496,6 +2562,15 @@ class Handler(BaseHTTPRequestHandler):
                 cwd=str(body.get("cwd") or ""),
             )
             return _json(self, status, payload)
+
+        if path == "/memory/remember":
+            try:
+                text, source = body.get("text"), body.get("source", "agent")
+                if not isinstance(text, str) or not isinstance(source, str):
+                    raise ValueError("text and source must be strings")
+                return _json(self, 200, memory.remember(text, source=source))
+            except (ValueError, OSError) as exc:
+                return _json(self, 400, {"error": str(exc)})
 
         if path == "/memory/adopt":
             ids = body.get("ids")

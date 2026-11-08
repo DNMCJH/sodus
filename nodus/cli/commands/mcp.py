@@ -1,0 +1,145 @@
+"""Idempotent host configuration for the stdio HTTP bridge."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import tomllib
+from datetime import datetime
+
+COMMAND = r"A:\Anaconda\python.exe"
+ARGS = ["-m", "sodus", "mcp"]
+
+
+def add_install(parser):
+    sub = parser.add_subparsers(dest="mcp_command")
+    p = sub.add_parser("install", help="configure Codex / Claude / DSH MCP")
+    p.add_argument("--host", action="append", help="codex|claude|dsh; repeat or comma-separate (default: all)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true")
+    mode.add_argument("--uninstall", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--dsh-home")
+    p.set_defaults(func=install, needs_daemon=False)
+
+
+def _yaml():
+    try:
+        import yaml
+        return yaml
+    except ImportError:
+        raise ValueError("DSH 配置需要 PyYAML；请安装 PyYAML") from None
+
+
+def _merge(host, text, uninstall):
+    expected = {"command": COMMAND, "args": ARGS}
+    if host == "codex":
+        data = tomllib.loads(text)
+        servers = data.get("mcp_servers", {})
+        if not isinstance(servers, dict):
+            raise ValueError("mcp_servers must be a table")
+        current = servers.get("sodus")
+        # Preserve every byte outside our table, including comments and order.
+        headers = list(re.finditer(r'(?m)^[ \t]*(\[\[?[^\n]+\]\]?)[ \t]*(?:#.*)?$', text))
+        spans = []
+        for i, match in enumerate(headers):
+            name = match.group(1).strip()
+            # tomllib handles quoted table keys without guessing their spelling.
+            parsed = tomllib.loads(name)
+            if isinstance(parsed.get('mcp_servers'), dict) and 'sodus' in parsed['mcp_servers']:
+                spans.append((match.start(), headers[i+1].start() if i+1 < len(headers) else len(text)))
+        if current is not None and not spans:
+            raise ValueError("sodus uses an inline/dotted TOML table; refusing unsafe edit")
+        updated = text
+        for start, end in reversed(spans):
+            updated = updated[:start] + updated[end:]
+        if not uninstall:
+            updated = updated.rstrip() + '\n\n[mcp_servers.sodus]\ncommand = ' + json.dumps(COMMAND) + '\nargs = ["-m", "sodus", "mcp"]\n'
+        after = tomllib.loads(updated)
+        # Never let a textual table edit silently consume another host setting.
+        before_other = dict(data)
+        after_other = dict(after)
+        for obj in (before_other, after_other):
+            tables = dict(obj.get("mcp_servers", {}))
+            tables.pop("sodus", None)
+            obj["mcp_servers"] = tables
+        if before_other != after_other:
+            raise ValueError("cannot safely preserve unrelated TOML settings")
+    elif host == "claude":
+        data = json.loads(text) if text.strip() else {}
+        if not isinstance(data, dict) or not isinstance(data.get('mcpServers', {}), dict):
+            raise ValueError("mcpServers must be an object")
+        current = data.get('mcpServers', {}).get('sodus')
+        expected = dict(expected, type="stdio")
+        if uninstall:
+            data.get('mcpServers', {}).pop('sodus', None)
+        else:
+            data.setdefault('mcpServers', {})['sodus'] = expected
+        updated = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
+    else:
+        yaml = _yaml()
+        try:
+            data = yaml.safe_load(text) if text.strip() else []
+        except yaml.YAMLError as exc:
+            raise ValueError(str(exc)) from None
+        if not isinstance(data, list):
+            raise ValueError("cordis.patch.yml must contain a patch array")
+        expected = {"name": "@deepseek-ai/dsh-mcp-client", "config": dict(expected, serverName="sodus", transport="stdio", toolCallTimeoutMs=600000)}
+        matches = []
+        for patch in data:
+            if not isinstance(patch, dict):
+                raise ValueError("patch entries must be objects")
+            entries = patch.get('insert', [])
+            if not isinstance(entries, list):
+                raise ValueError("insert must be an array")
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get('name') == expected['name'] and isinstance(entry.get('config'), dict) and entry['config'].get('serverName') == 'sodus':
+                    matches.append(entry)
+        current = matches[0] if len(matches) == 1 else (None if not matches else {})
+        for patch in data:
+            if 'insert' in patch:
+                patch['insert'] = [e for e in patch['insert'] if e not in matches]
+        if not uninstall:
+            data.append({'insert': [expected]})
+        data = [p for p in data if p != {'insert': []}]
+        updated = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    state = 'missing' if current is None else ('configured' if current == expected else 'drift')
+    if (uninstall and current is None) or (not uninstall and state == 'configured'):
+        updated = text
+    return state, updated
+
+
+def install(args):
+    hosts = list(dict.fromkeys(h.strip() for item in (args.host or ['codex,claude,dsh']) for h in item.split(',')))
+    if any(h not in ('codex', 'claude', 'dsh') for h in hosts):
+        raise ValueError("--host must be codex|claude|dsh")
+    failed = False
+    for host in hosts:
+        dsh_home = args.dsh_home or os.environ.get('DSH_HOME')
+        if host == 'dsh' and not dsh_home:
+            print('dsh: missing — 跳过 DSH：未设置 DSH_HOME / --dsh-home')
+            failed = True
+            continue
+        path = {'codex': Path.home() / '.codex/config.toml', 'claude': Path.home() / '.claude.json',
+                'dsh': Path(dsh_home or '.') / 'cordis.patch.yml'}[host]
+        try:
+            text = path.read_text(encoding='utf-8') if path.exists() else ''
+            state, updated = _merge(host, text, args.uninstall)
+            print(f'{host}: {state} ({path})')
+            if args.check:
+                failed |= state != 'configured'
+            elif updated != text:
+                if args.dry_run:
+                    print(f'  dry-run: would {"uninstall" if args.uninstall else "install"} sodus')
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if path.exists():
+                        backup = path.with_name(path.name + '.bak-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+                        shutil.copy2(path, backup)
+                    path.write_text(updated, encoding='utf-8')
+        except (ValueError, OSError, TypeError) as exc:
+            print(f'{host}: drift — 配置无效，未写入：{exc}')
+            failed = True
+    return int(failed)

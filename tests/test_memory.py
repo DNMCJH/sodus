@@ -681,7 +681,7 @@ def test_mcp_exposes_the_memory_tools(env):
     assert "nodus_memory_recall" not in names
 
 
-def test_mcp_remember_writes_into_agents_md(env, monkeypatch):
+def test_mcp_remember_writes_into_agents_md(env, monkeypatch, mcp_http):
     monkeypatch.chdir(env.project)
     saved = _payload(mcp.call_tool("nodus_memory_remember", {"text": "构建用 pnpm"}))
     assert saved["added"] == 1
@@ -690,7 +690,7 @@ def test_mcp_remember_writes_into_agents_md(env, monkeypatch):
     assert again["added"] == 0
 
 
-def test_mcp_candidates_lists_sources_and_conflicts(env, monkeypatch):
+def test_mcp_candidates_lists_sources_and_conflicts(env, monkeypatch, mcp_http):
     write(env.project / "AGENTS.md", "- 构建用 pnpm\n")
     write(env.home / ".codex" / "AGENTS.md", "- 构建用 npm\n")
     monkeypatch.chdir(env.project)
