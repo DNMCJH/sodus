@@ -1,6 +1,13 @@
 # 更新日志
 
-## 0.6.0（2026-11-08）
+## 0.7.0（2026-11-09）
+
+多宿主入口、核心契约与 planner 的第一个版本：
+
+- MCP 工具全部改由 daemon HTTP 执行（不再在 MCP 进程内起 run），daemon 成为唯一 run 所有者；`sodus mcp install --host codex|claude|dsh` 幂等写配置，带 `--check` / `--uninstall` / `--dry-run` 与备份。
+- 新增只读 `GET /state`（running/counts/today/asks/memory，本地 p95 < 200ms）；`server.py` 的看板文案与渲染拆到 `nodus/board.py`，`server.py` 从 2767 行降到 725 行。
+- planner：`plan.json` v1 契约 + schema v6 + 机械 validator（base_sha、路径存在、DAG 无环、acceptance、预算）；`sodus plan validate/import/new/review/approve` 与 `POST /plan`、`GET /plans/{id}`；planner 为 `kind='plan'` 只读 run（默认 opus 路由），sol 异源评审，批准需显式 `--by human`。
+- 已知边界：plan 节点执行与预算派发留给后续版本；批准人身份靠显式声明，不做独立身份校验；plan 只读靠提示词，不提供文件系统沙箱。
 
 围绕记忆闭环和轻量提问入口的一次功能版，汇总 W0–W3：
 

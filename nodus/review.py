@@ -62,6 +62,7 @@ def _git(cwd: Path, *args: str, timeout: float = 20.0) -> tuple[int, str]:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            creationflags=config.NO_WINDOW,
         )
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except (OSError, subprocess.TimeoutExpired):

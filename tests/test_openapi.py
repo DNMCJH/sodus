@@ -78,12 +78,21 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/favicon.ico"),
         ("get", "/openapi.yaml"),
         ("get", "/board"),
+        ("get", "/state"),
+        ("get", "/cost/today"),
+        ("get", "/memory/harvest"),
+        ("get", "/memory/candidates"),
+        ("post", "/memory/remember"),
         ("get", "/agents"),
         ("get", "/providers"),
         ("get", "/routes"),
         ("get", "/profiles"),
         ("get", "/tasks"),
         ("post", "/tasks"),
+        ("post", "/plan"),
+        ("get", "/plans/{id}"),
+        ("post", "/plans/{id}/review"),
+        ("post", "/plans/{id}/approve"),
         ("post", "/ask"),
         ("get", "/asks"),
         ("get", "/ask/{id}"),
@@ -161,3 +170,21 @@ def test_openapi_yaml_is_served_without_a_token():
         httpd.server_close()
         thread.join(timeout=10)
     assert body == SPEC.read_bytes()
+
+
+def test_state_contract_is_authenticated_and_structured(spec):
+    operation = spec["paths"]["/state"]["get"]
+    assert operation.get("security", spec["security"]) == [{"bearerAuth": []}]
+    schema = spec["components"]["schemas"]["State"]
+    assert set(schema["required"]) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
+    assert schema["properties"]["running"]["maxItems"] == 20
+    for name in ("counts", "today", "asks", "memory"):
+        item = schema["properties"][name]
+        assert set(item["required"]) == set(item["properties"])
+
+
+def test_plan_contract(spec):
+    assert spec['paths']['/plan']['post']['responses'].get('202')
+    approve = spec['paths']['/plans/{id}/approve']['post']
+    assert approve['requestBody']['content']['application/json']['schema']['properties']['by']['const'] == 'human'
+    assert spec['components']['schemas']['PlanExecution']['properties']['review_json']['properties']['verdict']['enum'] == ['approve', 'revise', 'reject']

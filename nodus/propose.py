@@ -34,6 +34,7 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         encoding="utf-8",
         errors="replace",
         timeout=_TIMEOUT,
+        creationflags=config.NO_WINDOW,
     )
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()

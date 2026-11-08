@@ -13,8 +13,7 @@ embedded newlines."*（[Transports](https://modelcontextprotocol.io/specificatio
 python -m nodus mcp        # 或装好之后：nodus mcp
 ```
 
-进程只从 stdin 读协议消息、往 stdout 写协议消息；日志一律走 stderr。它自己开
-SQLite 连接、自己起 worker；旧工具不需要 daemon。新增 ask 工具转发 HTTP，需先 `sodus up`。
+进程只从 stdin 读协议消息、往 stdout 写协议消息；日志一律走 stderr。所有工具都通过 daemon HTTP 转发；请先运行 `sodus up`。daemon 是唯一的任务和存储所有者，MCP 进程退出后 run 仍可轮询。
 
 ## 工具
 
@@ -27,12 +26,26 @@ SQLite 连接、自己起 worker；旧工具不需要 daemon。新增 ask 工具
 | `nodus_run_status` | `run_id` | 状态、成本/币种/计价依据、`verify`（ok/red/none） |
 | `nodus_proposals` | 无 | 未处理的提案（分支、stat、文件） |
 | `nodus_cost_today` | 无 | 今日（本地 0 点起）按 agent 分组的成本 |
+| `nodus_memory_remember` | `text`、`source`（可选） | daemon 写入项目 AGENTS.md 的事实，重复不追加 |
+| `nodus_memory_candidates` | `project`、`limit`（1–500）、`conflicts_only`（均可选） | 只读候选事实、来源与冲突；采纳仍由人决定 |
 
 所有工具失败都返回 `isError: true` + 人类可读消息，不会让进程退出。协议层错误
 （坏 JSON、未知 method）仍然是 JSON-RPC error。
 
 `wait=true` 最多等 `NODUS_MCP_WAIT` 秒（默认 600），超时返回当前状态并带
 `wait_timed_out: true` —— 别把"等到了超时"读成"跑完了"。
+
+## 一条命令安装宿主配置
+
+```powershell
+sodus mcp install --host codex,claude,dsh
+sodus mcp install --check
+sodus mcp install --uninstall --host claude
+```
+
+安装会备份配置为 `.bak-<timestamp>`，重复执行不会产生 diff；`--dry-run` 只预览。DSH 默认读取 `DSH_HOME`，也可用 `--dsh-home` 指定；未设置时提示“跳过 DSH”。DSH YAML 编辑需要 PyYAML（`python -m pip install PyYAML`），缺少时明确报错且不写配置。
+
+默认检查全部宿主；`--check` 输出 `configured/missing/drift`，仅全齐时退出 0，否则退出 1。Codex 写 `~/.codex/config.toml` 的 `[mcp_servers.sodus]`，Claude 写 `~/.claude.json` 的 `mcpServers.sodus`，DSH 写 `$DSH_HOME/cordis.patch.yml` 的 insert 项；启动命令为绝对路径 `A:\Anaconda\python.exe`，参数为 `["-m", "sodus", "mcp"]`。请先安装本项目（`python -m pip install -e .`），再重启宿主。
 
 ## 接进 Claude Code
 
@@ -93,10 +106,7 @@ stdout 会是三行 JSON（通知没有回复）；stderr 会有 `nodus mcp: rea
 
 ## 边界
 
-- **旧工具和 daemon 二选一。** MCP 进程自己起 run；daemon 启动时的对账会把"不是自己起的"
-  在线 run 当孤儿标失败。别在 MCP 有 run 在跑时开 `nodus up`。
-- **MCP 进程退出 = 它起的 run 失去所有者。** 长任务要么用 `wait=true`，要么保持
-  客户端会话开着，之后用 `nodus_run_status` 轮询。真断了用 `nodus reconcile` 收尾。
+- 0.7 已修复旧版双所有者问题：所有工具依赖 daemon（`sodus up`），MCP 退出不会中断 daemon 拥有的 run。
 - stdio 是本地子进程协议，没有鉴权；不要把它包成网络端口暴露出去。
 - `cwd` 必须是已存在的目录，不会替你创建。
 - 工具提供查询、问答和建任务/起 run；**合入/丢弃提案仍然只在 CLI**（`nodus merge` /
@@ -116,7 +126,7 @@ HTTP 仍兜底拒绝 depth>=1；直接 HTTP 故意省略深度头的 worker 是�
 open=queued，running=running+stalled，done=answered+promoted，failed=failed。
 它调用鉴权的 `GET /asks?workspace=<workspace_id>`；省略 workspace 则用 daemon 的 workspace，
 响应只含 id/status/created_at/expires_at，按创建时间倒序，不含问题或答案。
-ask 运行归 daemon 所有，MCP 退出后仍可按 id 轮询；不要同时用旧 MCP run 工具起任务。
+ask 运行归 daemon 所有，MCP 退出后仍可按 id 轮询；所有 MCP run 工具也由同一 daemon 执行。
 
 
 Memory review (0.6) uses the dashboard or HTTP `GET /memory/candidates` and

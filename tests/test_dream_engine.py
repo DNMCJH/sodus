@@ -23,7 +23,7 @@ def test_plan_unique_and_workspace():
     assert dream.plan('other') is None
     assert dream.plan(limit=0)['id'] == batches[0]['id']
     with db.connect() as c:
-        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION) == '5'
+        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION) == '6'
 
 
 def test_extract_replay_and_gate(monkeypatch):
@@ -157,7 +157,7 @@ def test_v5_upgrade_preserves_legacy_batch():
         with db.connect() as c:
             assert c.execute("SELECT cursor FROM dream_batch WHERE id='legacy'").fetchone()[0] == '7'
             assert c.execute("SELECT value FROM meta WHERE key='memory_version'").fetchone()[0] == '0'
-            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '5'
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
         db._SCHEMA_READY.clear()
 
 

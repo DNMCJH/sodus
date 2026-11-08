@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+
 import json
 import os
 import shutil
@@ -88,6 +90,9 @@ def add(sub) -> None:
 
     p = sub.add_parser("mcp", help="MCP server over stdio (for Claude Code / DSH)")
     p.set_defaults(func=mcp_cmd, needs_daemon=False)
+    from .mcp import add_install
+    if isinstance(p, argparse.ArgumentParser):
+        add_install(p)
 
     p = sub.add_parser("up", help="start the daemon detached; survives this shell")
     p.add_argument("--port", type=int, default=daemon.DEFAULT_PORT)

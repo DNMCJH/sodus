@@ -244,8 +244,19 @@ def _migrate_v5(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO meta VALUES('memory_version','0')")
     conn.execute("INSERT OR IGNORE INTO meta VALUES(?, '0')", ('dream_cursor:' + config.workspace_id(),))
 
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS plan (
+      id TEXT PRIMARY KEY, workspace_id TEXT, task_id TEXT, version INTEGER,
+      parent_id TEXT, status TEXT, base_sha TEXT, plan_json TEXT, hash TEXT,
+      errors_json TEXT, created_at REAL, validated_at REAL, approved_by TEXT,
+      approved_at REAL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS plan_node (
+      plan_id TEXT NOT NULL REFERENCES plan(id), node_id TEXT NOT NULL,
+      title TEXT, status TEXT, task_id TEXT,
+      PRIMARY KEY(plan_id, node_id))""")
 
-_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5))
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5), (6, _migrate_v6))
 
 
 SCHEMA_VERSION = max(version for version, _ in _MIGRATIONS)

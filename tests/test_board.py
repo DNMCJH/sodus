@@ -7,7 +7,7 @@ page can name the runs behind a count instead of offering one blind rerun.
 
 from __future__ import annotations
 
-from nodus import server
+from nodus import board as server
 
 
 def _run(rid: str, **over) -> dict:
@@ -89,6 +89,10 @@ def test_board_keeps_its_old_keys_and_adds_unverified_runs(monkeypatch):
     monkeypatch.setattr(server.db, "connect", lambda: _EmptyDB())
 
     board = server.board_state(now=1_700_000_000.0)
+    assert set(board) == {"now", "day", "profile", "running", "decisions", "decision_counts",
+                          "unverified_runs", "needs_you", "handling", "stopped", "unverifiable",
+                          "auto_recovering", "deterministic", "history_failures", "memory_candidates",
+                          "terminals", "today"}
     assert {
         "now",
         "day",

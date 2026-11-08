@@ -23,8 +23,10 @@ EXPECTED_TOOLS = {
 
 
 @pytest.fixture()
-def home(tmp_path, monkeypatch):
+def home(tmp_path, monkeypatch, mcp_http):
     """A state directory per test: db.connect() creates it on demand."""
+    monkeypatch.delenv("NODUS_ROLE", raising=False)
+    monkeypatch.delenv("NODUS_DEPTH", raising=False)
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     monkeypatch.setenv("NODUS_WORKSPACE", "ws-mcp-test")
     (tmp_path / "home").mkdir()
@@ -166,10 +168,10 @@ def test_unknown_tool_is_a_tool_error(home):
 
 
 def test_exception_inside_a_tool_becomes_is_error(home, monkeypatch):
-    def boom(**kwargs):
+    def boom(*args, **kwargs):
         raise RuntimeError("database exploded")
 
-    monkeypatch.setattr(mcp.db, "create_task", boom)
+    monkeypatch.setattr(mcp.client, "call", boom)
     got = tool("nodus_task_create", {"title": "t", "description": "d"})
     assert got["result"]["isError"] is True
     assert "database exploded" in got["text"]
@@ -324,7 +326,6 @@ def test_worker_denied_before_any_side_effect(monkeypatch, name, role, depth):
         pytest.fail('worker must not perform HTTP or dispatch')
     monkeypatch.setattr(client, 'call', unexpected)
     monkeypatch.setattr(db, 'create_task', unexpected)
-    monkeypatch.setattr(mcp.runner.RUNNER, 'start', unexpected)
     monkeypatch.setenv('NODUS_ROLE', role)
     monkeypatch.setenv('NODUS_DEPTH', depth)
     result = tool(name)
@@ -370,3 +371,51 @@ def test_ask_status_success(monkeypatch):
     from nodus.cli import client
     monkeypatch.setattr(client, 'call', lambda *a: {'id': 'ask-1', 'status': 'answered', 'answer': 'yes'})
     assert tool('sodus_ask_status', {'id': 'ask-1'})['payload']['answer'] == 'yes'
+
+@pytest.mark.parametrize('name,args,method,path,response', [
+    ('nodus_task_create', {'title':'t','description':'d'}, 'POST', '/tasks', {'id':'task-1'}),
+    ('nodus_run_status', {'run_id':'run-1'}, 'GET', '/runs/run-1', {'status':'completed'}),
+    ('nodus_proposals', {}, 'GET', '/proposals', []),
+    ('nodus_cost_today', {}, 'GET', '/cost/today', {'runs':0}),
+    ('nodus_memory_remember', {'text':'fact'}, 'POST', '/memory/remember', {'added':1}),
+    ('nodus_memory_candidates', {}, 'GET', '/memory/harvest?', {'candidates':[]}),
+])
+def test_all_legacy_tools_forward_only_http(monkeypatch, name, args, method, path, response):
+    monkeypatch.delenv('NODUS_ROLE', raising=False)
+    monkeypatch.delenv('NODUS_DEPTH', raising=False)
+    calls = []
+    def forward(m, p, body=None):
+        calls.append((m,p,body))
+        assert m == method and p.startswith(path)
+        return response
+    monkeypatch.setattr(mcp.client, 'call', forward)
+    assert not tool(name,args)['result']['isError']
+    assert len(calls) == 1
+    assert not hasattr(mcp, 'runner') and not hasattr(mcp, 'db')
+
+
+@pytest.mark.parametrize('status,timeout', [('running',True), ('completed',False)])
+def test_run_http_wait_timeout(monkeypatch, tmp_path, status, timeout):
+    monkeypatch.delenv('NODUS_ROLE', raising=False)
+    monkeypatch.delenv('NODUS_DEPTH', raising=False)
+    monkeypatch.setattr(mcp, 'WAIT_TIMEOUT', 0)
+    calls = []
+    def forward(method,path,body=None):
+        calls.append((method,path))
+        if method == 'POST':
+            assert body['cwd'] == str(tmp_path.resolve())
+            return {'id':'run-1'}
+        return {'mcp': {'run_id':'run-1', 'status':status}}
+    monkeypatch.setattr(mcp.client,'call', forward)
+    result = tool('nodus_run', {'task_id':'task-1','cwd':str(tmp_path),'wait':True})
+    assert result['payload']['wait_timed_out'] is timeout
+    assert calls == [('POST','/runs'), ('GET','/runs/run-1')]
+
+
+def test_daemon_unavailable_has_start_hint(monkeypatch):
+    def unavailable(*a, **k):
+        raise RuntimeError('daemon unreachable: refused')
+    monkeypatch.setattr(mcp.client,'call',unavailable)
+    result = tool('nodus_cost_today')
+    assert result['result']['isError']
+    assert 'sodus up' in result['text']

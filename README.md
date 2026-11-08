@@ -152,6 +152,17 @@ sodus memory rollback --to 1
 
 记忆操作围绕 episode、候选与 `AGENTS.md` marker 展开；rollback 使用显式版本号。
 
+### 0.7 多宿主与 planner
+
+- MCP 所有工具改由 daemon HTTP 执行（daemon 是唯一 run 所有者）；`sodus mcp install --host codex|claude|dsh` 一键写配置，`--check` / `--uninstall` 可查可撤。
+- 新增只读 `GET /state`（面板/宠物/脚本用），看板展示层从 `server.py` 拆到 `nodus/board.py`。
+- planner：`sodus plan new/review/approve` 与 `POST /plan`；`plan.json` v1 先过机械校验（base_sha、路径存在、DAG 无环、每节点有验收），opus 规划、sol 异源评审、人显式批准。
+
+```powershell
+sodus mcp install --check
+sodus plan new "目标" --cwd PATH --wait
+```
+
 以前这三件事糊在一个对象里，叫 `AgentSpec`。结果 `minimax` 既是 agent 又是端点，
 加一个后端要改 `argv()` 的 if/elif 链，`Pricing` 挂在 agent 上，failover 无处安放——因为"端点"根本不是个东西。
 

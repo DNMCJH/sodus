@@ -229,6 +229,12 @@ def load_secrets(ws: str | None = None) -> dict[str, str]:
     return secrets_map
 
 
+def planner_route() -> str:
+    routing = load_config().get("routing") or {}
+    value = routing.get("planner") if isinstance(routing, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else "opus"
+
+
 def dream_route() -> str:
     value = (load_config().get("routing") or {}).get("dream")
     return value.strip() if isinstance(value, str) and value.strip() else default_route()
@@ -236,3 +242,14 @@ def dream_route() -> str:
 
 def dream_daily_tokens() -> int:
     return max(0, int((load_config().get("memory") or {}).get("dream_daily_tokens", 100000)))
+
+
+def plan_timeout() -> float:
+    """Total planning wait budget; environment overrides config, default 1800s."""
+    import math
+    raw = os.environ.get('NODUS_PLAN_TIMEOUT', load_config().get('plan_timeout', 1800))
+    try:
+        value = float(raw)
+        return value if math.isfinite(value) and value > 0 else 1800.0
+    except (TypeError, ValueError):
+        return 1800.0

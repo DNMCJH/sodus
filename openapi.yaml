@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Sodus HTTP API
-  version: 0.6.0
+  version: 0.7.0
   summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
     产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
@@ -47,6 +47,164 @@ tags:
   - name: memory
   - name: events
 paths:
+  /plan:
+    post:
+      summary: Start a read-only planner run and collect its result in the background
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [goal]
+              properties:
+                goal: {type: string, minLength: 1}
+                cwd: {type: string}
+                acceptance: {type: string}
+                route: {type: string}
+      responses:
+        '202':
+          description: Plan attempt persisted, with plan_id, run_id and status; poll GET /plans/{id}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanExecution'}
+        '400': {description: Invalid request}
+        '401': {description: Unauthorized}
+  /plans/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Read a plan attempt, validation errors, nodes and review
+      responses:
+        '200':
+          description: Persisted plan view
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanExecution'}
+        '404': {description: Plan not found in this workspace}
+        '401': {description: Unauthorized}
+  /plans/{id}/review:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Run independent sol review and persist its verdict (synchronous)
+      responses:
+        '200':
+          description: Reviewed plan with review_json verdict and findings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanExecution'}
+        '400': {description: Invalid state or review output}
+        '404': {description: Plan not found}
+        '401': {description: Unauthorized}
+  /plans/{id}/approve:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Approve only a reviewed plan whose verdict is approve
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [by]
+              properties:
+                by: {const: human}
+      responses:
+        '200':
+          description: Approved plan with approved_by and approved_at
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PlanExecution'}
+        '400': {description: Explicit human identity or approving review required}
+        '404': {description: Plan not found}
+        '401': {description: Unauthorized}
+  /state:
+    get:
+      tags: [board]
+      operationId: getState
+      summary: Lightweight read-only panel and pet snapshot
+      description: |
+        Live runs and asks are queried on every request. Today, proposals and
+        pending database memory candidates have a 1.5-second TTL. No git probes,
+        evidence assembly, HTML or per-agent cost expansion. needs_you and
+        unverifiable follow the board's newest 50 work runs (unverifiable is 0 or 1).
+        running includes queued/running/stalled, newest first, capped at 20;
+        counts.running and counts.queued are uncapped status counts.
+      responses:
+        '200':
+          description: State snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /cost/today:
+    get:
+      operationId: costToday
+      summary: Local-day costs grouped by agent
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/remember:
+    post:
+      operationId: memoryRemember
+      summary: Remember a verified project fact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: {type: string}
+                source: {type: string, default: agent}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/harvest:
+    get:
+      operationId: memoryHarvest
+      summary: Read harness memory candidates
+      parameters:
+        - {in: query, name: project, schema: {type: string}}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+        - {in: query, name: conflicts_only, schema: {type: boolean, default: false}}
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: object}
+        '400':
+          description: Invalid arguments
+  /memory/candidates:
+    get:
+      operationId: memoryCandidates
+      summary: Read staged database candidates
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {type: array, items: {type: object}}
+        '400':
+          description: Invalid arguments
   /:
     get:
       tags: [public]
@@ -1096,6 +1254,81 @@ components:
             $ref: '#/components/schemas/Error'
 
   schemas:
+    PlanExecution:
+      type: object
+      required: [id, status, plan_json, errors_json, run_id, review_json]
+      properties:
+        id: {type: string}
+        plan_id: {type: string}
+        status: {enum: [draft, validated, failed, reviewed, approved]}
+        run_id: {type: [string, 'null']}
+        review_run_id: {type: [string, 'null']}
+        cwd: {type: [string, 'null']}
+        plan_json: {type: object}
+        errors_json: {type: string, description: JSON encoded validation or execution error array}
+        review_json:
+          type: [object, 'null']
+          properties:
+            verdict: {enum: [approve, revise, reject]}
+            findings: {type: array, items: {}}
+        approved_by: {type: [string, 'null']}
+        approved_at: {type: [number, 'null']}
+        nodes: {type: array, items: {type: object}}
+    State:
+      type: object
+      additionalProperties: false
+      required: [version, workspace_id, now, running, counts, today, asks, memory]
+      properties:
+        version: {type: string, const: '0.7.0'}
+        workspace_id: {type: string}
+        now: {type: number}
+        running:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [id, task_id, agent, route, started_at, cwd]
+            properties:
+              id: {type: string}
+              task_id: {type: [string, 'null']}
+              agent: {type: [string, 'null']}
+              route: {type: [string, 'null']}
+              started_at: {type: [number, 'null']}
+              cwd: {type: [string, 'null']}
+        counts:
+          type: object
+          required: [running, queued, needs_you, unverifiable, proposals, asks_open, memory_candidates]
+          additionalProperties: false
+          properties:
+            running: {type: integer, minimum: 0}
+            queued: {type: integer, minimum: 0}
+            needs_you: {type: integer, minimum: 0}
+            unverifiable: {type: integer, minimum: 0, maximum: 1}
+            proposals: {type: integer, minimum: 0}
+            asks_open: {type: integer, minimum: 0}
+            memory_candidates: {type: integer, minimum: 0}
+        today:
+          type: object
+          required: [CNY, runs, unpriced]
+          properties:
+            CNY: {type: number}
+            runs: {type: integer, minimum: 0}
+            unpriced: {type: integer, minimum: 0, description: Runs without a recorded price; no FX conversion}
+        asks:
+          type: object
+          description: open is queued; done is answered; includes retained expired rows without modifying them.
+          required: [open, running, done, failed]
+          additionalProperties: false
+          properties:
+            open: {type: integer, minimum: 0}
+            running: {type: integer, minimum: 0}
+            done: {type: integer, minimum: 0}
+            failed: {type: integer, minimum: 0}
+        memory:
+          type: object
+          required: [candidates_pending]
+          properties:
+            candidates_pending: {type: integer, minimum: 0, description: Database proposed or retire_proposed candidates in workspace or saved project}
     Error:
       type: object
       additionalProperties: false
@@ -1502,6 +1735,9 @@ components:
         output_tokens、cache_read、cost、currency、cost_basis。
       required: [id, workspace_id, agent, status, cwd]
       properties:
+        mcp:
+          type: object
+          description: Compatibility status payload for MCP clients (GET run detail).
         id:
           type: string
         workspace_id:

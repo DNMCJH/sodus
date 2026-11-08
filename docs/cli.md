@@ -73,3 +73,22 @@ The memory board exposes candidate status, independent evidence count, and
 adopt/reject/edit/retire actions. Edits carry evidence to the replacement candidate;
 stale versions return HTTP 409 and ask the operator to refresh. Approval queues the
 L3 change for the daemon; it never allows a model to approve its own facts.
+
+### mcp install
+
+`sodus mcp install --host codex|claude|dsh` 配置 MCP 宿主；可逗号分隔或重复 `--host`。`--check` 检查状态，`--uninstall` 删除 Sodus 条目，`--dry-run` 预览。
+
+### Plan generation and approval (0.7.0-c2a)
+
+- `sodus plan new <goal> --cwd PATH [--accept COMMAND] [--route ROUTE] [--wait|--no-wait]`
+- `sodus plan review <id>` runs independent sol review and shows its JSON verdict.
+- `sodus plan approve <id> --by human` requires an approving review.
+- `sodus plan show <id> [--json]` / `sodus plan list` show status, run and review.
+
+Start the daemon with `sodus up`. New, review and approve use daemon HTTP;
+generation waits by default, while `--no-wait` returns immediately
+after run submission. Failures persist with errors; repeat `new` for a fresh attempt.
+Validate, import, show and list run locally; import writes directly to local SQLite
+as a transitional behavior.
+The default planner route is `opus`, configurable as `routing.planner` in config.json.
+Planning/review request read-only behavior but do not enforce a filesystem sandbox.

@@ -74,7 +74,7 @@ _SERVE_SNIPPET = (
 )
 
 
-def call(method: str, path: str, body: dict | None = None, retries: int = 2, *, headers: dict | None = None):
+def call(method: str, path: str, body: dict | None = None, retries: int = 2, *, headers: dict | None = None, timeout: float = 30):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE + path,
@@ -89,7 +89,7 @@ def call(method: str, path: str, body: dict | None = None, retries: int = 2, *, 
     attempt = 0
     while True:
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")
