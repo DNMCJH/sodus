@@ -1,7 +1,7 @@
 """Versioned plan contract, mechanical validation, and SQLite storage."""
 
 from __future__ import annotations
-import hashlib, json, math, os, re, shlex, subprocess
+import hashlib, json, logging, math, os, re, shlex, subprocess
 from pathlib import PureWindowsPath
 from pathlib import Path
 from . import db, config
@@ -314,8 +314,8 @@ def _wait_run(rid):
 
 
 def _finish_create(pid):
-    row = get_plan(pid)
     try:
+        row = get_plan(pid)
         _wait_run(row['run_id'])
         value = _extract_json(row['run_id'])
         errors = validate_plan(value, row['cwd'])
@@ -329,6 +329,7 @@ def _finish_create(pid):
             for n in value['nodes']:
                 c.execute('INSERT INTO plan_node VALUES(?,?,?,?,?)', (pid, n['id'], n['title'], 'pending', None))
     except Exception as exc:
+        logging.getLogger(__name__).exception('plan background completion failed: %s', pid)
         _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
 
 
@@ -356,10 +357,13 @@ def create(goal, cwd='.', acceptance='', route=None, wait=True):
         run = _start_planner_run(prompt, target, route or config.planner_route())
         with _connect_meta() as c:
             c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', (run['id'], pid))
+        _update(pid, status='planning')
         if wait:
             _finish_create(pid)
         else:
+            row = get_plan(pid)
             threading.Thread(target=_finish_create, args=(pid,), daemon=True).start()
+            return row
     except Exception as exc:
         _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
     return get_plan(pid)

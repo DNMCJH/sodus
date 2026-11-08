@@ -1,8 +1,10 @@
 """Plan validation, generation, independent review and explicit approval."""
 
 import json
+import time
 from pathlib import Path
 from ... import plan as service
+from .. import client
 
 
 def add(sub):
@@ -32,20 +34,18 @@ def add(sub):
 def run(args):
     try:
         if args.plan_action in ("new", "review", "approve"):
+            client.ensure_daemon()
             if args.plan_action == "new":
-                # A local CLI process must remain alive to collect the result.
-                # Async requests are owned by the daemon instead.
-                if not args.wait:
-                    from ..client import call, ensure_daemon
-                    ensure_daemon()
-                    value = call("POST", "/plan", {"goal": args.goal, "cwd": str(Path(args.cwd).resolve()),
+                value = client.call("POST", "/plan", {"goal": args.goal, "cwd": str(Path(args.cwd).resolve()),
                                     "acceptance": args.accept, "route": args.route})
-                else:
-                    value = service.create(args.goal, args.cwd, args.accept, args.route)
+                if args.wait:
+                    while value.get("status") not in ("validated", "failed"):
+                        time.sleep(0.5)
+                        value = client.call("GET", "/plans/" + value["id"])
             elif args.plan_action == "review":
-                value = service.review(args.id)
+                value = client.call("POST", "/plans/" + args.id + "/review", {}, timeout=3600)
             else:
-                value = service.approve(args.id, args.by)
+                value = client.call("POST", "/plans/" + args.id + "/approve", {"by": args.by})
             print(json.dumps(value, ensure_ascii=False, indent=2))
             return int(value.get("status") == "failed")
         if args.plan_action in ("validate", "import"):
@@ -70,7 +70,7 @@ def run(args):
         else:
             print(json.dumps(service.list_plans(), ensure_ascii=False, indent=2))
         return 0
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
         print(
             json.dumps(
                 {"valid": False, "errors": [{"kind": "input", "message": str(exc)}]},

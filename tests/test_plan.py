@@ -2,6 +2,7 @@ import copy
 import json
 import sqlite3
 import subprocess
+from pathlib import Path
 import pytest
 from nodus import config, db, plan
 from sodus.cli import main
@@ -278,10 +279,10 @@ def test_http_plans(fake_planner):
         assert request('/plans/missing')[0] == 404
         assert request('/plans/missing/review', {})[0] == 404
         code, row = request('/plan', {'goal': 'test', 'cwd': str(repo)})
-        assert code == 202 and row['run_id'] and row['plan_id'] == row['id']
+        assert code == 202 and row['run_id'] and row['plan_id'] == row['id'] and row['status'] == 'planning'
         for _ in range(100):
             code, row = request('/plans/' + row['id'])
-            if row['status'] != 'draft':
+            if row['status'] != 'planning':
                 break
             time.sleep(.01)
         assert row['status'] == 'validated'
@@ -297,20 +298,36 @@ def test_http_plans(fake_planner):
         thread.join()
 
 
-def test_cli_execution(fake_planner, capsys, monkeypatch):
-    _, repo, _, outputs = fake_planner
+def test_cli_execution(valid, capsys, monkeypatch):
+    _, repo = valid
+    from nodus.cli import client
+    from nodus.cli.commands import plan as cli_plan
+    calls = []
+    def call(method, path, body=None, **kwargs):
+        calls.append((method, path, body, kwargs))
+        if path == '/plan':
+            return {'id': 'fake', 'status': 'planning'}
+        if method == 'GET':
+            return {'id': 'fake', 'status': 'validated'}
+        return {'id': 'fake', 'status': 'reviewed' if path.endswith('/review') else 'approved'}
+    monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
+    monkeypatch.setattr(client, 'call', call)
+    monkeypatch.setattr(cli_plan.time, 'sleep', lambda _: None)
     assert main(['plan', 'new', 'goal', '--cwd', str(repo), '--wait']) == 0
     row = json.loads(capsys.readouterr().out)
-    outputs[0] = '{"verdict":"approve","findings":[]}'
+    assert row['status'] == 'validated'
+    assert [(c[0], c[1]) for c in calls] == [('POST', '/plan'), ('GET', '/plans/fake')]
     assert main(['plan', 'review', row['id']]) == 0
     capsys.readouterr()
     assert main(['plan', 'approve', row['id'], '--by', 'human']) == 0
     assert json.loads(capsys.readouterr().out)['status'] == 'approved'
-    from nodus.cli import client
-    monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
-    monkeypatch.setattr(client, 'call', lambda *a: {'id':'async', 'status':'draft'})
+    assert calls[-2][1] == '/plans/fake/review' and calls[-2][3]['timeout'] == 3600
+    assert calls[-1][1:3] == ('/plans/fake/approve', {'by': 'human'})
+    calls.clear()
     assert main(['plan', 'new', 'goal', '--no-wait']) == 0
-    assert json.loads(capsys.readouterr().out)['id'] == 'async'
+    assert json.loads(capsys.readouterr().out)['status'] == 'planning'
+    assert len(calls) == 1 and calls[0][1] == '/plan'
+    assert 'runner' not in Path(cli_plan.__file__).read_text(encoding='utf-8')
 
 
 def test_runner_contract_and_failure(valid, monkeypatch):

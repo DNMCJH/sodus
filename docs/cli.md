@@ -85,7 +85,10 @@ L3 change for the daemon; it never allows a model to approve its own facts.
 - `sodus plan approve <id> --by human` requires an approving review.
 - `sodus plan show <id> [--json]` / `sodus plan list` show status, run and review.
 
-Generation waits by default; `--no-wait` uses the daemon and returns immediately
+Start the daemon with `sodus up`. New, review and approve use daemon HTTP;
+generation waits by default, while `--no-wait` returns immediately
 after run submission. Failures persist with errors; repeat `new` for a fresh attempt.
+Validate, import, show and list run locally; import writes directly to local SQLite
+as a transitional behavior.
 The default planner route is `opus`, configurable as `routing.planner` in config.json.
 Planning/review request read-only behavior but do not enforce a filesystem sandbox.
