@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tomllib
 from datetime import datetime
 
-COMMAND = r"A:\Anaconda\python.exe"
+COMMAND = sys.executable
 ARGS = ["-m", "sodus", "mcp"]
 
 

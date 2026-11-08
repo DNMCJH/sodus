@@ -1,10 +1,35 @@
 """Versioned plan contract, mechanical validation, and SQLite storage."""
 
 from __future__ import annotations
+import time
 import hashlib, json, logging, math, os, re, shlex, subprocess
 from pathlib import PureWindowsPath
 from pathlib import Path
 from . import db, config
+
+PLAN_CONTRACT = """JSON 契约
+
+顶层对象字段：schema_version（整数 1）、goal（非空字符串）、non_goals（字符串数组）、
+base_sha（目标仓库可解析的 40 位十六进制 commit）、recon（对象）、milestones（非空数组）、
+nodes（数组）、risks（非空字符串数组）、rollback（非空字符串）、review_points（非空字符串数组）。
+recon 包含 files（相对路径数组）、tests（命令数组）、agents_md（sha256 或 null）。
+milestone 包含 id（唯一非空字符串）、title（非空字符串）、exit_criteria（非空字符串数组）。
+node 包含 id（唯一非空字符串）、milestone（已定义的 milestone id）、title、description（非空字符串）、
+deps（node id 数组）、file_scope（相对路径数组）、acceptance（非空命令数组）、
+difficulty（整数 1–5）、route_hint（非空字符串，例如 sol）、budget_cny（有限非负数字）。
+
+路径必须已存在于 cwd 内，允许目录，禁止绝对路径、上级逃逸和指向外部的符号链接。
+新文件应把已存在的父目录列入 file_scope；校验不会创建文件。
+deps 必须构成 DAG，每个 milestone 必须有节点。
+acceptance 只做命令语法检查，拒绝“完成即可”等自然语言；不会执行，也不代表验收已通过。
+可接受 python/pytest/npm 等常见命令或显式相对/绝对可执行路径及 shell 命令。
+不检查命令是否安装、不调用模型、不执行 acceptance。
+
+"""
+
+
+def _plan_contract():
+    return PLAN_CONTRACT
 
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 
@@ -305,8 +330,14 @@ def _extract_json(rid):
 
 def _wait_run(rid):
     from . import runner
+    deadline = time.monotonic() + config.plan_timeout()
     while True:
-        run = runner.RUNNER.wait(rid)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('planning deadline exceeded')
+        run = runner.RUNNER.wait(rid, timeout=min(remaining, 1), poll=min(remaining, 0.1))
+        if time.monotonic() >= deadline:
+            raise TimeoutError('planning deadline exceeded')
         if run['status'] == 'completed':
             return
         if run['status'] not in ('queued', 'running'):
@@ -348,12 +379,12 @@ def create(goal, cwd='.', acceptance='', route=None, wait=True):
         c.execute('INSERT INTO plan VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                   (pid, config.workspace_id(), None, 1, None, 'draft', None, '{}', None, '[]', db.now(), None, None, None))
         c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, target))
-    schema = (Path(__file__).resolve().parent.parent / 'docs/sodus-0.7-plan.md').read_text(encoding='utf-8')
-    prompt = ('Read-only planning only. Do not write files, commit, or execute acceptance commands.\n'
-              'Reconnaissance required: git rev-parse HEAD; git ls-files; read AGENTS.md and test commands. '
-              'Reference real repository-relative paths.\nGoal: ' + goal + '\nConstraints / acceptance: ' + acceptance +
-              '\nThe last assistant message must contain only one JSON object, no fences or explanation. Schema:\n' + schema)
     try:
+        schema = _plan_contract()
+        prompt = ('Read-only planning only. Do not write files, commit, or execute acceptance commands.\n'
+                  'Reconnaissance required: git rev-parse HEAD; git ls-files; read AGENTS.md and test commands. '
+                  'Reference real repository-relative paths.\nGoal: ' + goal + '\nConstraints / acceptance: ' + acceptance +
+                  '\nThe last assistant message must contain only one JSON object, no fences or explanation. Schema:\n' + schema)
         run = _start_planner_run(prompt, target, route or config.planner_route())
         with _connect_meta() as c:
             c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', (run['id'], pid))
@@ -407,3 +438,15 @@ def approve(plan_id, by):
         raise ValueError('approval requires review verdict=approve (revise/reject cannot be approved)')
     _update(plan_id, status='approved', approved_by=by, approved_at=db.now())
     return get_plan(plan_id)
+
+
+def reconcile():
+    """Startup owns no previous planning collector, even if its run survived."""
+    failed = []
+    with _connect_meta() as c:
+        rows = c.execute("SELECT id FROM plan WHERE status='planning'").fetchall()
+        for row in rows:
+            errors = json.dumps([dict(kind='planner', message='daemon restarted; orphaned planning collector')])
+            c.execute("UPDATE plan SET status='failed',errors_json=? WHERE id=? AND status='planning'", (errors, row['id']))
+            failed.append(row['id'])
+    return failed

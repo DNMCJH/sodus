@@ -3,6 +3,7 @@
 import json
 import time
 from pathlib import Path
+from ... import config
 from ... import plan as service
 from .. import client
 
@@ -36,12 +37,24 @@ def run(args):
         if args.plan_action in ("new", "review", "approve"):
             client.ensure_daemon()
             if args.plan_action == "new":
+                deadline = time.monotonic() + config.plan_timeout() + 30
                 value = client.call("POST", "/plan", {"goal": args.goal, "cwd": str(Path(args.cwd).resolve()),
                                     "acceptance": args.accept, "route": args.route})
                 if args.wait:
                     while value.get("status") not in ("validated", "failed"):
-                        time.sleep(0.5)
-                        value = client.call("GET", "/plans/" + value["id"])
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            value = {**value, "status": "failed", "errors": [{"kind": "timeout", "message": "CLI planning deadline exceeded"}]}
+                            break
+                        time.sleep(min(0.5, remaining))
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            continue
+                        try:
+                            value = client.call("GET", "/plans/" + value["id"], retries=0, timeout=min(30, remaining))
+                        except (TimeoutError, RuntimeError) as exc:
+                            value = {**value, "status": "failed", "errors": [{"kind": "timeout", "message": str(exc)}]}
+                            break
             elif args.plan_action == "review":
                 value = client.call("POST", "/plans/" + args.id + "/review", {}, timeout=3600)
             else:

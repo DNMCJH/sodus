@@ -559,6 +559,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == '/plan' or (path.startswith('/plans/') and len(path.split('/')) == 4):
             from . import plan
+            try:
+                depth = int(self.headers.get('X-Sodus-Depth', '0'))
+            except (ValueError, TypeError):
+                return _json(self, 400, {'error': 'invalid_depth'})
+            if depth >= 1 or os.environ.get('NODUS_ROLE') == 'worker':
+                return _json(self, 403, {'error': 'recursion_denied'})
+            if depth < 0:
+                return _json(self, 400, {'error': 'invalid_depth'})
             if not isinstance(body, dict):
                 return _json(self, 400, {'error': 'invalid_body'})
             try:
@@ -770,6 +778,8 @@ def serve(port: int = 4199, host: str = "127.0.0.1") -> None:
     # belongs to a process that is gone. Reap before accepting work, so a
     # restart never leaves clients waiting on a corpse.
     reaped = runner.RUNNER.reap_orphans()
+    from . import plan
+    plan.reconcile()
     stalled = jobs.reap(db.list_pipelines("running"))
     server = _QuietServer((host, port), Handler)
     server.daemon_threads = True

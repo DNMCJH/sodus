@@ -253,7 +253,8 @@ def test_invalid_review_clears_old_verdict(fake_planner):
         plan.approve(row['id'], 'human')
 
 
-def test_http_plans(fake_planner):
+def test_http_plans(fake_planner, monkeypatch):
+    monkeypatch.delenv("NODUS_ROLE", raising=False)
     import threading
     import time
     import urllib.request
@@ -340,14 +341,113 @@ def test_runner_contract_and_failure(valid, monkeypatch):
         db.append_event('integration-fake', 1, 'message', {'text': json.dumps(value)})
         return {'id': 'integration-fake'}
     monkeypatch.setattr(runner.RUNNER, 'start', start)
-    monkeypatch.setattr(runner.RUNNER, 'wait', lambda rid: {'status': 'completed'})
+    monkeypatch.setattr(runner.RUNNER, 'wait', lambda rid, **kwargs: {'status': 'completed'})
     row = plan.create('test', repo)
     assert row['status'] == 'validated'
     assert calls[0]['kind'] == 'plan' and calls[0]['route_name'] == 'opus'
     assert calls[0]['verify_run'] is False and calls[0]['include_memory'] is False
     assert calls[0]['note'] == 'plan-only, do not write files'
     monkeypatch.setattr(runner.RUNNER, 'start', lambda *a, **kw: {'id': 'failed-fake'})
-    monkeypatch.setattr(runner.RUNNER, 'wait', lambda rid: {'status': 'failed', 'error': 'fake failure'})
+    monkeypatch.setattr(runner.RUNNER, 'wait', lambda rid, **kwargs: {'status': 'failed', 'error': 'fake failure'})
     row = plan.create('test', repo)
     assert row['status'] == 'failed' and row['run_id'] == 'failed-fake'
     assert 'fake failure' in row['errors_json']
+
+
+def test_contract_packaged_and_read_failure(fake_planner, monkeypatch):
+    _, repo, calls, _ = fake_planner
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **kw: (_ for _ in ()).throw(OSError('no docs')))
+    assert plan.create('goal', repo)['status'] == 'validated'
+    assert 'schema_version' in calls[-1]['prompt']
+    monkeypatch.setattr(plan, '_plan_contract', lambda: (_ for _ in ()).throw(OSError('contract unavailable')))
+    row = plan.create('goal', repo)
+    assert row['status'] == 'failed' and 'contract unavailable' in row['errors_json']
+
+
+def test_planning_deadline(valid, monkeypatch):
+    from nodus import runner
+    _, repo = valid
+    monkeypatch.setenv('NODUS_PLAN_TIMEOUT', '0.01')
+    monkeypatch.setattr(plan, '_start_planner_run', lambda *a, **kw: {'id': 'forever'})
+    monkeypatch.setattr(runner.RUNNER, 'wait', lambda *a, **kw: {'status': 'running'})
+    row = plan.create('goal', repo)
+    assert row['status'] == 'failed' and 'deadline' in row['errors_json']
+
+
+@pytest.mark.parametrize('run_status', ['failed', 'completed', 'running', 'missing'])
+def test_startup_reconcile(valid, monkeypatch, run_status):
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status='planning')
+    if run_status != 'missing':
+        task = db.create_task('restart test')
+        db.create_run(task['id'], 'sol', str(repo), rid='old', kind='plan')
+        with db.connect() as c:
+            c.execute('UPDATE run SET status=? WHERE id=?', (run_status, 'old'))
+    with plan._connect_meta() as c:
+        c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', ('old', pid))
+    assert plan.reconcile() == [pid]
+    assert plan.reconcile() == []
+    row = plan.get_plan(pid)
+    assert row['status'] == 'failed' and json.loads(row['errors_json'])
+
+
+def test_cli_deadline(valid, monkeypatch, capsys):
+    from nodus.cli import client
+    from nodus.cli.commands import plan as cli_plan
+    monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
+    monkeypatch.setattr(client, 'call', lambda *a, **kw: {'id': 'forever', 'status': 'planning'})
+    ticks = iter([0, 0, 1900, 1900])
+    monkeypatch.setattr(cli_plan.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(cli_plan.time, 'sleep', lambda _: None)
+    assert main(['plan', 'new', 'goal', '--wait']) == 1
+    row = json.loads(capsys.readouterr().out)
+    assert row['status'] == 'failed' and row['errors'][0]['kind'] == 'timeout'
+
+
+@pytest.mark.parametrize('path', ['/plan', '/plans/unused/review', '/plans/unused/approve'])
+@pytest.mark.parametrize('mode', ['depth', 'worker'])
+def test_plan_recursion_denied(valid, monkeypatch, path, mode):
+    from nodus import server
+    from email.message import Message
+    import io
+    handler = object.__new__(server.Handler)
+    handler.path = path
+    handler.headers = Message()
+    handler.headers['Authorization'] = 'Bearer ' + config.token()
+    handler.headers['Content-Length'] = '2'
+    if mode == 'depth':
+        handler.headers['X-Sodus-Depth'] = '1'
+    else:
+        monkeypatch.setenv('NODUS_ROLE', 'worker')
+    handler.rfile = io.BytesIO(b'{}')
+    replies = []
+    monkeypatch.setattr(server, '_json', lambda h, code, body: replies.append((code, body)))
+    for name in ('create', 'review', 'approve'):
+        monkeypatch.setattr(plan, name, lambda *a, **kw: pytest.fail('must not dispatch'))
+    handler._post()
+    assert replies == [(403, {'error': 'recursion_denied'})]
+
+
+def test_plan_timeout_config(monkeypatch):
+    monkeypatch.setattr(config, 'load_config', lambda: {})
+    monkeypatch.delenv('NODUS_PLAN_TIMEOUT', raising=False)
+    assert config.plan_timeout() == 1800
+    monkeypatch.setenv('NODUS_PLAN_TIMEOUT', '12.5')
+    assert config.plan_timeout() == 12.5
+    for invalid in ('nan', 'inf', '-1', 'bad'):
+        monkeypatch.setenv('NODUS_PLAN_TIMEOUT', invalid)
+        assert config.plan_timeout() == 1800
+
+
+def test_cli_poll_network_timeout(valid, monkeypatch, capsys):
+    from nodus.cli import client
+    monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
+    def call(method, *a, **kwargs):
+        if method == 'POST':
+            return {'id': 'fake', 'status': 'planning'}
+        assert kwargs['retries'] == 0
+        raise TimeoutError('socket deadline')
+    monkeypatch.setattr(client, 'call', call)
+    assert main(['plan', 'new', 'goal']) == 1
+    assert json.loads(capsys.readouterr().out)['status'] == 'failed'

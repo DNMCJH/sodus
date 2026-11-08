@@ -89,3 +89,15 @@ def test_codex_preserves_array_tables_after_sodus(home):
     assert tomllib.loads(path.read_text(encoding='utf-8'))['other'] == [{'name':'kept'}]
     assert run('codex', '--uninstall') == 0
     assert tomllib.loads(path.read_text(encoding='utf-8'))['other'] == [{'name':'kept'}]
+
+
+def test_interpreter_and_legacy_drift(home, capsys):
+    import sys
+    assert run('claude') == 0
+    path = home / '.claude.json'
+    data = json.loads(path.read_text(encoding='utf-8'))
+    assert data['mcpServers']['sodus']['command'] == sys.executable
+    data['mcpServers']['sodus']['command'] = 'Z:/legacy/python.exe'
+    path.write_text(json.dumps(data), encoding='utf-8')
+    assert run('claude', '--check') == 1
+    assert 'drift' in capsys.readouterr().out
