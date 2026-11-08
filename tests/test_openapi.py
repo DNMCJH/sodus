@@ -89,6 +89,10 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/profiles"),
         ("get", "/tasks"),
         ("post", "/tasks"),
+        ("post", "/plan"),
+        ("get", "/plans/{id}"),
+        ("post", "/plans/{id}/review"),
+        ("post", "/plans/{id}/approve"),
         ("post", "/ask"),
         ("get", "/asks"),
         ("get", "/ask/{id}"),
@@ -177,3 +181,10 @@ def test_state_contract_is_authenticated_and_structured(spec):
     for name in ("counts", "today", "asks", "memory"):
         item = schema["properties"][name]
         assert set(item["required"]) == set(item["properties"])
+
+
+def test_plan_contract(spec):
+    assert spec['paths']['/plan']['post']['responses'].get('202')
+    approve = spec['paths']['/plans/{id}/approve']['post']
+    assert approve['requestBody']['content']['application/json']['schema']['properties']['by']['const'] == 'human'
+    assert spec['components']['schemas']['PlanExecution']['properties']['review_json']['properties']['verdict']['enum'] == ['approve', 'revise', 'reject']

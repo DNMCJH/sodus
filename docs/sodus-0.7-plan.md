@@ -2,7 +2,7 @@
 
 plan 是独立的执行提案，不是 task 完成状态；遵守 ADR-020，不写 task.status。
 生命周期为 draft → validated → reviewed → approved → running → done/aborted。
-c1 文件即 draft，只有校验成功后才能导入为 validated；后续状态、模型和 HTTP 留给 c2。
+c1 文件即 draft，只有校验成功后才能导入为 validated；c2a 执行链和 HTTP 见下文。
 
 ## JSON 契约
 
@@ -35,3 +35,32 @@ workspace_id 取当前配置，show/list 仅展示当前工作区。
 `sodus plan show <id> [--json]` 返回元数据、解码后的 plan_json 和节点。
 `sodus plan list` 返回当前工作区摘要。所有命令无需 daemon。
 validate_plan 返回结构化错误列表（kind/path/message）；无错误即 []，输入异常转为 schema 错误。
+
+## Planner execution (0.7.0-c2a)
+
+`routing.planner` in config.json selects the planner route (default `opus`);
+`--route` overrides it. `plan new` creates a kind=plan run against the target cwd.
+The prompt requires read-only repository reconnaissance (`git rev-parse HEAD`,
+`git ls-files`, AGENTS.md and test commands) and the v1 JSON object as its last
+assistant message. Only that message is parsed; optional JSON fences are removed.
+The c1 validator runs before storing canonical JSON/hash/base_sha and node rows.
+A failed run, parse or validation leaves a failed attempt with errors_json and
+its run_id; repeat `plan new` to create a fresh retry without losing evidence.
+
+Lifecycle: draft -> validated -> reviewed -> approved; creation failures -> failed.
+Review uses a separate kind=plan_review run on route `sol`, with plan JSON and
+repository cwd. review_json contains verdict (approve/revise/reject) and findings;
+review_run_id preserves its evidence. A fresh review clears the prior verdict;
+invalid review output cannot retain approval eligibility. `approve --by human`
+requires status=reviewed and verdict=approve, and writes approved_by/approved_at.
+This parameter records an explicit human assertion, not independently verified identity.
+No task or plan execution is dispatched by approval.
+
+All plan commands run locally except `new --no-wait`, which hands collection to
+the daemon. POST /plan returns 202 with plan_id/run_id/status and background
+collection; poll GET /plans/{id}. POST /plans/{id}/review is synchronous;
+POST /plans/{id}/approve accepts {"by":"human"}. All four require bearer auth.
+Workspace isolation follows the existing plan API. Additive plan_execution
+metadata stores cwd/run_id/review_run_id/review_json alongside the v6 tables.
+Read-only prompts, run notes and disabled automatic verification are advisory;
+there is no enforced filesystem sandbox. No real model was called for validation.

@@ -187,7 +187,7 @@ def import_plan(value, cwd="."):
     raw = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     pid = db.new_id("plan")
     now = db.now()
-    with db.connect() as c:
+    with _connect_meta() as c:
         c.execute(
             "INSERT INTO plan VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
@@ -207,6 +207,7 @@ def import_plan(value, cwd="."):
                 None,
             ),
         )
+        c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, str(Path(cwd).resolve())))
         for n in plan["nodes"]:
             c.execute(
                 "INSERT INTO plan_node VALUES(?,?,?,?,?)",
@@ -216,7 +217,7 @@ def import_plan(value, cwd="."):
 
 
 def get_plan(pid):
-    with db.connect() as c:
+    with _connect_meta() as c:
         p = c.execute(
             "SELECT * FROM plan WHERE id=? AND workspace_id=?",
             (pid, config.workspace_id()),
@@ -225,6 +226,10 @@ def get_plan(pid):
             return None
         out = dict(p)
         out["plan_json"] = json.loads(out["plan_json"])
+        meta = c.execute('SELECT * FROM plan_execution WHERE plan_id=?', (pid,)).fetchone()
+        out.update(dict(meta) if meta else dict(run_id=None, review_run_id=None, review_json=None, cwd=None))
+        if out.get('review_json'):
+            out['review_json'] = json.loads(out['review_json'])
         out["nodes"] = [
             dict(x)
             for x in c.execute("SELECT * FROM plan_node WHERE plan_id=?", (pid,))
@@ -233,11 +238,11 @@ def get_plan(pid):
 
 
 def list_plans():
-    with db.connect() as c:
+    with _connect_meta() as c:
         return [
             dict(x)
             for x in c.execute(
-                "SELECT id,status,version,created_at FROM plan WHERE workspace_id=? ORDER BY created_at DESC",
+                "SELECT p.id,p.status,p.version,p.created_at,e.run_id,e.review_json FROM plan p LEFT JOIN plan_execution e ON e.plan_id=p.id WHERE workspace_id=? ORDER BY created_at DESC",
                 (config.workspace_id(),),
             )
         ]
@@ -258,3 +263,143 @@ def validate_plan(plan, cwd="."):
         return [
             {"kind": "schema", "path": "$", "message": f"invalid plan structure: {exc}"}
         ]
+
+# Additive execution metadata keeps the c1 plan contract and schema version intact.
+def _connect_meta():
+    c = db.connect()
+    c.execute('''CREATE TABLE IF NOT EXISTS plan_execution (
+        plan_id TEXT PRIMARY KEY REFERENCES plan(id), cwd TEXT NOT NULL,
+        run_id TEXT, review_run_id TEXT, review_json TEXT)''')
+    return c
+
+
+def _update(pid, **fields):
+    with db.connect() as c:
+        c.execute('UPDATE plan SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?',
+                  (*fields.values(), pid))
+
+
+def _start_planner_run(prompt, cwd, route, kind='plan'):
+    from . import runner
+    task = db.create_task(prompt)
+    return runner.RUNNER.start(task['id'], route_name=route, cwd=cwd, kind=kind,
+        note='plan-only, do not write files', verify_run=False,
+        include_handoff=False, include_memory=False)
+
+
+def _extract_json(rid):
+    messages = [e['payload']['text'] for e in db.events_filtered(rid, ('message',))
+                if e['type'] == 'message' and isinstance(e['payload'].get('text'), str)
+                and e['payload'].get('role', 'assistant') == 'assistant']
+    if not messages:
+        raise ValueError('no assistant message')
+    text = messages[-1].strip()
+    if text.startswith('```'):
+        text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s*```$', '', text)
+    result = json.loads(text)
+    if not isinstance(result, dict):
+        raise ValueError('last assistant message must contain one JSON object')
+    return result
+
+
+def _wait_run(rid):
+    from . import runner
+    while True:
+        run = runner.RUNNER.wait(rid)
+        if run['status'] == 'completed':
+            return
+        if run['status'] not in ('queued', 'running'):
+            raise ValueError('run failed: ' + str(run.get('error') or run['status']))
+
+
+def _finish_create(pid):
+    row = get_plan(pid)
+    try:
+        _wait_run(row['run_id'])
+        value = _extract_json(row['run_id'])
+        errors = validate_plan(value, row['cwd'])
+        if errors:
+            _update(pid, status='failed', errors_json=json.dumps(errors))
+            return
+        raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        with db.connect() as c:
+            c.execute('UPDATE plan SET status=?,base_sha=?,plan_json=?,hash=?,errors_json=?,validated_at=? WHERE id=?',
+                      ('validated', value['base_sha'], raw, hashlib.sha256(raw.encode()).hexdigest(), '[]', db.now(), pid))
+            for n in value['nodes']:
+                c.execute('INSERT INTO plan_node VALUES(?,?,?,?,?)', (pid, n['id'], n['title'], 'pending', None))
+    except Exception as exc:
+        _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
+
+
+def create(goal, cwd='.', acceptance='', route=None, wait=True):
+    """Start a fresh, retryable plan attempt; return its persisted view."""
+    import threading
+    if not isinstance(goal, str) or not goal.strip():
+        raise ValueError('goal required')
+    if not isinstance(acceptance, str) or (route is not None and not isinstance(route, str)):
+        raise ValueError('invalid acceptance or route')
+    target = str(Path(cwd).resolve())
+    if not Path(target).is_dir():
+        raise ValueError('cwd must be an existing directory')
+    pid = db.new_id('plan')
+    with _connect_meta() as c:
+        c.execute('INSERT INTO plan VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                  (pid, config.workspace_id(), None, 1, None, 'draft', None, '{}', None, '[]', db.now(), None, None, None))
+        c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, target))
+    schema = (Path(__file__).resolve().parent.parent / 'docs/sodus-0.7-plan.md').read_text(encoding='utf-8')
+    prompt = ('Read-only planning only. Do not write files, commit, or execute acceptance commands.\n'
+              'Reconnaissance required: git rev-parse HEAD; git ls-files; read AGENTS.md and test commands. '
+              'Reference real repository-relative paths.\nGoal: ' + goal + '\nConstraints / acceptance: ' + acceptance +
+              '\nThe last assistant message must contain only one JSON object, no fences or explanation. Schema:\n' + schema)
+    try:
+        run = _start_planner_run(prompt, target, route or config.planner_route())
+        with _connect_meta() as c:
+            c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', (run['id'], pid))
+        if wait:
+            _finish_create(pid)
+        else:
+            threading.Thread(target=_finish_create, args=(pid,), daemon=True).start()
+    except Exception as exc:
+        _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
+    return get_plan(pid)
+
+
+def review(plan_id):
+    row = get_plan(plan_id)
+    if row is None:
+        raise KeyError(plan_id)
+    if row['status'] not in ('validated', 'reviewed'):
+        raise ValueError('review requires a validated plan')
+    if not row.get('cwd'):
+        raise ValueError('plan has no repository context; create a planner attempt first')
+    prompt = ('Read-only independent review. Do not write files or run acceptance commands. '
+              'Inspect repository context, AGENTS.md, git rev-parse HEAD and git ls-files. '
+              'Last assistant message must be JSON only: {"verdict":"approve|revise|reject","findings":[]}.\n'
+              + json.dumps(row['plan_json'], ensure_ascii=False))
+    _update(plan_id, status='validated')
+    with _connect_meta() as c:
+        c.execute('UPDATE plan_execution SET review_json=NULL WHERE plan_id=?', (plan_id,))
+    run = _start_planner_run(prompt, row['cwd'], 'sol', kind='plan_review')
+    with _connect_meta() as c:
+        c.execute('UPDATE plan_execution SET review_run_id=?,review_json=NULL WHERE plan_id=?', (run['id'], plan_id))
+    _wait_run(run['id'])
+    result = _extract_json(run['id'])
+    if result.get('verdict') not in ('approve', 'revise', 'reject') or not isinstance(result.get('findings'), list):
+        raise ValueError('invalid review verdict/findings')
+    with _connect_meta() as c:
+        c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', (json.dumps(result), plan_id))
+        c.execute("UPDATE plan SET status='reviewed' WHERE id=?", (plan_id,))
+    return get_plan(plan_id)
+
+
+def approve(plan_id, by):
+    row = get_plan(plan_id)
+    if row is None:
+        raise KeyError(plan_id)
+    if by != 'human':
+        raise ValueError('approval requires explicit by=human')
+    if row['status'] != 'reviewed' or (row.get('review_json') or {}).get('verdict') != 'approve':
+        raise ValueError('approval requires review verdict=approve (revise/reject cannot be approved)')
+    _update(plan_id, status='approved', approved_by=by, approved_at=db.now())
+    return get_plan(plan_id)

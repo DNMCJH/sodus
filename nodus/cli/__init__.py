@@ -133,6 +133,9 @@ class _Dropped:
     def add_subparsers(self, *args, **kwargs):
         return self
 
+    def add_mutually_exclusive_group(self, *args, **kwargs):
+        return self
+
     def add_parser(self, *args, **kwargs):
         return self
 

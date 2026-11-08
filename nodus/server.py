@@ -280,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path.startswith('/plans/') and len(path.split('/')) == 3:
+            from . import plan
+            row = plan.get_plan(path.split('/')[2])
+            return _json(self, 200 if row else 404, row or {'error': 'not_found'})
+
         if path == "/asks":
             from . import ask
             workspace = (qs.get("workspace") or [config.workspace_id()])[0]
@@ -551,6 +556,28 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
         except json.JSONDecodeError:
             return _json(self, 400, {"error": "invalid json"})
+
+        if path == '/plan' or (path.startswith('/plans/') and len(path.split('/')) == 4):
+            from . import plan
+            if not isinstance(body, dict):
+                return _json(self, 400, {'error': 'invalid_body'})
+            try:
+                if path == '/plan':
+                    row = plan.create(body.get('goal'), body.get('cwd', '.'),
+                                      body.get('acceptance', ''), body.get('route'), wait=False)
+                    return _json(self, 202, {**row, 'plan_id': row['id']})
+                pid, action = path.split('/')[2:]
+                if action == 'review':
+                    row = plan.review(pid)
+                elif action == 'approve':
+                    row = plan.approve(pid, body.get('by'))
+                else:
+                    return _json(self, 404, {'error': 'not_found'})
+                return _json(self, 200, row)
+            except KeyError:
+                return _json(self, 404, {'error': 'not_found'})
+            except (ValueError, TypeError, OSError) as exc:
+                return _json(self, 400, {'error': str(exc)})
 
         if path == "/ask":
             from . import ask

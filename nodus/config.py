@@ -229,6 +229,12 @@ def load_secrets(ws: str | None = None) -> dict[str, str]:
     return secrets_map
 
 
+def planner_route() -> str:
+    routing = load_config().get("routing") or {}
+    value = routing.get("planner") if isinstance(routing, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else "opus"
+
+
 def dream_route() -> str:
     value = (load_config().get("routing") or {}).get("dream")
     return value.strip() if isinstance(value, str) and value.strip() else default_route()

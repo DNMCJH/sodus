@@ -77,3 +77,15 @@ L3 change for the daemon; it never allows a model to approve its own facts.
 ### mcp install
 
 `sodus mcp install --host codex|claude|dsh` 配置 MCP 宿主；可逗号分隔或重复 `--host`。`--check` 检查状态，`--uninstall` 删除 Sodus 条目，`--dry-run` 预览。
+
+### Plan generation and approval (0.7.0-c2a)
+
+- `sodus plan new <goal> --cwd PATH [--accept COMMAND] [--route ROUTE] [--wait|--no-wait]`
+- `sodus plan review <id>` runs independent sol review and shows its JSON verdict.
+- `sodus plan approve <id> --by human` requires an approving review.
+- `sodus plan show <id> [--json]` / `sodus plan list` show status, run and review.
+
+Generation waits by default; `--no-wait` uses the daemon and returns immediately
+after run submission. Failures persist with errors; repeat `new` for a fresh attempt.
+The default planner route is `opus`, configurable as `routing.planner` in config.json.
+Planning/review request read-only behavior but do not enforce a filesystem sandbox.
