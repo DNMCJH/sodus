@@ -1,0 +1,237 @@
+{
+  "plan": {
+    "base_sha": "94555b8b0fd7a3c10feff1a868b0f300c6fc956f",
+    "goal": "解决 sodus 0.6.1 遗留的 M4–M6：(M4) 手改 AGENTS.md facts 区块后 adopt/harvest 不再抛 RuntimeError，改为返回可恢复的漂移提示，并提供会把手改内容记成新基线的 reindex；(M5) 看板/API 批准 adopt 后当天落盘，方法是引入 approved 中间态，审核时立即触发 apply；(M6) run 结束后 verify 才转绿时，刷新它的 episode，让它重新进入 dream 证据集。",
+    "milestones": [
+      {
+        "exit_criteria": [
+          "memory.apply_ops 遇到 marker 哈希漂移时不再抛 RuntimeError，而是返回 status='drift'，带上 target、预期/实际哈希和 'sodus memory reindex' 提示",
+          "memory.adopt 和 /memory/adopt 遇到漂移时返回结构化的 409，附带恢复提示，不再出现 500",
+          "reindex 搬进 memory 模块，并以 replace 基线 batch 的形式写入 dream_batch，之后 rollback 不再静默丢掉手改内容",
+          "pytest 覆盖：手改、adopt 得到 drift、reindex、adopt 成功、rollback 保留手改内容"
+        ],
+        "id": "M4",
+        "title": "facts 区块漂移可恢复"
+      },
+      {
+        "exit_criteria": [
+          "memory_candidate 增加 approved 状态；API 的 adopt 动作只写 approved，由 _finish_apply 改成 adopted",
+          "批准后同步调用 dream.apply_approved；拿不到锁或发生漂移时保持 approved，由下一次 daily_once 兜底",
+          "pytest 覆盖：调用批准 API 后当天 AGENTS.md 里就有这条 fact，状态为 adopted"
+        ],
+        "id": "M5",
+        "title": "批准当天落盘"
+      },
+      {
+        "exit_criteria": [
+          "verify.persist 对已结束的 run 写入 verify.green/red 后会刷新 episode verdict 和 evidence",
+          "verdict 变化后 episode 获得新的 rowid（delete+insert 补偿），dream 的 _cursor/memory_episodes_after 能重新取到它",
+          "pytest 覆盖：run 以 unverified 结束，之后 verify 转绿，episode verdict 变成 pass，并出现在下一次 dream.plan 的批次里"
+        ],
+        "id": "M6",
+        "title": "事后 verify 转绿进入 dream 证据集"
+      },
+      {
+        "exit_criteria": [
+          "openapi.yaml 写明 drift 409 响应和 approved 状态",
+          "CHANGELOG 记录 M4–M6",
+          "全量 python -m pytest -q 通过"
+        ],
+        "id": "REL",
+        "title": "文档、契约与发布收尾"
+      }
+    ],
+    "nodes": [
+      {
+        "acceptance": [
+          "python -m pytest -q tests/test_memory_staging.py tests/test_memory.py"
+        ],
+        "budget_cny": 6,
+        "deps": [],
+        "description": "在 nodus/memory.py 中：apply_ops 在 saved 与 before 不一致时返回 {'status':'drift','target','expected','actual','hint':'sodus memory reindex'}，不再 raise；新增 MemoryDrift(RuntimeError) 异常，带上这些字段，_append 遇到 drift 时抛出它（busy 仍按原样处理）；新增 memory.reindex(target)：持锁 ensure_marker，写入一个只含 replace 当前 body 的 dream_batch（经 _finish_apply 递增 memory_version 并更新 l3_hash），让 rollback 能把手改内容当基线重放。nodus/cli/commands/memory.py 的 memory_reindex 改为调用 memory.reindex，不再直接改 meta。",
+        "difficulty": 3,
+        "file_scope": [
+          "nodus/memory.py",
+          "nodus/cli/commands/memory.py",
+          "tests/test_memory_staging.py"
+        ],
+        "id": "n1-drift-recoverable",
+        "milestone": "M4",
+        "route_hint": "sol",
+        "title": "apply_ops 漂移返回结构化结果，reindex 入库为基线"
+      },
+      {
+        "acceptance": [
+          "python -m pytest -q tests/test_board.py tests/test_memory_staging.py"
+        ],
+        "budget_cny": 4,
+        "deps": [
+          "n1-drift-recoverable"
+        ],
+        "description": "nodus/server.py 的 /memory/adopt 单独捕获 memory.MemoryDrift，返回 409，body 为 {'error':'drift','hint':...,'path':...}，不再落到通用的 500 分支；nodus/board.py 的 memory candidates 区块在 harvest/staged 读取遇到漂移时给出一行“AGENTS.md 已手改，运行 sodus memory reindex”提示，不再抛异常。只改这两个调用点，不重构看板。",
+        "difficulty": 2,
+        "file_scope": [
+          "nodus/server.py",
+          "nodus/board.py",
+          "tests/test_board.py",
+          "tests/test_memory_staging.py"
+        ],
+        "id": "n2-drift-surface",
+        "milestone": "M4",
+        "route_hint": "sol",
+        "title": "API/看板/MCP 展示漂移提示"
+      },
+      {
+        "acceptance": [
+          "python -m pytest -q tests/test_episodes_dream.py tests/test_dream_engine.py"
+        ],
+        "budget_cny": 6,
+        "deps": [
+          "n1-drift-recoverable"
+        ],
+        "description": "nodus/server.py 中 /memory/candidates/<id> 的 adopt 动作改为写 status='approved'，再调用 dream.apply_approved()，并在响应里附带 apply 结果（applied/staged/drift）；nodus/dream.py 的 apply_approved 改为查询 status IN ('approved','retire_proposed')，同时兼容历史上的 'adopted' 但尚未落盘的行（文件里不存在的视为待写）；nodus/memory.py 的 _finish_apply 保持把 add 写成 adopted，即落盘后才是 adopted；如果 nodus/db.py 的 memory_candidate 状态有约束或迁移逻辑，就补上 approved。apply 遇到 busy 或 drift 时状态保持 approved，由 daily_once 兜底。",
+        "difficulty": 3,
+        "file_scope": [
+          "nodus/server.py",
+          "nodus/dream.py",
+          "nodus/memory.py",
+          "nodus/db.py",
+          "tests/test_episodes_dream.py",
+          "tests/test_dream_engine.py"
+        ],
+        "id": "n3-approved-state",
+        "milestone": "M5",
+        "route_hint": "sol",
+        "title": "引入 approved 中间态，审核时触发 apply"
+      },
+      {
+        "acceptance": [
+          "python -m pytest -q tests/test_episodes_dream.py tests/test_verify_marks.py tests/test_verify.py"
+        ],
+        "budget_cny": 8,
+        "deps": [],
+        "description": "在 nodus/episodes.py 新增 refresh_episode(run_id)：重新计算 verdict_for；verdict 发生变化时，在同一事务里删除旧的 memory_episode 行并用相同 id 重新插入（拿到新 rowid，_cursor 之后能读到），同时保留 candidate_evidence 外键（先查有无引用，有引用就改为 UPDATE，并另写一条补偿记录，比如 meta 中 dream 的 requeue 集合，由 dream._episodes 合并读取）。nodus/verify.py 的 persist 在 phase 为 green/red、run 已结束时调用 refresh_episode。这样 tdd.py 和 fix.py 的事后 persist 自然走这条路径；runner.py 结束时的 record_episode 不变。如果需要删除或更新的 helper，加在 nodus/db.py。",
+        "difficulty": 4,
+        "file_scope": [
+          "nodus/episodes.py",
+          "nodus/verify.py",
+          "nodus/dream.py",
+          "nodus/db.py",
+          "tests/test_episodes_dream.py",
+          "tests/test_verify_marks.py"
+        ],
+        "id": "n4-episode-refresh",
+        "milestone": "M6",
+        "route_hint": "sol",
+        "title": "事后 verify 刷新 episode 并补偿 dream 游标"
+      },
+      {
+        "acceptance": [
+          "python -m pytest -q tests/test_openapi.py",
+          "python -m pytest -q"
+        ],
+        "budget_cny": 2,
+        "deps": [
+          "n2-drift-surface",
+          "n3-approved-state",
+          "n4-episode-refresh"
+        ],
+        "description": "在 openapi.yaml 给 /memory/adopt 和 /memory/candidates/{id} 补上 409 drift 响应 schema 和 approved 状态枚举；CHANGELOG.md 增加 0.7.1 条目，记录 M4–M6；skills/nodus/references/troubleshooting.md 增加“AGENTS.md drift → sodus memory reindex”条目；最后跑全量测试。",
+        "difficulty": 1,
+        "file_scope": [
+          "openapi.yaml",
+          "CHANGELOG.md",
+          "skills/nodus/references/troubleshooting.md",
+          "tests/test_openapi.py"
+        ],
+        "id": "n5-release",
+        "milestone": "REL",
+        "route_hint": "sol",
+        "title": "契约、文档与全量回归"
+      }
+    ],
+    "non_goals": [
+      "不修 rot 统计里 near-duplicate 恒为 0 的问题",
+      "不改 dream 的抽取模型、提示词或每日调度频率",
+      "不重构 memory.py 的 harvest/merge/conflicts 逻辑",
+      "不改 AGENTS.md marker 格式和事实行格式",
+      "不改 run/verify 的执行方式，只在 verify.persist 之后加 episode 刷新钩子"
+    ],
+    "recon": {
+      "agents_md": null,
+      "files": [
+        "nodus/memory.py",
+        "nodus/dream.py",
+        "nodus/episodes.py",
+        "nodus/verify.py",
+        "nodus/server.py",
+        "nodus/board.py",
+        "nodus/db.py",
+        "nodus/runner.py",
+        "nodus/tdd.py",
+        "nodus/fix.py",
+        "nodus/cli/commands/memory.py",
+        "nodus/cli/commands/dream.py",
+        "nodus/mcp.py",
+        "openapi.yaml",
+        "CHANGELOG.md",
+        "reports/HANDOFF-0.6.md",
+        "reports/opus-review-0.6.md",
+        "tests/test_memory_staging.py",
+        "tests/test_memory.py",
+        "tests/test_episodes_dream.py",
+        "tests/test_dream_engine.py",
+        "tests/test_verify_marks.py",
+        "tests/test_board.py",
+        "tests/test_openapi.py",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        "python -m pytest -q",
+        "python -m pytest -q tests/test_memory_staging.py tests/test_memory.py",
+        "python -m pytest -q tests/test_episodes_dream.py tests/test_dream_engine.py tests/test_verify_marks.py"
+      ]
+    },
+    "review_points": [
+      "n1：确认 drift 返回值和 MemoryDrift 的所有调用方（_append、apply_approved、rollback、recover_journals）都已处理，没有遗漏的 RuntimeError 路径",
+      "n1：确认 reindex 基线 batch 能经 rollback 重放，并保留手改行",
+      "n3：确认 approved→adopted 只在 _finish_apply 落盘后发生，API 响应和看板显示一致",
+      "n4：确认 candidate_evidence 外键不被破坏，dream 游标不会重复处理同一个 episode 两次以上",
+      "n5：确认 openapi.yaml 和 server.py 的实际响应码一致（tests/test_openapi.py）"
+    ],
+    "risks": [
+      "memory_candidate 现有 'adopted' 行里可能有通过 API 批准、尚未落盘的历史数据；apply_approved 必须继续按“文件里不存在”识别它们，否则升级后会漏写",
+      "episode 的 delete+insert 可能违反 candidate_evidence 对 memory_episode(id) 的外键；有引用时必须改走 UPDATE 加补偿队列",
+      "审核请求里同步执行 apply_approved 会持有 L3 文件锁，可能和正在运行的 run 冲突；busy 必须降级为 staged，不能返回 500",
+      "reindex 把手改内容记成 replace 基线后，rollback 到更早版本仍会覆盖手改内容，需要在文档里说明",
+      "verify.persist 现在会被 runner 在结束前调用；refresh 必须只对已结束的 run 生效，避免和 runner 结束时的 record_episode 竞争"
+    ],
+    "rollback": "所有改动都在 feat/sodus-0.7.1 分支上，按节点分别提交；出问题时用 git revert 撤销对应节点的提交，或 git reset --hard 94555b8b0fd7a3c10feff1a868b0f300c6fc956f。数据层只新增 approved 状态值和 dream_batch 记录，不改 schema 列，回退后 approved 行可以手动 UPDATE 成 adopted，下一次 daily_once 会补写。",
+    "schema_version": 1
+  },
+  "status": "reviewed",
+  "base_sha": "94555b8b0fd7a3c10feff1a868b0f300c6fc956f",
+  "hash": "7403ca9dc027d77eece478688080e4088a992285b60cc7b4f5c1b73a76e2a856",
+  "errors": [],
+  "review": {
+    "verdict": "revise",
+    "findings": [
+      {
+        "priority": "P1",
+        "target": "n4-episode-refresh；nodus/episodes.py、nodus/db.py",
+        "description": "memory_episode 使用 TEXT 主键，隐式 rowid 不保证单调递增。删除当前最大 rowid 的 episode 后重新插入，SQLite 可能复用原 rowid；当 dream 游标已消费该行时，刷新后的 pass episode 仍无法被 rowid > cursor 查询取到。计划应明确分配超过删除前最大 rowid 和已消费游标的新序号，并覆盖单行表及刷新最大行的测试。"
+      },
+      {
+        "priority": "P1",
+        "target": "n4-episode-refresh；nodus/dream.py:68-82",
+        "description": "有 candidate_evidence 引用时，计划只要求 UPDATE 加补偿队列并由 _episodes 合并读取，但 plan 在没有新 rowid 时直接返回 None，补偿队列不会触发批次。需要让 plan 同时消费补偿队列，并定义批次快照、成功确认及去重规则；增加仅有补偿项、没有新 episode 时的测试。"
+      },
+      {
+        "priority": "P2",
+        "target": "n3-approved-state；nodus/board.py:1864",
+        "description": "看板查询只包含 proposed、adopted、retire_proposed。引入 approved 后，因 busy 或 drift 尚未落盘的批准项会从看板消失。应将 approved 纳入查询并显示待落盘状态，覆盖 busy/drift 后仍可见及后续成功转 adopted 的测试。"
+      }
+    ]
+  },
+  "plan_id": "plan-70cceecf7ca5"
+}
