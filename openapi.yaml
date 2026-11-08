@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Sodus HTTP API
-  version: 0.6.0
+  version: 0.7.0
   summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
     产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
