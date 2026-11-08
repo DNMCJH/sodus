@@ -65,6 +65,7 @@ def run(cmd: list[str], cwd: Path, timeout: int = 600) -> dict:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            creationflags=config.NO_WINDOW,
         )
         output = (proc.stdout or "") + (proc.stderr or "")
         return {

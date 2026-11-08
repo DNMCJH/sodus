@@ -1162,6 +1162,7 @@ class Runner:
                 subprocess.run(
                     ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                     capture_output=True,
+                    creationflags=config.NO_WINDOW,
                 )
             else:
                 proc.terminate()

@@ -24,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from . import db, ledger, pricing
+from . import config, db, ledger, pricing
 
 HARNESS = "dsh"
 PROVIDER = "deepseek"
@@ -67,7 +67,11 @@ def _read_text(path: Path) -> str:
             raise RuntimeError(
                 "no zstd decoder: install zstandard or put zstd on PATH"
             )
-        proc = subprocess.run([exe, "-dc", str(path)], capture_output=True)
+        proc = subprocess.run(
+            [exe, "-dc", str(path)],
+            capture_output=True,
+            creationflags=config.NO_WINDOW,
+        )
         if proc.returncode != 0:
             raise RuntimeError(
                 f"zstd failed on {path}: {proc.stderr[:200].decode('utf-8', 'replace')}"

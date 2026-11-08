@@ -106,6 +106,7 @@ def alive(pid: int) -> bool:
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
                 capture_output=True, text=True, timeout=5, check=False,
+                creationflags=config.NO_WINDOW,
             ).stdout
             return str(int(pid)) in out
         except (OSError, subprocess.SubprocessError):
@@ -192,7 +193,8 @@ def stop(port: int = DEFAULT_PORT) -> dict:
                 "note": "no pid recorded" + ("; something still listens" if health(port) else "")}
     if os.name == "nt":  # pragma: no cover - platform branch
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       capture_output=True, text=True, check=False)
+                       capture_output=True, text=True, check=False,
+                       creationflags=config.NO_WINDOW)
     else:  # pragma: no cover - posix branch
         try:
             os.kill(pid, 15)

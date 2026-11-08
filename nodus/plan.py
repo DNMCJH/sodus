@@ -73,6 +73,7 @@ def _validate_plan(plan: dict, cwd: str | os.PathLike = ".") -> list[dict]:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
+                creationflags=config.NO_WINDOW,
             )
             if result.returncode:
                 err("base_sha", "base_sha", "commit is not resolvable")
