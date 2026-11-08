@@ -577,6 +577,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, action = path.split('/')[2:]
                 if action == 'review':
                     row = plan.review(pid)
+                    return _json(self, 202, row)
                 elif action == 'approve':
                     row = plan.approve(pid, body.get('by'))
                 else:

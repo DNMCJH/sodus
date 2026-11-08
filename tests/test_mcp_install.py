@@ -75,7 +75,7 @@ def test_drift_multiple_hosts_and_missing_dsh(home, monkeypatch, capsys):
     assert main(['mcp', 'install', '--host', 'codex,claude', '--host', 'dsh']) == 0
     assert main(['mcp', 'install', '--check']) == 0
     monkeypatch.delenv('DSH_HOME')
-    assert run('dsh', '--check') == 1
+    assert run('dsh', '--check') == 0
     assert '跳过 DSH' in capsys.readouterr().out
     assert run('dsh', '--dsh-home', str(home / 'dsh'), '--check') == 0
 
@@ -101,3 +101,30 @@ def test_interpreter_and_legacy_drift(home, capsys):
     path.write_text(json.dumps(data), encoding='utf-8')
     assert run('claude', '--check') == 1
     assert 'drift' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('host,relative,text', [
+    ('claude', '.claude.json', '{"mcpServers":{"sodus":{"env":{"TOKEN":"keep"},"custom":7}}}'),
+    ('dsh', 'dsh/cordis.patch.yml', '- insert:\n  - name: "@deepseek-ai/dsh-mcp-client"\n    config: {serverName: sodus, env: {TOKEN: keep}, custom: 7}\n'),
+])
+def test_merge_keeps_custom_sodus_fields(home, host, relative, text):
+    path = home / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
+    assert run(host) == 0
+    if host == 'claude':
+        entry = json.loads(path.read_text(encoding='utf-8'))['mcpServers']['sodus']
+        assert entry['env'] == {'TOKEN': 'keep'} and entry['custom'] == 7
+    else:
+        entry = next(e for p in mcp._yaml().safe_load(path.read_text(encoding='utf-8')) for e in p.get('insert', []) if e.get('config', {}).get('serverName') == 'sodus')
+        assert entry['config']['env'] == {'TOKEN': 'keep'} and entry['config']['custom'] == 7
+
+
+def test_atomic_replace_failure_preserves_original(home, monkeypatch):
+    path = home / '.claude.json'
+    path.write_text('{"theme":"dark"}\n', encoding='utf-8')
+    original = path.read_bytes()
+    monkeypatch.setattr(mcp.os, 'replace', lambda *a: (_ for _ in ()).throw(OSError('replace failed')))
+    assert run('claude') == 1
+    assert path.read_bytes() == original
+    assert list(path.parent.glob(path.name + '.*.tmp')) == []

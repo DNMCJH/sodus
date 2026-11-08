@@ -249,7 +249,7 @@ def _migrate_v6(conn: sqlite3.Connection) -> None:
       id TEXT PRIMARY KEY, workspace_id TEXT, task_id TEXT, version INTEGER,
       parent_id TEXT, status TEXT, base_sha TEXT, plan_json TEXT, hash TEXT,
       errors_json TEXT, created_at REAL, validated_at REAL, approved_by TEXT,
-      approved_at REAL)""")
+      approved_at REAL, warnings_json TEXT NOT NULL DEFAULT '[]')""")
     conn.execute("""CREATE TABLE IF NOT EXISTS plan_node (
       plan_id TEXT NOT NULL REFERENCES plan(id), node_id TEXT NOT NULL,
       title TEXT, status TEXT, task_id TEXT,

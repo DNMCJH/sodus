@@ -7,11 +7,16 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import tempfile
 import tomllib
 from datetime import datetime
 
 COMMAND = sys.executable
 ARGS = ["-m", "sodus", "mcp"]
+
+
+def _toml_string(value):
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
 def add_install(parser):
@@ -42,6 +47,9 @@ def _merge(host, text, uninstall):
         if not isinstance(servers, dict):
             raise ValueError("mcp_servers must be a table")
         current = servers.get("sodus")
+        if current is not None:
+            expected = dict(current)
+            expected.update({"command": COMMAND, "args": ARGS})
         # Preserve every byte outside our table, including comments and order.
         headers = list(re.finditer(r'(?m)^[ \t]*(\[\[?[^\n]+\]\]?)[ \t]*(?:#.*)?$', text))
         spans = []
@@ -55,9 +63,15 @@ def _merge(host, text, uninstall):
             raise ValueError("sodus uses an inline/dotted TOML table; refusing unsafe edit")
         updated = text
         for start, end in reversed(spans):
-            updated = updated[:start] + updated[end:]
-        if not uninstall:
-            updated = updated.rstrip() + '\n\n[mcp_servers.sodus]\ncommand = ' + json.dumps(COMMAND) + '\nargs = ["-m", "sodus", "mcp"]\n'
+            block = updated[start:end]
+            if not uninstall:
+                block = re.sub(r'(?m)^command\s*=.*$', lambda _: 'command = ' + _toml_string(COMMAND), block)
+                block = re.sub(r'(?m)^args\s*=.*$', 'args = ["-m", "sodus", "mcp"]', block)
+                if not re.search(r'(?m)^command\s*=', block): block += 'command = ' + _toml_string(COMMAND) + '\n'
+                if not re.search(r'(?m)^args\s*=', block): block += 'args = ["-m", "sodus", "mcp"]\n'
+            updated = updated[:start] + ('' if uninstall else block) + updated[end:]
+        if not uninstall and current is None:
+            updated = updated.rstrip() + '\n\n[mcp_servers.sodus]\ncommand = ' + _toml_string(COMMAND) + '\nargs = ["-m", "sodus", "mcp"]\n'
         after = tomllib.loads(updated)
         # Never let a textual table edit silently consume another host setting.
         before_other = dict(data)
@@ -77,7 +91,10 @@ def _merge(host, text, uninstall):
         if uninstall:
             data.get('mcpServers', {}).pop('sodus', None)
         else:
-            data.setdefault('mcpServers', {})['sodus'] = expected
+            merged = dict(current or {})
+            merged.update(expected)
+            data.setdefault('mcpServers', {})['sodus'] = merged
+            expected = merged
         updated = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
     else:
         yaml = _yaml()
@@ -103,6 +120,13 @@ def _merge(host, text, uninstall):
             if 'insert' in patch:
                 patch['insert'] = [e for e in patch['insert'] if e not in matches]
         if not uninstall:
+            if matches:
+                merged = dict(matches[0])
+                cfg = dict(merged.get('config') or {})
+                cfg.update(expected['config'])
+                merged.update(expected)
+                merged['config'] = cfg
+                expected = merged
             data.append({'insert': [expected]})
         data = [p for p in data if p != {'insert': []}]
         updated = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
@@ -121,7 +145,6 @@ def install(args):
         dsh_home = args.dsh_home or os.environ.get('DSH_HOME')
         if host == 'dsh' and not dsh_home:
             print('dsh: missing — 跳过 DSH：未设置 DSH_HOME / --dsh-home')
-            failed = True
             continue
         path = {'codex': Path.home() / '.codex/config.toml', 'claude': Path.home() / '.claude.json',
                 'dsh': Path(dsh_home or '.') / 'cordis.patch.yml'}[host]
@@ -139,7 +162,16 @@ def install(args):
                     if path.exists():
                         backup = path.with_name(path.name + '.bak-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
                         shutil.copy2(path, backup)
-                    path.write_text(updated, encoding='utf-8')
+                    fd, temp_name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+                    try:
+                        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as stream:
+                            stream.write(updated)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(temp_name, path)
+                    finally:
+                        if os.path.exists(temp_name):
+                            os.unlink(temp_name)
         except (ValueError, OSError, TypeError) as exc:
             print(f'{host}: drift — 配置无效，未写入：{exc}')
             failed = True
