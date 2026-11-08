@@ -104,6 +104,8 @@ def test_an_aborted_write_inside_a_handler_is_not_a_crash(monkeypatch):
     logged = []
     monkeypatch.setattr(server, "_log", logged.append)
     handler = object.__new__(server.Handler)
+    handler.headers = __import__("email.message", fromlist=["Message"]).Message()
+    handler.headers["Host"] = "localhost"
 
     def aborted():
         raise ConnectionAbortedError(10053, "the client went away")
@@ -119,6 +121,8 @@ def test_a_real_handler_crash_is_logged_and_answered(monkeypatch):
         server, "_json", lambda handler, code, payload: replies.append((code, payload))
     )
     handler = object.__new__(server.Handler)
+    handler.headers = __import__("email.message", fromlist=["Message"]).Message()
+    handler.headers["Host"] = "localhost"
 
     def boom():
         raise ValueError("bad json")

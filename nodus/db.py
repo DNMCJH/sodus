@@ -249,14 +249,20 @@ def _migrate_v6(conn: sqlite3.Connection) -> None:
       id TEXT PRIMARY KEY, workspace_id TEXT, task_id TEXT, version INTEGER,
       parent_id TEXT, status TEXT, base_sha TEXT, plan_json TEXT, hash TEXT,
       errors_json TEXT, created_at REAL, validated_at REAL, approved_by TEXT,
-      approved_at REAL)""")
+      approved_at REAL, warnings_json TEXT NOT NULL DEFAULT '[]')""")
     conn.execute("""CREATE TABLE IF NOT EXISTS plan_node (
       plan_id TEXT NOT NULL REFERENCES plan(id), node_id TEXT NOT NULL,
       title TEXT, status TEXT, task_id TEXT,
       PRIMARY KEY(plan_id, node_id))""")
 
 
-_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5), (6, _migrate_v6))
+def _migrate_v7(conn: sqlite3.Connection) -> None:
+    if 'warnings_json' not in {r[1] for r in conn.execute('PRAGMA table_info(plan)')}:
+        conn.execute("ALTER TABLE plan ADD COLUMN warnings_json TEXT NOT NULL DEFAULT '[]'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS plan_execution (plan_id TEXT PRIMARY KEY REFERENCES plan(id), cwd TEXT NOT NULL, run_id TEXT, review_run_id TEXT, review_json TEXT)""")
+
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5), (6, _migrate_v6), (7, _migrate_v7))
 
 
 SCHEMA_VERSION = max(version for version, _ in _MIGRATIONS)

@@ -89,6 +89,7 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/profiles"),
         ("get", "/tasks"),
         ("post", "/tasks"),
+        ("post", "/reconcile"),
         ("post", "/plan"),
         ("get", "/plans/{id}"),
         ("post", "/plans/{id}/review"),

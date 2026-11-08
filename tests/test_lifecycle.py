@@ -26,6 +26,11 @@ import pytest
 
 from nodus import config, db, lifecycle, lineage, recover, runner, server
 
+@pytest.fixture(autouse=True)
+def recovery_enabled(monkeypatch):
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+
+
 REAL_DB = Path.home() / ".nodus" / "nodus.sqlite3"
 
 #: Every gate `recover.retry_plan` names today. The source-reading test below
@@ -343,7 +348,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     monkeypatch.setenv("NODUS_WORKSPACE", "ws-lifecycle")
     monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.delenv("NODUS_AUTO_RECOVER", raising=False)
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -455,7 +460,7 @@ def history(tmp_path, monkeypatch):
         pytest.skip(f"could not snapshot {REAL_DB}: {exc}")
     monkeypatch.setattr(config, "HOME", home_dir)
     monkeypatch.setenv("NODUS_WORKSPACE", _dominant_workspace(snapshot))
-    monkeypatch.delenv("NODUS_AUTO_RECOVER", raising=False)
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
     monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
     return home_dir
 

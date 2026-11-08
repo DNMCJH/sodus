@@ -24,7 +24,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     monkeypatch.setenv("NODUS_WORKSPACE", "ws-recover-test")
     monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.delenv("NODUS_AUTO_RECOVER", raising=False)
+    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
     monkeypatch.setattr(recover, "RETRY_LIMIT", 3)
     monkeypatch.setattr(recover, "COST_CAP", 0.5)
     (tmp_path / "home").mkdir()

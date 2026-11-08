@@ -253,3 +253,14 @@ def plan_timeout() -> float:
         return value if math.isfinite(value) and value > 0 else 1800.0
     except (TypeError, ValueError):
         return 1800.0
+
+
+def review_timeout() -> float:
+    """Total plan review wait budget; environment overrides config, default 900s."""
+    import math
+    raw = os.environ.get('NODUS_REVIEW_TIMEOUT', load_config().get('review_timeout', 900))
+    try:
+        value = float(raw)
+        return value if math.isfinite(value) and value > 0 else 900.0
+    except (TypeError, ValueError):
+        return 900.0

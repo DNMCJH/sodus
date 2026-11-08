@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Sodus HTTP API
-  version: 0.7.0
+  version: 0.7.1
   summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
     产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
@@ -47,6 +47,12 @@ tags:
   - name: memory
   - name: events
 paths:
+  /reconcile:
+    post:
+      summary: Reconcile runs owned by the daemon
+      responses:
+        "200":
+          description: Runs marked failed
   /plan:
     post:
       summary: Start a read-only planner run and collect its result in the background
@@ -87,14 +93,14 @@ paths:
     parameters:
       - {name: id, in: path, required: true, schema: {type: string}}
     post:
-      summary: Run independent sol review and persist its verdict (synchronous)
+      summary: Start independent sol review; poll GET /plans/{id} for completion
       responses:
-        '200':
-          description: Reviewed plan with review_json verdict and findings
+        '202':
+          description: Review accepted; status is reviewing until reviewed or review_failed
           content:
             application/json:
               schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Invalid state or review output}
+        '400': {description: Invalid state}
         '404': {description: Plan not found}
         '401': {description: Unauthorized}
   /plans/{id}/approve:
@@ -1256,16 +1262,17 @@ components:
   schemas:
     PlanExecution:
       type: object
-      required: [id, status, plan_json, errors_json, run_id, review_json]
+      required: [id, status, plan_json, errors_json, run_id, review_json, warnings_json]
       properties:
         id: {type: string}
         plan_id: {type: string}
-        status: {enum: [draft, validated, failed, reviewed, approved]}
+        status: {enum: [draft, planning, validated, reviewing, review_failed, failed, reviewed, approved]}
         run_id: {type: [string, 'null']}
         review_run_id: {type: [string, 'null']}
         cwd: {type: [string, 'null']}
         plan_json: {type: object}
         errors_json: {type: string, description: JSON encoded validation or execution error array}
+        warnings_json: {type: string, description: JSON encoded non-blocking validation warnings}
         review_json:
           type: [object, 'null']
           properties:
@@ -1279,7 +1286,7 @@ components:
       additionalProperties: false
       required: [version, workspace_id, now, running, counts, today, asks, memory]
       properties:
-        version: {type: string, const: '0.7.0'}
+        version: {type: string, const: '0.7.1'}
         workspace_id: {type: string}
         now: {type: number}
         running:

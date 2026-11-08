@@ -163,6 +163,8 @@ sodus mcp install --check
 sodus plan new "目标" --cwd PATH --wait
 ```
 
+0.7.1 修了启用前的单实例、auto-recover、Host 校验与 verify 误判等阻塞；无人值守前的 worker 沙箱/批准身份隔离仍在 0.7.2。
+
 以前这三件事糊在一个对象里，叫 `AgentSpec`。结果 `minimax` 既是 agent 又是端点，
 加一个后端要改 `argv()` 的 if/elif 链，`Pricing` 挂在 agent 上，failover 无处安放——因为"端点"根本不是个东西。
 

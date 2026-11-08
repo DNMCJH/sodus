@@ -1101,6 +1101,10 @@ class Runner:
             {"cmd": found["cmd"], "reason": found["reason"], "timeout_s": VERIFY_TIMEOUT},
         )
         result = verify.run(found["cmd"], workdir, timeout=VERIFY_TIMEOUT)
+        if verify.infra_failure(result):
+            verify.persist(rid, task_id, "infra", result, note="infrastructure failure; retry once")
+            self._emit(rid, "verify.retry", {"reason": "infra", "exit": result.get("exit")})
+            result = verify.run(found["cmd"], workdir, timeout=VERIFY_TIMEOUT)
         phase = "green" if result.get("ok") else "red"
         verify.persist(rid, task_id, phase, result, note=f"auto after run ({found['reason']})")
         return "ok" if phase == "green" else "red"

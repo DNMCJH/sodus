@@ -124,7 +124,7 @@ def test_v5_migration(valid):
                 c.execute(
                     "SELECT value FROM meta WHERE key='schema_version'"
                 ).fetchone()[0]
-                == "6"
+                == "7"
             )
             assert (
                 c.execute("SELECT title FROM task WHERE id='old'").fetchone()[0]
@@ -198,7 +198,7 @@ def fake_planner(valid, monkeypatch):
         db.append_event(rid, 2, 'message', {'text': outputs[0]})
         return {'id': rid}
     monkeypatch.setattr(plan, '_start_planner_run', start)
-    monkeypatch.setattr(plan, '_wait_run', lambda rid: None)
+    monkeypatch.setattr(plan, '_wait_run', lambda rid, timeout=None: None)
     return value, repo, calls, outputs
 
 
@@ -226,7 +226,9 @@ def test_review_and_human_gate(fake_planner, verdict):
     with pytest.raises(ValueError):
         plan.approve(row['id'], 'human')
     outputs[0] = json.dumps(dict(verdict=verdict, findings=['checked']))
-    reviewed = plan.review(row['id'])
+    reviewing = plan.review(row['id'])
+    assert reviewing['status'] in ('reviewing', 'reviewed')
+    reviewed = _await_plan_status(row['id'], 'reviewed')
     assert reviewed['status'] == 'reviewed'
     assert reviewed['review_json']['verdict'] == verdict
     assert calls[-1]['route'] == 'sol' and calls[-1]['kind'] == 'plan_review'
@@ -246,11 +248,66 @@ def test_invalid_review_clears_old_verdict(fake_planner):
     row = plan.create('goal', repo)
     outputs[0] = '{"verdict":"approve","findings":[]}'
     plan.review(row['id'])
+    _await_plan_status(row['id'], 'reviewed')
     outputs[0] = '{"verdict":"wrong","findings":[]}'
-    with pytest.raises(ValueError):
-        plan.review(row['id'])
+    plan.review(row['id'])
+    failed = _await_plan_status(row['id'], 'review_failed')
+    assert json.loads(failed['errors_json'])
     with pytest.raises(ValueError):
         plan.approve(row['id'], 'human')
+
+
+def _await_plan_status(pid, status):
+    import time
+    for _ in range(200):
+        row = plan.get_plan(pid)
+        if row['status'] == status:
+            return row
+        time.sleep(.005)
+    raise AssertionError(f'plan did not reach {status}: {row["status"]}')
+
+
+def test_review_async_transition_and_timeout(fake_planner, monkeypatch):
+    _, repo, _, outputs = fake_planner
+    row = plan.create('goal', repo)
+    outputs[0] = json.dumps(dict(verdict='approve', findings=[]))
+    gate = __import__('threading').Event()
+    original_wait = plan._wait_run
+    def blocked_wait(rid, timeout=None):
+        gate.wait(.05)
+        if timeout == .01:
+            raise TimeoutError('review deadline exceeded')
+        return original_wait(rid, timeout)
+    monkeypatch.setattr(plan, '_wait_run', blocked_wait)
+    monkeypatch.setattr(config, 'review_timeout', lambda: .01)
+    reviewing = plan.review(row['id'])
+    assert reviewing['status'] == 'reviewing'
+    gate.set()
+    failed = _await_plan_status(row['id'], 'review_failed')
+    assert 'deadline exceeded' in failed['errors_json']
+
+
+def test_validator_drift_warnings_and_acceptance_semantics(valid):
+    value, repo = valid
+    (repo / 'drift.txt').write_text('head moved', encoding='utf-8')
+    subprocess.run(['git', 'add', 'drift.txt'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-m', 'drift'], cwd=repo, check=True, capture_output=True)
+    value['recon']['agents_md'] = 'a' * 64
+    (repo / 'AGENTS.md').write_text('actual rules', encoding='utf-8')
+    warnings = []
+    errors = plan.validate_plan(value, repo, warnings)
+    assert not errors
+    assert {w['kind'] for w in warnings} == {'base_sha', 'agents_md'}
+    value['nodes'][0]['acceptance'] = ['tests pass']
+    assert any(e['kind'] == 'acceptance' for e in plan.validate_plan(value, repo))
+
+
+def test_validator_agents_missing_warning(valid):
+    value, repo = valid
+    value['recon']['agents_md'] = 'a' * 64
+    warnings = []
+    assert not plan.validate_plan(value, repo, warnings)
+    assert any(w['kind'] == 'agents_md' and 'missing' in w['message'] for w in warnings)
 
 
 def test_http_plans(fake_planner, monkeypatch):
@@ -287,10 +344,26 @@ def test_http_plans(fake_planner, monkeypatch):
                 break
             time.sleep(.01)
         assert row['status'] == 'validated'
+        outputs[0] = json.dumps(dict(verdict='approve', findings=[]))
+        code, reviewing = request('/plans/' + row['id'] + '/review', {})
+        assert code == 202 and reviewing['status'] == 'reviewing'
+        for _ in range(100):
+            code, reviewing = request('/plans/' + row['id'])
+            if reviewing['status'] != 'reviewing':
+                break
+            time.sleep(.01)
+        assert reviewing['status'] == 'reviewed'
         path = '/plans/' + row['id']
-        assert request(path + '/approve', {'by': 'human'})[0] == 400
+        assert request(path + '/approve', {'by': 'human'})[1]['status'] == 'approved'
+        row = plan.get_plan(row['id'])
+        plan._update(row['id'], status='validated')
         outputs[0] = '{"verdict":"approve","findings":[]}'
-        assert request(path + '/review', {})[1]['status'] == 'reviewed'
+        assert request(path + '/review', {})[1]['status'] in ('reviewing', 'reviewed')
+        for _ in range(100):
+            _, reviewed = request(path)
+            if reviewed['status'] != 'reviewing': break
+            time.sleep(.01)
+        assert reviewed['status'] == 'reviewed'
         assert request(path + '/approve', {'by': 'robot'})[0] == 400
         assert request(path + '/approve', {'by': 'human'})[1]['status'] == 'approved'
     finally:
@@ -322,7 +395,7 @@ def test_cli_execution(valid, capsys, monkeypatch):
     capsys.readouterr()
     assert main(['plan', 'approve', row['id'], '--by', 'human']) == 0
     assert json.loads(capsys.readouterr().out)['status'] == 'approved'
-    assert calls[-2][1] == '/plans/fake/review' and calls[-2][3]['timeout'] == 3600
+    assert calls[-2][1] == '/plans/fake/review' and calls[-2][0] == 'POST'
     assert calls[-1][1:3] == ('/plans/fake/approve', {'by': 'human'})
     calls.clear()
     assert main(['plan', 'new', 'goal', '--no-wait']) == 0
@@ -451,3 +524,53 @@ def test_cli_poll_network_timeout(valid, monkeypatch, capsys):
     monkeypatch.setattr(client, 'call', call)
     assert main(['plan', 'new', 'goal']) == 1
     assert json.loads(capsys.readouterr().out)['status'] == 'failed'
+
+
+@pytest.mark.parametrize('change', ['hash', 'head', 'agents', 'warning'])
+def test_approval_revalidates(valid, change, monkeypatch):
+    import hashlib
+    value, repo = valid
+    if change == 'agents':
+        (repo / 'AGENTS.md').write_text('before')
+        value['recon']['agents_md'] = hashlib.sha256(b'before').hexdigest()
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status='reviewed')
+    with db.connect() as c:
+        c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', ('{"verdict":"approve"}', pid))
+        if change == 'hash':
+            c.execute("UPDATE plan SET hash='tampered' WHERE id=?", (pid,))
+    if change == 'head':
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-m', 'drift'], cwd=repo, check=True, capture_output=True)
+    if change == 'agents':
+        (repo / 'AGENTS.md').write_text('after')
+    if change == 'warning':
+        monkeypatch.setattr(plan, 'validate_plan', lambda value, cwd, warnings: warnings.append({'kind':'warning'}) or [])
+    with pytest.raises(ValueError):
+        plan.approve(pid, 'human')
+
+
+def test_timeout_stops_worker(valid, monkeypatch):
+    from nodus import runner
+    task = db.create_task('timeout')
+    run = db.create_run(task['id'], 'sol', cwd=str(valid[1]))
+    stopped = []
+    monkeypatch.setattr(runner.RUNNER, 'stop', lambda rid: stopped.append(rid))
+    with pytest.raises(TimeoutError):
+        plan._wait_run(run['id'], timeout=0)
+    assert stopped == [run['id']]
+    assert db.get_run(run['id'])['status'] == 'failed'
+
+
+def test_review_timeout_stops_and_finishes(valid, monkeypatch):
+    from nodus import runner
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    task = db.create_task('review timeout')
+    run = db.create_run(task['id'], 'sol', cwd=str(repo), kind='plan_review')
+    stopped = []
+    monkeypatch.setattr(runner.RUNNER, 'stop', lambda rid: stopped.append(rid))
+    monkeypatch.setattr(config, 'review_timeout', lambda: 0)
+    plan._finish_review(pid, run['id'])
+    assert stopped == [run['id']]
+    assert plan.get_plan(pid)['status'] == 'review_failed'
+    assert db.get_run(run['id'])['status'] == 'failed'

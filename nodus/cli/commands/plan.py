@@ -56,11 +56,22 @@ def run(args):
                             value = {**value, "status": "failed", "errors": [{"kind": "timeout", "message": str(exc)}]}
                             break
             elif args.plan_action == "review":
-                value = client.call("POST", "/plans/" + args.id + "/review", {}, timeout=3600)
+                deadline = time.monotonic() + config.review_timeout() + 30
+                value = client.call("POST", "/plans/" + args.id + "/review", {})
+                while value.get("status") == "reviewing":
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        value = {**value, "status": "review_failed", "errors_json": json.dumps([{"kind": "timeout", "message": "CLI review deadline exceeded"}])}
+                        break
+                    time.sleep(min(0.5, remaining))
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        continue
+                    value = client.call("GET", "/plans/" + args.id, retries=0, timeout=min(30, remaining))
             else:
                 value = client.call("POST", "/plans/" + args.id + "/approve", {"by": args.by})
             print(json.dumps(value, ensure_ascii=False, indent=2))
-            return int(value.get("status") == "failed")
+            return int(value.get("status") in ("failed", "review_failed"))
         if args.plan_action in ("validate", "import"):
             value = service.load(args.file)
             errors = service.validate_plan(value, args.cwd)

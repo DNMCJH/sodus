@@ -23,7 +23,7 @@ def test_plan_unique_and_workspace():
     assert dream.plan('other') is None
     assert dream.plan(limit=0)['id'] == batches[0]['id']
     with db.connect() as c:
-        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION) == '6'
+        assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
 
 
 def test_extract_replay_and_gate(monkeypatch):

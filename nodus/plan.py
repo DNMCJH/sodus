@@ -32,6 +32,7 @@ def _plan_contract():
     return PLAN_CONTRACT
 
 HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
+COMMANDS = {"python", "python3", "pytest", "pnpm", "npm", "node", "go", "cargo", "dotnet", "make", "bash", "pwsh", "powershell"}
 
 
 def is_command(value):
@@ -44,12 +45,12 @@ def is_command(value):
     if not tokens:
         return False
     executable = tokens[0].strip('"')
-    return bool(
-        re.fullmatch(r"[A-Za-z0-9_./:\\-]+", executable)
-    ) and not executable.startswith("-")
+    if not re.fullmatch(r"[A-Za-z0-9_./:\\-]+", executable) or executable.startswith("-"):
+        return False
+    return Path(executable).is_absolute() or "/" in executable or "\\" in executable or executable.lower() in COMMANDS
 
 
-def _validate_plan(plan: dict, cwd: str | os.PathLike = ".") -> list[dict]:
+def _validate_plan(plan: dict, cwd: str | os.PathLike = ".", warnings=None) -> list[dict]:
     errors = []
     root = Path(cwd).resolve()
     if not isinstance(plan, dict):
@@ -57,6 +58,10 @@ def _validate_plan(plan: dict, cwd: str | os.PathLike = ".") -> list[dict]:
 
     def err(kind, path, message):
         errors.append({"kind": kind, "path": path, "message": message})
+
+    def warn(kind, path, message):
+        if warnings is not None:
+            warnings.append({"kind": kind, "path": path, "message": message})
 
     if type(plan.get("schema_version")) is not int or plan.get("schema_version") != 1:
         err("schema", "schema_version", "must be 1")
@@ -77,6 +82,11 @@ def _validate_plan(plan: dict, cwd: str | os.PathLike = ".") -> list[dict]:
             )
             if result.returncode:
                 err("base_sha", "base_sha", "commit is not resolvable")
+            else:
+                head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                                      text=True, timeout=10, check=False, creationflags=config.NO_WINDOW)
+                if head.returncode == 0 and head.stdout.strip().lower() != sha.lower():
+                    warn("base_sha", "base_sha", "differs from target repository HEAD")
         except (OSError, subprocess.TimeoutExpired):
             err("base_sha", "base_sha", "repository unavailable")
 
@@ -113,6 +123,18 @@ def _validate_plan(plan: dict, cwd: str | os.PathLike = ".") -> list[dict]:
         )
     ):
         err("schema", "recon.agents_md", "must be sha256 or null")
+    elif agent_hash is not None:
+        agents_path = recon.get("agents_md_path", "AGENTS.md")
+        if not isinstance(agents_path, str) or not agents_path.strip() or Path(agents_path).is_absolute() or ".." in Path(agents_path).parts:
+            err("path", "recon.agents_md_path", "must be a relative repository path")
+        else:
+            target = root / agents_path
+            if not target.resolve().is_relative_to(root):
+                err("path", "recon.agents_md_path", "must remain inside repository")
+            elif not target.is_file():
+                warn("agents_md", "recon.agents_md", f"{agents_path} is missing")
+            elif hashlib.sha256(target.read_bytes()).hexdigest().lower() != agent_hash.lower():
+                warn("agents_md", "recon.agents_md", f"{agents_path} sha256 mismatch")
     scopes = list(recon.get("files", []) or [])
     nodes = plan.get("nodes", []) or []
     for i, n in enumerate(nodes):
@@ -207,7 +229,8 @@ def load(path):
 
 def import_plan(value, cwd="."):
     plan = load(value) if isinstance(value, (str, Path)) else value
-    errors = validate_plan(plan, cwd)
+    warnings = []
+    errors = validate_plan(plan, cwd, warnings)
     if errors:
         raise ValueError(json.dumps(errors, ensure_ascii=False))
     raw = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -215,7 +238,7 @@ def import_plan(value, cwd="."):
     now = db.now()
     with _connect_meta() as c:
         c.execute(
-            "INSERT INTO plan VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO plan (id,workspace_id,task_id,version,parent_id,status,base_sha,plan_json,hash,errors_json,created_at,validated_at,approved_by,approved_at,warnings_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 pid,
                 config.workspace_id(),
@@ -231,6 +254,7 @@ def import_plan(value, cwd="."):
                 now,
                 None,
                 None,
+                json.dumps(warnings),
             ),
         )
         c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, str(Path(cwd).resolve())))
@@ -274,10 +298,10 @@ def list_plans():
         ]
 
 
-def validate_plan(plan, cwd="."):
+def validate_plan(plan, cwd=".", warnings=None):
     """Return structured errors; never execute acceptance or mutate repository."""
     try:
-        return _validate_plan(plan, cwd)
+        return _validate_plan(plan, cwd, warnings)
     except (
         TypeError,
         ValueError,
@@ -292,11 +316,7 @@ def validate_plan(plan, cwd="."):
 
 # Additive execution metadata keeps the c1 plan contract and schema version intact.
 def _connect_meta():
-    c = db.connect()
-    c.execute('''CREATE TABLE IF NOT EXISTS plan_execution (
-        plan_id TEXT PRIMARY KEY REFERENCES plan(id), cwd TEXT NOT NULL,
-        run_id TEXT, review_run_id TEXT, review_json TEXT)''')
-    return c
+    return db.connect()
 
 
 def _update(pid, **fields):
@@ -329,15 +349,19 @@ def _extract_json(rid):
     return result
 
 
-def _wait_run(rid):
+def _wait_run(rid, timeout=None):
     from . import runner
-    deadline = time.monotonic() + config.plan_timeout()
+    deadline = time.monotonic() + (timeout if timeout is not None else config.plan_timeout())
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            runner.RUNNER.stop(rid)
+            db.update_run(rid, status='failed', ended_at=db.now(), error='planning deadline exceeded')
             raise TimeoutError('planning deadline exceeded')
         run = runner.RUNNER.wait(rid, timeout=min(remaining, 1), poll=min(remaining, 0.1))
         if time.monotonic() >= deadline:
+            runner.RUNNER.stop(rid)
+            db.update_run(rid, status='failed', ended_at=db.now(), error='planning deadline exceeded')
             raise TimeoutError('planning deadline exceeded')
         if run['status'] == 'completed':
             return
@@ -350,14 +374,15 @@ def _finish_create(pid):
         row = get_plan(pid)
         _wait_run(row['run_id'])
         value = _extract_json(row['run_id'])
-        errors = validate_plan(value, row['cwd'])
+        warnings = []
+        errors = validate_plan(value, row['cwd'], warnings)
         if errors:
             _update(pid, status='failed', errors_json=json.dumps(errors))
             return
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         with db.connect() as c:
             c.execute('UPDATE plan SET status=?,base_sha=?,plan_json=?,hash=?,errors_json=?,validated_at=? WHERE id=?',
-                      ('validated', value['base_sha'], raw, hashlib.sha256(raw.encode()).hexdigest(), '[]', db.now(), pid))
+                      ('validated', value['base_sha'], raw, hashlib.sha256(raw.encode()).hexdigest(), json.dumps(warnings), db.now(), pid))
             for n in value['nodes']:
                 c.execute('INSERT INTO plan_node VALUES(?,?,?,?,?)', (pid, n['id'], n['title'], 'pending', None))
     except Exception as exc:
@@ -377,8 +402,8 @@ def create(goal, cwd='.', acceptance='', route=None, wait=True):
         raise ValueError('cwd must be an existing directory')
     pid = db.new_id('plan')
     with _connect_meta() as c:
-        c.execute('INSERT INTO plan VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                  (pid, config.workspace_id(), None, 1, None, 'draft', None, '{}', None, '[]', db.now(), None, None, None))
+        c.execute('INSERT INTO plan (id,workspace_id,task_id,version,parent_id,status,base_sha,plan_json,hash,errors_json,created_at,validated_at,approved_by,approved_at,warnings_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                  (pid, config.workspace_id(), None, 1, None, 'draft', None, '{}', None, '[]', db.now(), None, None, None, '[]'))
         c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, target))
     try:
         schema = _plan_contract()
@@ -402,6 +427,8 @@ def create(goal, cwd='.', acceptance='', route=None, wait=True):
 
 
 def review(plan_id):
+    """Launch review asynchronously and return the reviewing plan immediately."""
+    import threading
     row = get_plan(plan_id)
     if row is None:
         raise KeyError(plan_id)
@@ -413,20 +440,28 @@ def review(plan_id):
               'Inspect repository context, AGENTS.md, git rev-parse HEAD and git ls-files. '
               'Last assistant message must be JSON only: {"verdict":"approve|revise|reject","findings":[]}.\n'
               + json.dumps(row['plan_json'], ensure_ascii=False))
-    _update(plan_id, status='validated')
+    _update(plan_id, status='reviewing', errors_json='[]')
     with _connect_meta() as c:
         c.execute('UPDATE plan_execution SET review_json=NULL WHERE plan_id=?', (plan_id,))
     run = _start_planner_run(prompt, row['cwd'], 'sol', kind='plan_review')
     with _connect_meta() as c:
         c.execute('UPDATE plan_execution SET review_run_id=?,review_json=NULL WHERE plan_id=?', (run['id'], plan_id))
-    _wait_run(run['id'])
-    result = _extract_json(run['id'])
-    if result.get('verdict') not in ('approve', 'revise', 'reject') or not isinstance(result.get('findings'), list):
-        raise ValueError('invalid review verdict/findings')
-    with _connect_meta() as c:
-        c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', (json.dumps(result), plan_id))
-        c.execute("UPDATE plan SET status='reviewed' WHERE id=?", (plan_id,))
+    threading.Thread(target=_finish_review, args=(plan_id, run['id']), daemon=True).start()
     return get_plan(plan_id)
+
+
+def _finish_review(plan_id, run_id):
+    try:
+        _wait_run(run_id, timeout=config.review_timeout())
+        result = _extract_json(run_id)
+        if result.get('verdict') not in ('approve', 'revise', 'reject') or not isinstance(result.get('findings'), list):
+            raise ValueError('invalid review verdict/findings')
+        with _connect_meta() as c:
+            c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', (json.dumps(result), plan_id))
+            c.execute("UPDATE plan SET status='reviewed',errors_json='[]' WHERE id=?", (plan_id,))
+    except Exception as exc:
+        logging.getLogger(__name__).exception('plan review failed: %s', plan_id)
+        _update(plan_id, status='review_failed', errors_json=json.dumps([dict(kind='review', message=str(exc))]))
 
 
 def approve(plan_id, by):
@@ -437,6 +472,16 @@ def approve(plan_id, by):
         raise ValueError('approval requires explicit by=human')
     if row['status'] != 'reviewed' or (row.get('review_json') or {}).get('verdict') != 'approve':
         raise ValueError('approval requires review verdict=approve (revise/reject cannot be approved)')
+    raw = json.dumps(row['plan_json'], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    if hashlib.sha256(raw.encode()).hexdigest() != row['hash']:
+        raise ValueError('plan hash mismatch')
+    warnings = []
+    errors = validate_plan(row['plan_json'], row['cwd'], warnings)
+    agents_path = Path(row['cwd']) / row['plan_json']['recon'].get('agents_md_path', 'AGENTS.md')
+    if agents_path.exists() and row['plan_json']['recon'].get('agents_md') is None:
+        raise ValueError('AGENTS.md hash required')
+    if errors or warnings:
+        raise ValueError('approval validation failed: ' + json.dumps(errors + warnings))
     _update(plan_id, status='approved', approved_by=by, approved_at=db.now())
     return get_plan(plan_id)
 
