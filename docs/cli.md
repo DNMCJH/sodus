@@ -115,10 +115,16 @@ sodus handoff list [--json]
 `snapshot_at`。写文件采用临时文件 + replace。`sync` 仅替换
 `<!-- sodus:auto:start -->` 与 `<!-- sodus:auto:end -->` 之间的机器段，
 包含 HEAD/tag/分支、daemon 版本/pid、项目 task/run/plan 摘要及预算族上限；
-缺少或重复标记会拒绝执行，人工段和 snapshot 不变。
+首次对无标记的已有文件执行 `sodus handoff sync`，会先在同目录备份为
+`HANDOFF.md.bak-*`，再在“实时状态”标题后插入标记；缺少该节时追加到末尾并在 stderr 提示。
+不完整、逆序或重复标记仍拒绝执行。原子替换保留人工段、原有换行（包括 CRLF）和 snapshot。
 
 `check` 检查文件、snapshot（默认 7 天，可配 `handoff.max_age_days`）、HEAD、
-“关键路径”节反引号中的路径和 daemon 版本；daemon 不可用也会报告失败，退出码 1。
+“关键路径”节反引号中的路径和 daemon 版本。结果包含 `errors` 和 `warnings`：
+HEAD 漂移（包括正常提交后的祖先 HEAD）为 `head_mismatch` warning；无自动段时为
+`auto_block_missing` warning，提示先运行 sync 迁移，不报 daemon_unavailable。
+缺文件、异常标记、snapshot 无效/过期、关键路径缺失、有自动段但 daemon 不可用或版本不一致仍为 error。
+`ok` 和退出码仅由 errors 决定：无 error 返回 0，否则 1。
 `sync/check` 仅尝试读取 daemon，不会自动启动。`list` 从当前 cwd 和现有 DB 的
 task/run cwd 去重，只输出元数据；DB 不可用时退回当前项目，不创建正文库或缓存。
 旧逐 run 交接仍为 `sodus debug handoff <run>`。

@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from contextlib import nullcontext, closing
 from datetime import datetime, timezone, timedelta
@@ -178,6 +179,20 @@ def daemon_info():
 def sync(cwd=None):
     data = show(cwd)
     content = data['content']
+    if not data['exists']:
+        raise ValueError('handoff missing; run init')
+    original = content
+    newline = '\r\n' if '\r\n' in content else '\n'
+    migrating = START not in content and END not in content
+    if migrating:
+        heading = re.search(r'^## 实时状态[^\S\r\n]*(?:\r?\n|$)', content, re.M)
+        pair = START + newline + END + newline
+        if heading:
+            pos = heading.end()
+            content = content[:pos] + (newline if not content[:pos].endswith('\n') else '') + pair + content[pos:]
+        else:
+            content += (newline if content and not content.endswith('\n') else '') + pair
+            print('handoff: 实时状态 section missing; appended auto block at EOF', file=sys.stderr)
     if content.count(START) != 1 or content.count(END) != 1 or content.index(START) > content.index(END):
         raise ValueError('exactly one ordered auto marker pair required')
     root = Path(data['project_root'])
@@ -198,7 +213,12 @@ def sync(cwd=None):
                    plans=[summary(r) for r in relevant if r['_table'] == 'plan'][-5:],
                    budget_soft_families=config.load_config().get('budget', {}).get('soft_families', {}))
     block = '\nhead: ' + machine['head'] + '\n```json\n' + json.dumps(machine, ensure_ascii=False, indent=2) + '\n```\n'
+    block = block.replace('\n', newline)
     content = content[:content.index(START) + len(START)] + block + content[content.index(END):]
+    if migrating:
+        backup = Path(data['path'] + '.bak-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f'))
+        with backup.open('xb') as stream:
+            stream.write(original.encode('utf-8'))
     atomic_write(Path(data['path']), content)
     return show(cwd)
 
@@ -206,6 +226,7 @@ def sync(cwd=None):
 def check(cwd=None, remote=False):
     data = show(cwd, remote)
     errors = []
+    warnings = []
     if not data['exists']:
         errors.append('handoff_missing')
     try:
@@ -219,23 +240,31 @@ def check(cwd=None, remote=False):
         errors.append('snapshot_invalid')
     root = Path(data['project_root'])
     if data['head'] != git(root, 'rev-parse', 'HEAD'):
-        errors.append('head_mismatch')
+        warnings.append('head_mismatch')
     section = re.search(r'^## 关键路径\s*\n(.*?)(?=^## |\Z)', data['content'], re.M | re.S)
     for path in re.findall(r'`([^`]+)`', section.group(1) if section else ''):
         if not (root / path).exists():
             errors.append('path_missing: ' + path)
-    auto = data['content'].partition(START)[2].partition(END)[0]
+    content = data['content']
+    missing_auto = START not in content and END not in content
+    if missing_auto:
+        warnings.append('auto_block_missing: run sodus handoff sync to migrate')
+    elif content.count(START) != 1 or content.count(END) != 1 or content.index(START) > content.index(END):
+        errors.append('auto_markers_invalid')
+    auto = content.partition(START)[2].partition(END)[0]
     block = re.search(r'```json\r?\n(.*?)\r?\n```', auto, re.S)
     try:
         recorded = json.loads(block.group(1))['daemon']['version'] if block else None
     except (ValueError, KeyError, TypeError):
         recorded = None
     actual = daemon_info().get('version')
-    if recorded is None or actual is None:
+    if missing_auto:
+        pass
+    elif recorded is None or actual is None:
         errors.append('daemon_unavailable')
     elif recorded != actual:
         errors.append('daemon_version_mismatch')
-    return {k: v for k, v in data.items() if k != 'content'} | dict(ok=not errors, errors=errors)
+    return {k: v for k, v in data.items() if k != 'content'} | dict(ok=not errors, errors=errors, warnings=warnings)
 
 
 def list_projects(remote=False):

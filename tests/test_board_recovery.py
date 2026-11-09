@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from nodus import config, db, diagnosis, lineage, server, statuslight, ui
+from nodus import budget, config, db, diagnosis, lineage, server, statuslight, ui
 
 ORPHAN = "orphaned: the process that owned this run is gone"
 
@@ -207,12 +207,16 @@ def test_the_same_error_twice_is_a_stopped_row(home):
 
 def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
     task = db.create_task(goal="导出 CSV", acceptance="pytest -q", title="导出")
+    now = time.time()
+    # Keep both rows inside the local "today" window even when the suite runs
+    # just after midnight (the old fixed offsets crossed the day boundary).
+    base = max(now, budget.day_start(now) + 60)
     _, previous = seed(
         home, error="", status="completed", task=task, title="导出",
         usage_json=json.dumps({"cost": 0.5, "currency": "CNY"}),
-        ended=time.time() - 700, started=time.time() - 740,
+        ended=base, started=base - 40,
     )
-    _, run = seed(home, error=ORPHAN, task=task, title="导出", ended=time.time() - 1)
+    _, run = seed(home, error=ORPHAN, task=task, title="导出", ended=base + 1, started=base - 39)
     db.update_run(run["id"], usage_json=json.dumps({"cost": 0.4, "currency": "CNY"}))
     monkeypatch.setenv("NODUS_DAILY_BUDGET", "1.0")
 
