@@ -144,24 +144,18 @@ paths:
     parameters:
       - {name: id, in: path, required: true, schema: {type: string}}
     post:
-      summary: Approve only a reviewed plan whose verdict is approve
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [by]
-              properties:
-                by: {const: human}
+      deprecated: true
+      summary: Disabled; approval requires interactive local CLI
       responses:
-        '200':
-          description: Approved plan with approved_by and approved_at
+        '403':
+          description: Approval requires interactive local CLI
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Explicit human identity or approving review required}
-        '404': {description: Plan not found}
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: {const: approve_requires_cli}
         '401': {description: Unauthorized}
   /state:
     get:

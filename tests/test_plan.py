@@ -354,7 +354,8 @@ def test_http_plans(fake_planner, monkeypatch):
             time.sleep(.01)
         assert reviewing['status'] == 'reviewed'
         path = '/plans/' + row['id']
-        assert request(path + '/approve', {'by': 'human'})[1]['status'] == 'approved'
+        assert request(path + '/approve', {'by': 'human'}) == (403, {'error': 'approve_requires_cli'})
+        assert plan.get_plan(row['id'])['status'] == 'reviewed'
         row = plan.get_plan(row['id'])
         plan._update(row['id'], status='validated')
         outputs[0] = '{"verdict":"approve","findings":[]}'
@@ -364,8 +365,9 @@ def test_http_plans(fake_planner, monkeypatch):
             if reviewed['status'] != 'reviewing': break
             time.sleep(.01)
         assert reviewed['status'] == 'reviewed'
-        assert request(path + '/approve', {'by': 'robot'})[0] == 400
-        assert request(path + '/approve', {'by': 'human'})[1]['status'] == 'approved'
+        assert request(path + '/approve', {'by': 'robot'})[0] == 403
+        assert request(path + '/approve', {'by': 'human'}) == (403, {'error': 'approve_requires_cli'})
+        assert plan.get_plan(row['id'])['status'] == 'reviewed'
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -393,10 +395,7 @@ def test_cli_execution(valid, capsys, monkeypatch):
     assert [(c[0], c[1]) for c in calls] == [('POST', '/plan'), ('GET', '/plans/fake')]
     assert main(['plan', 'review', row['id']]) == 0
     capsys.readouterr()
-    assert main(['plan', 'approve', row['id'], '--by', 'human']) == 0
-    assert json.loads(capsys.readouterr().out)['status'] == 'approved'
-    assert calls[-2][1] == '/plans/fake/review' and calls[-2][0] == 'POST'
-    assert calls[-1][1:3] == ('/plans/fake/approve', {'by': 'human'})
+    assert calls[-1][1] == '/plans/fake/review' and calls[-1][0] == 'POST'
     calls.clear()
     assert main(['plan', 'new', 'goal', '--no-wait']) == 0
     assert json.loads(capsys.readouterr().out)['status'] == 'planning'
@@ -499,7 +498,7 @@ def test_plan_recursion_denied(valid, monkeypatch, path, mode):
     for name in ('create', 'review', 'approve'):
         monkeypatch.setattr(plan, name, lambda *a, **kw: pytest.fail('must not dispatch'))
     handler._post()
-    assert replies == [(403, {'error': 'recursion_denied'})]
+    assert replies == [(403, {'error': 'approve_requires_cli' if path.endswith('/approve') else 'recursion_denied'})]
 
 
 def test_plan_timeout_config(monkeypatch):
@@ -651,3 +650,47 @@ def test_failed_collector_cleans_workspace(valid, monkeypatch, kind):
         plan._finish_review(pid, 'collector-failed')
     assert not Path(isolated).exists()
     assert 'collector-failed' not in plan._planner_workspaces
+
+@pytest.mark.parametrize('stdin_tty,stdout_tty,role,run,confirmation,success', [
+    (False, True, '', '', 'correct', False),
+    (True, False, '', '', 'correct', False),
+    (True, True, 'worker', '', 'correct', False),
+    (True, True, '', '1', 'correct', False),
+    (True, True, '', '', 'wrong', False),
+    (True, True, '', '', 'eof', False),
+    (True, True, '', '', 'correct', True),
+])
+def test_cli_approval_gate(valid, monkeypatch, capsys, stdin_tty, stdout_tty, role, run, confirmation, success):
+    import sys
+    from nodus.cli import client
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status='reviewed')
+    with db.connect() as c:
+        c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', ('{"verdict":"approve"}', pid))
+    before = plan.get_plan(pid)
+    monkeypatch.setenv('NODUS_ROLE', role)
+    monkeypatch.setenv('NODUS_RUN', run)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: stdin_tty)
+    monkeypatch.setattr(sys.stdout, 'isatty', lambda: stdout_tty)
+    monkeypatch.setattr(client, 'ensure_daemon', lambda: pytest.fail('approval must be local'))
+    monkeypatch.setattr(client, 'call', lambda *a, **kw: pytest.fail('approval must not use HTTP'))
+    def confirm():
+        if confirmation == 'eof':
+            raise EOFError('approval cancelled: end of input')
+        return pid if confirmation == 'correct' else 'wrong'
+    monkeypatch.setattr('builtins.input', confirm)
+    assert main(['plan', 'approve', pid, '--by', 'human', '--json']) == (0 if success else 1)
+    captured = capsys.readouterr()
+    after = plan.get_plan(pid)
+    if success:
+        assert json.loads(captured.out)['status'] == 'approved'
+        assert after['approved_by'] == 'human' and after['approved_at']
+    else:
+        assert after == before
+        if not role and not run and not (stdin_tty and stdout_tty):
+            assert 'approval requires an interactive terminal' in captured.out
+    if stdin_tty and stdout_tty and not role and not run:
+        summary = json.loads(captured.err.splitlines()[0])
+        assert summary == dict(id=pid, status='reviewed', review_verdict='approve', plan_hash=before['hash'][:12])
+        assert 'Type the plan id' in captured.err

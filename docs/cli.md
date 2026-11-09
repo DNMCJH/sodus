@@ -83,12 +83,13 @@ L3 change for the daemon; it never allows a model to approve its own facts.
 
 - `sodus plan new <goal> --cwd PATH [--accept COMMAND] [--route ROUTE] [--wait|--no-wait]`
 - `sodus plan review <id>` runs independent sol review and shows its JSON verdict.
-- `sodus plan approve <id> --by human` requires an approving review.
+- `sodus plan approve <id> --by human` requires an approving review. Approval requires interactive CLI with both stdin/stdout TTY. It shows id, status, review verdict and the first 12 hash characters, then requires the exact plan id; mismatch or EOF cancels. `NODUS_ROLE=worker` / `NODUS_RUN=1` processes are rejected.
 - `sodus plan show <id> [--json]` / `sodus plan list` show status, run and review.
 
-Start the daemon with `sodus up`. New, review and approve use daemon HTTP;
+Start the daemon with `sodus up`. New and review use daemon HTTP;
 generation waits by default, while `--no-wait` returns immediately
 after run submission. Failures persist with errors; repeat `new` for a fresh attempt.
+Approval runs locally via `plan.approve(id, "human")`, retaining hash/HEAD/AGENTS/validator checks. HTTP `POST /plans/{id}/approve` is disabled (403 `approve_requires_cli`).
 Validate, import, show and list run locally; import writes directly to local SQLite
 as a transitional behavior.
 The default planner route is `opus`, configurable as `routing.planner` in config.json.

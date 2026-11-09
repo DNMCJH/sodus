@@ -562,6 +562,9 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self) -> None:
         if not self._authorized():
             return _json(self, 401, {"error": "unauthorized"})
+        path = urlparse(self.path).path.rstrip("/")
+        if path.startswith('/plans/') and len(path.split('/')) == 4 and path.endswith('/approve'):
+            return _json(self, 403, {"error": "approve_requires_cli"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -596,11 +599,8 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'review':
                     row = plan.review(pid)
                     return _json(self, 202, row)
-                elif action == 'approve':
-                    row = plan.approve(pid, body.get('by'))
                 else:
                     return _json(self, 404, {'error': 'not_found'})
-                return _json(self, 200, row)
             except KeyError:
                 return _json(self, 404, {'error': 'not_found'})
             except (ValueError, TypeError, OSError) as exc:

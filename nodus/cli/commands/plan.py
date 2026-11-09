@@ -1,6 +1,8 @@
 """Plan validation, generation, independent review and explicit approval."""
 
 import json
+import os
+import sys
 import time
 from pathlib import Path
 from ... import config
@@ -34,7 +36,29 @@ def add(sub):
 
 def run(args):
     try:
-        if args.plan_action in ("new", "review", "approve"):
+        if args.plan_action == "approve":
+            if os.environ.get("NODUS_ROLE") == "worker" or os.environ.get("NODUS_RUN") == "1":
+                raise ValueError("approval is not allowed for worker/run processes")
+            if not sys.stdin.isatty() or not sys.stdout.isatty():
+                raise ValueError("approval requires an interactive terminal")
+            row = service.get_plan(args.id)
+            if row is None:
+                raise ValueError("plan not found: " + args.id)
+            summary = {"id": row["id"], "status": row["status"],
+                       "review_verdict": (row.get("review_json") or {}).get("verdict"),
+                       "plan_hash": (row.get("hash") or "")[:12]}
+            print(json.dumps(summary, ensure_ascii=False), file=sys.stderr)
+            print("Type the plan id to confirm approval: ", end="", flush=True, file=sys.stderr)
+            try:
+                confirmation = input()
+            except EOFError:
+                raise ValueError("approval cancelled: end of input") from None
+            if confirmation != args.id:
+                raise ValueError("approval cancelled: plan id did not match")
+            value = service.approve(args.id, "human")
+            print(json.dumps(value, ensure_ascii=False, indent=2))
+            return 0
+        if args.plan_action in ("new", "review"):
             client.ensure_daemon()
             if args.plan_action == "new":
                 deadline = time.monotonic() + config.plan_timeout() + 30
@@ -68,8 +92,6 @@ def run(args):
                     if remaining <= 0:
                         continue
                     value = client.call("GET", "/plans/" + args.id, retries=0, timeout=min(30, remaining))
-            else:
-                value = client.call("POST", "/plans/" + args.id + "/approve", {"by": args.by})
             print(json.dumps(value, ensure_ascii=False, indent=2))
             return int(value.get("status") in ("failed", "review_failed"))
         if args.plan_action in ("validate", "import"):

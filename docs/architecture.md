@@ -163,6 +163,8 @@ ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` �
 
 ## 4. 安全模型
 
+Plan approval requires interactive local CLI; worker/run processes are rejected and HTTP approve is disabled (403). A process running as the same local user can still spoof a TTY, change environment markers, read the token or call the Python API directly. This is not cryptographic identity isolation; it raises the difficulty of unattended/worker approval.
+
 | 面 | 措施 | 位置 |
 |---|---|---|
 | 网络 | 只绑 127.0.0.1；非环回要 `NODUS_ALLOW_REMOTE=1` | `server.serve` |
