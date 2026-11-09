@@ -14,7 +14,7 @@
 
 - `scripts/release_check.ps1`：PASS，exit 0（构建 wheel/sdist、隔离安装 0.8.0、doctor、MCP、DB 升级、全量 pytest）。
 - 全量 pytest：0.8 分支最终 1179 项通过；handoff 目标 96 项、B1/B2 定向测试通过。
-- 真实 smoke：0.8.0 daemon 下用 sol 与 dsh 各跑一个简单任务，均 completed（codex ¥0.0059，dsh ¥0.07），证明 env 白名单没有切断 worker 认证。
+- 真实 smoke：0.8.0 daemon 下 sol、dsh、claude、opencode-glm 各跑一个简单任务，均 completed（约 ¥0.006 / ¥0.07 / ¥0.113 / ¥0.173），证明 env 白名单没有切断四种 worker 的认证。
 - `sodus handoff show --json` 能正确解析仓库控制台；`check` 对尚无 auto 标记的手工控制台会报 `head_mismatch` / `daemon_unavailable`，这是预期的迁移提示（见遗留）。
 - `sodus mcp install --check`：四宿主 configured，exit 0。
 
