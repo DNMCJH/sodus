@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.8.0（2026-11-09）
+
+交接台与无人值守安全边界：
+
+- **项目级 `sodus handoff`**：当前项目解析 git root，默认 `HANDOFF.md`（config `handoff.path` 可覆盖）；`init/show/append/sync/check/list`；`sync` 只改 `<!-- sodus:auto:start/end -->` 机器段，`check` 校验 snapshot、HEAD、关键路径、daemon 版本；HTTP `GET /handoff`、`GET /handoffs` 与 MCP `nodus_handoff_show/list/check` 只读；不做内容聚合、不做自动 hook。
+- **B3 worker 环境隔离**：`build_env` 改白名单，不再继承 daemon 全部环境；provider secrets 仍按需注入；plan/plan_review 使用只读参数（codex `--sandbox read-only`、claude `--permission-mode plan`），并在临时 git worktree/过滤副本中运行，结束后清理；隔离失败回退原 cwd 并记录 warning。
+- **B4 批准门禁**：HTTP `POST /plans/{id}/approve` 一律 403；`sodus plan approve` 只能在交互式 TTY 中确认（显示摘要并要求输入 plan id），拒绝 `NODUS_ROLE=worker`/`NODUS_RUN=1`；确认后本地调用 `plan.approve`，保留 plan hash/HEAD/AGENTS/validator 复核。
+- **已知边界**：同机同用户仍可伪造 TTY、读 token 或直连 SQLite，这不是密码学身份隔离；plan/review 的 git 隔离是 HEAD 快照，不含未提交改动；无 OS 级沙箱。
+
+
 ## 0.7.2（2026-11-09）
 
 - 预算改为按模型族软上限：Claude/opus 系 ¥100、GPT 系 ¥80、其它合并 ¥80（CNY，0/缺省=off）。只有软门禁，`--allow-expensive` 可豁免；没有日硬上限，relay 余额仍是真正硬约束。按已记账成本检查，不预留未来/在途成本。

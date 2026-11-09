@@ -1,6 +1,6 @@
 """CLI assembly: one parser, one handler per command, no shared globals.
 
-The surface is deliberately small: twenty top-level names, each one worth
+The surface is deliberately small: twenty-one top-level names, each one worth
 remembering. Everything else still exists, one level down -- the long tail lives
 under `nodus debug <name>`, and the four report commands under
 `nodus stats <name>`. Old names keep working as hidden aliases, so an existing
@@ -25,6 +25,7 @@ TOP_LEVEL = (
     # work: create, dispatch, follow, inspect
     "task",
     "plan",
+    "handoff",
     "run",
     "runs",
     "show",
@@ -201,7 +202,9 @@ def build_parser(prog: str | None = None):
     # The curated top level: every command is registered here, so old names
     # keep parsing, but only TOP_LEVEL is listed.
     for module in modules:
-        module.add(_Surface(sub, show=TOP_LEVEL))
+        module.add(_Surface(sub, accept=set(TOP_LEVEL + STATS_COMMANDS + DEBUG_COMMANDS) - {'handoff'}, show=TOP_LEVEL))
+    from .commands import handoff
+    handoff.add(sub)
 
     # `nodus stats` shows today; the four reports keep their own flags below it.
     stats = sub.add_parser(

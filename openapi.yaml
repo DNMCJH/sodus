@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Sodus HTTP API
-  version: 0.7.2
+  version: 0.8.0
   summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
     产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
@@ -47,6 +47,43 @@ tags:
   - name: memory
   - name: events
 paths:
+  /handoff:
+    get:
+      summary: Read the project handoff console (no writes)
+      parameters:
+        - in: query
+          name: cwd
+          schema: {type: string}
+          description: Existing directory resolving to current or task/run-known project root
+      responses:
+        "200":
+          description: path, project_root, exists, snapshot_at, recorded head and content
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Unknown project root or unsafe file path
+  /handoff/check:
+    get:
+      summary: Read-only handoff validation
+      parameters:
+        - in: query
+          name: cwd
+          schema: {type: string}
+      responses:
+        "200":
+          description: Metadata plus ok and errors (validation failures still return 200)
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Unknown project root or unsafe file path
+  /handoffs:
+    get:
+      summary: List current and task/run-known project handoff metadata without content
+      responses:
+        "200":
+          description: Array of project metadata and next actions
+        "401":
+          description: Missing or invalid bearer token
   /reconcile:
     post:
       summary: Reconcile runs owned by the daemon
@@ -107,24 +144,18 @@ paths:
     parameters:
       - {name: id, in: path, required: true, schema: {type: string}}
     post:
-      summary: Approve only a reviewed plan whose verdict is approve
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [by]
-              properties:
-                by: {const: human}
+      deprecated: true
+      summary: Disabled; approval requires interactive local CLI
       responses:
-        '200':
-          description: Approved plan with approved_by and approved_at
+        '403':
+          description: Approval requires interactive local CLI
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Explicit human identity or approving review required}
-        '404': {description: Plan not found}
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: {const: approve_requires_cli}
         '401': {description: Unauthorized}
   /state:
     get:
@@ -1286,7 +1317,7 @@ components:
       additionalProperties: false
       required: [version, workspace_id, now, running, counts, today, asks, memory]
       properties:
-        version: {type: string, const: '0.7.2'}
+        version: {type: string, const: '0.8.0'}
         workspace_id: {type: string}
         now: {type: number}
         running:

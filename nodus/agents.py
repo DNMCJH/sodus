@@ -188,7 +188,8 @@ def build_env(
     was no way to answer "which keys does this agent need", so everything was
     injected and every worker could read every key.
     """
-    env = os.environ.copy()
+    base_keys = """PATH PATHEXT SystemRoot WINDIR COMSPEC TEMP TMP USERPROFILE HOMEDRIVE HOMEPATH HOME APPDATA LOCALAPPDATA ProgramData ProgramFiles ProgramFiles(x86) NUMBER_OF_PROCESSORS PROCESSOR_ARCHITECTURE OS LANG LC_ALL TZ HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy NODUS_DSH_BIN NODUS_NODE""".split()
+    env = {key: os.environ[key] for key in base_keys if key in os.environ}
     for name in spec.secrets:
         value = secrets.get(name)
         if value:
@@ -221,6 +222,7 @@ def argv(
     model: str | None = None,
     session_mode: str = "resume",
     prompt: str = "",
+    readonly: bool = False,
 ) -> list[str]:
     """Build the command line for one attempt.
 
@@ -231,6 +233,11 @@ def argv(
     others read it from stdin and would see a stray argument.
     """
     cmd = list(spec.command)
+    if readonly and spec.vendor == "codex":
+        cmd = [arg for arg in cmd if arg != "--dangerously-bypass-approvals-and-sandbox"]
+        cmd += ["--sandbox", "read-only"]
+    elif readonly and spec.vendor == "claude":
+        cmd[cmd.index("--permission-mode") + 1] = "plan"
     chosen = model or provider.model
     if chosen:
         if spec.vendor == "codex":

@@ -45,7 +45,7 @@ def test_schema_counts_and_ledger(home, monkeypatch):
     monkeypatch.setattr(board, "board_state", lambda *a: pytest.fail("full board called"))
     got = state.snapshot(now)
     assert set(got) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
-    assert got["version"] == "0.7.2"
+    assert got["version"] == "0.8.0"
     assert len(got["running"]) == 3
     assert set(got["running"][0]) == {"id", "task_id", "agent", "route", "started_at", "cwd"}
     assert got["counts"] == {"running": 1, "queued": 1, "needs_you": 0, "unverifiable": 1,
@@ -122,7 +122,7 @@ def test_http_auth_errors_and_p95(home, mcp_http, capsys):
     elapsed = []
     for _ in range(20):
         start = time.perf_counter()
-        assert request(mcp_http, token=token)["version"] == "0.7.2"
+        assert request(mcp_http, token=token)["version"] == "0.8.0"
         elapsed.append((time.perf_counter()-start)*1000)
     p95 = sorted(elapsed)[math.ceil(len(elapsed)*.95)-1]
     with capsys.disabled():

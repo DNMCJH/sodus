@@ -11,6 +11,7 @@ import pytest
 from nodus import config, db, mcp
 
 EXPECTED_TOOLS = {
+    "nodus_handoff_show", "nodus_handoff_list", "nodus_handoff_check",
     "sodus_ask", "sodus_ask_status", "nodus_ask", "nodus_ask_status",
     "nodus_task_create",
     "nodus_run",
@@ -98,7 +99,7 @@ def test_tools_list_returns_every_tool(home):
     reply = call("tools/list")
     tools = reply["result"]["tools"]
     assert {item["name"] for item in tools} == EXPECTED_TOOLS
-    assert len(tools) == 11
+    assert len(tools) == 14
 
 
 def test_every_tool_has_an_object_input_schema(home):

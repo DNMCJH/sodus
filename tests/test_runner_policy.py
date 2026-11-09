@@ -60,7 +60,7 @@ def stub(monkeypatch):
 
     def fake_attempt(
         self, rid, index, spec, provider, workdir, secrets, profile_name,
-        prompt, effort, model, session_id, session_mode,
+        prompt, effort, model, session_id, session_mode, readonly=False,
     ):
         stamp = time.time()
         return {
@@ -216,3 +216,16 @@ def test_cli_run_sends_auto_to_the_daemon(monkeypatch):
     args = build_parser().parse_args(["run", "task-test", "--route", "auto"])
     assert tasks_cmd.run(args) == 0
     assert sent["route"] == "auto"
+
+
+def test_runner_passes_readonly_to_attempt(home, stub, tmp_path, monkeypatch):
+    original = runner.Runner._attempt
+    seen = []
+    def attempt(self, *args, **kwargs):
+        seen.append(kwargs.get('readonly'))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(runner.Runner, '_attempt', attempt)
+    task = db.create_task('readonly planning')
+    run = runner.RUNNER.start(task['id'], 'codex', cwd=str(tmp_path), readonly=True, kind='plan')
+    assert runner.RUNNER.wait(run['id'], timeout=10)['status'] == 'completed'
+    assert seen == [True]

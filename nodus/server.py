@@ -285,6 +285,18 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path in ('/handoff', '/handoffs', '/handoff/check'):
+            from . import handoff
+            try:
+                if path == '/handoffs':
+                    result = handoff.list_projects(remote=True)
+                else:
+                    cwd = (qs.get('cwd') or [None])[0]
+                    result = (handoff.check if path.endswith('/check') else handoff.show)(cwd, remote=True)
+                return _json(self, 200, result)
+            except (ValueError, OSError) as exc:
+                return _json(self, 403, {'error': str(exc)})
+
         if path.startswith('/plans/') and len(path.split('/')) == 3:
             from . import plan
             row = plan.get_plan(path.split('/')[2])
@@ -352,6 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "version": config.VERSION,
+                    "pid": os.getpid(),
                     "profile": config.active_profile(),
                     "home": config.home_id(),
                 },
@@ -549,6 +562,9 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self) -> None:
         if not self._authorized():
             return _json(self, 401, {"error": "unauthorized"})
+        path = urlparse(self.path).path.rstrip("/")
+        if path.startswith('/plans/') and len(path.split('/')) == 4 and path.endswith('/approve'):
+            return _json(self, 403, {"error": "approve_requires_cli"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -583,11 +599,8 @@ class Handler(BaseHTTPRequestHandler):
                 if action == 'review':
                     row = plan.review(pid)
                     return _json(self, 202, row)
-                elif action == 'approve':
-                    row = plan.approve(pid, body.get('by'))
                 else:
                     return _json(self, 404, {'error': 'not_found'})
-                return _json(self, 200, row)
             except KeyError:
                 return _json(self, 404, {'error': 'not_found'})
             except (ValueError, TypeError, OSError) as exc:

@@ -186,6 +186,12 @@ for _name, _description, _properties, _required in (
 
 # ---- argument parsing --------------------------------------------------
 
+for _name in ('show', 'list', 'check'):
+    TOOLS.append({'name': 'nodus_handoff_' + _name,
+                  'description': '只读项目接力控制台：' + _name + '；不修改文件。',
+                  'annotations': {'readOnlyHint': True},
+                  'inputSchema': _schema({} if _name == 'list' else {'cwd': {'type': 'string'}})})
+
 
 def _arguments(value: Any) -> dict:
     if value is None:
@@ -366,6 +372,17 @@ _HANDLERS: dict[str, Callable[[dict], dict]] = {
     "nodus_memory_remember": _memory_remember,
     "nodus_memory_candidates": _memory_candidates,
 }
+
+
+def _handoff_read(args, action):
+    cwd = _string(args, 'cwd', required=False) if action != 'list' else ''
+    _no_extra(args)
+    path = '/handoffs' if action == 'list' else '/handoff' + ('/check' if action == 'check' else '')
+    return _http('GET', path + ('?' + urlencode({'cwd': cwd}) if cwd else ''))
+
+
+for _action in ('show', 'list', 'check'):
+    _HANDLERS['nodus_handoff_' + _action] = lambda args, action=_action: _handoff_read(args, action)
 
 
 # ---- MCP result helpers ------------------------------------------------

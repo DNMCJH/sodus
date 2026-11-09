@@ -72,6 +72,9 @@ def test_public_endpoints_opt_out_of_auth(spec):
 
 def test_contract_covers_every_route_server_serves(spec):
     expected = {
+        ("get", "/handoff"),
+        ("get", "/handoffs"),
+        ("get", "/handoff/check"),
         ("get", "/"),
         ("get", "/health"),
         ("get", "/pet"),
@@ -187,5 +190,7 @@ def test_state_contract_is_authenticated_and_structured(spec):
 def test_plan_contract(spec):
     assert spec['paths']['/plan']['post']['responses'].get('202')
     approve = spec['paths']['/plans/{id}/approve']['post']
-    assert approve['requestBody']['content']['application/json']['schema']['properties']['by']['const'] == 'human'
+    assert approve['deprecated'] is True
+    assert set(approve['responses']) == {'403', '401'}
+    assert approve['responses']['403']['content']['application/json']['schema']['properties']['error']['const'] == 'approve_requires_cli'
     assert spec['components']['schemas']['PlanExecution']['properties']['review_json']['properties']['verdict']['enum'] == ['approve', 'revise', 'reject']

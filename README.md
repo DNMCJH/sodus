@@ -830,3 +830,8 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 2. **能自愈的不找人**：进程退出、超时、网络抖动由 `recover` 自动重试（上限 2 次），只有耗尽或无法归类才进「需要你决定」。
 3. **一个配置键只有一个写者**：同一目录同一时间只有一个 run 能写（写锁），别的会被拒绝并告诉你谁占着。
 
+项目接力控制台：`sodus handoff init` 创建项目根 `HANDOFF.md`，用
+`show/append/sync/check/list` 查看、维护、同步机器段和校验快照；人工段落由人维护。
+CLI 无需启动 daemon，HTTP/MCP 仅提供鉴权后的只读查看、列表和校验。
+配置和命令详见 [CLI 文档](docs/cli.md)，工具详见 [MCP 文档](docs/mcp.md)。
+
