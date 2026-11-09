@@ -1,6 +1,6 @@
 # Nodus 架构
 
-> 版本 0.8.0（主干）· 2026-11-09 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
+> 版本 0.8.1（主干）· 2026-11-10 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
 > 2026-11-03 校准：补齐 0.4.0 之后进主干的模块（observe / ledger / usage / telemetry / budget / policy /
 > recover / memory / lineage / bench / llm / jobs / harness_status / lifecycle），把已实现的 ADR 标出来，
 > 第 7 节改成真实现状。同一天新增 `nodus/lifecycle.py`（状态机，只定义不迁移调用方）和
@@ -408,3 +408,41 @@ It never calls full `board_state`, git, evidence rendering or harness probes.
 entry; `nodus/ui.py` retains the unchanged page template. `/board` and Python
 `server.board_state` keep their existing response keys, and existing pet/statuslight
 readers keep their behavior. HTTP routing, authentication and SSE stay in server.
+
+
+### 项目 handoff 控制台迁移与检查
+
+`nodus.handoff` 只通过显式本地命令写入项目控制台。已有人工 HANDOFF.md
+首次执行 `sodus handoff sync` 时，若完全没有 auto 标记，先建立同目录 `.bak-*`
+原始备份，再在 `## 实时状态` 后插入机器段；缺节时在文件末尾追加并向 stderr 提示。
+单边、逆序、重复标记一律拒绝。临时文件 fsync + replace 保证写入失败不破坏原文件，
+人工段字节和 CRLF 保留；已有完整标记时只替换机器段。
+
+`check` 输出 errors/warnings，ok 和 CLI 退出码只看 errors。HEAD 漂移是 warning，
+因此提交控制台后正常产生的新 HEAD 不阻断检查；无自动段提示 auto_block_missing
+warning 和 sync 迁移，不推断 daemon 故障。缺文件、异常标记、snapshot 无效或过期
+（默认 7 天）、关键路径缺失、已有自动段时 daemon 不可用及版本不一致仍是 error。
+
+HTTP POST 在认证拒绝之前先读取长度受限的请求体，避免未读 JSON 污染持久连接的
+下一个请求，以及 Windows 客户端仍在发送 body 时连接关闭的竞争；非法长度或超限则关闭连接。
+断连识别只处理既有网络断连类型，其他产品异常仍保留错误日志。
+
+### Approved plan execution (0.8.1)
+
+Schema v8 adds plan_node.run_id and plan_execution.feedback. Materialization claims
+an approved plan as materializing, creates tasks in topological order, and records
+task ids for idempotence. The daemon serializes local materialization and uses a
+SQLite conditional state update to exclude concurrent execution across callers.
+Execution claims executing before returning HTTP 202, checks the machine daily/
+soft/family budget before every node, then starts a work run with verify_run=True
+in the plan cwd (route_hint first, explicit fallback route second). Completed runs
+mark nodes done. Any start/wait/budget failure marks the active node and plan failed
+and leaves remaining nodes unstarted. Plan errors retain the failing node and reason;
+run ids retain detailed run evidence. A completed run is the execution criterion;
+it does not by itself certify a passing verification verdict.
+Daemon startup reconciles orphaned planning/executing/materializing plans to failed,
+retaining tasks, run ids and completed nodes; it never automatically resumes work.
+POST /plans/{id}/execute and /replan inherit bearer authentication and worker depth
+protection. Replan persists parent_id, version+1 and feedback, uses the configured
+opus planner and existing validation collector, and never copies prior approval.
+Failure recovery is an explicit replan/review/approval cycle, not implicit retry.

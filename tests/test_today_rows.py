@@ -27,6 +27,18 @@ def _run(task, minutes_ago: float, usage_obj: dict, *, status: str = "completed"
     return run
 
 
+def _run_at(task, started: float, usage_obj: dict, *, status: str = "completed"):
+    run = db.create_run(task["id"], "claude", "")
+    db.update_run(
+        run["id"],
+        status=status,
+        started_at=started,
+        ended_at=started + 5 if status != "running" else None,
+        usage_json=json.dumps(usage_obj),
+    )
+    return run
+
+
 def _task(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
     return db.create_task("demo", "pytest green")
@@ -56,9 +68,10 @@ def test_live_window_keeps_a_run_in_flight_before_the_window(tmp_path, monkeypat
 def test_board_cli_and_ceiling_read_one_row_set(tmp_path, monkeypatch):
     task = _task(tmp_path, monkeypatch)
     now = time.time()
-    _run(task, 5, {"cost": 1.0, "currency": "CNY"})
-    _run(task, 15, {"cost": 0.5})  # no recorded currency
-    _run(task, 60 * 30, {"cost": 9.0, "currency": "CNY"})  # yesterday
+    base = max(now, budget.day_start(now) + 120)
+    _run_at(task, base, {"cost": 1.0, "currency": "CNY"})
+    _run_at(task, base + 15, {"cost": 0.5})  # no recorded currency
+    _run_at(task, base - 86400, {"cost": 9.0, "currency": "CNY"})  # yesterday
 
     start = budget.day_start(now)
     rows = db.runs_in_window(start)

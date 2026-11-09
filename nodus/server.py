@@ -560,21 +560,27 @@ class Handler(BaseHTTPRequestHandler):
         return _json(self, 404, {"error": "not found"})
 
     def _post(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            return _json(self, 400, {"error": "invalid content-length"})
+        if not body_allowed(length):
+            self.close_connection = True
+            return _json(self, 413, {"error": "body too large"})
+        # Consume the bounded body before early rejection. Otherwise HTTP/1.1
+        # sees leftover JSON as the next request, and Windows can abort the
+        # client's still-in-progress body send when the connection closes.
+        raw_body = self.rfile.read(length) if length else b''
         if not self._authorized():
             return _json(self, 401, {"error": "unauthorized"})
         path = urlparse(self.path).path.rstrip("/")
         if path.startswith('/plans/') and len(path.split('/')) == 4 and path.endswith('/approve'):
             return _json(self, 403, {"error": "approve_requires_cli"})
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            return _json(self, 400, {"error": "invalid content-length"})
-        if not body_allowed(length):
-            return _json(self, 413, {"error": "body too large"})
         u = urlparse(self.path)
         path = u.path.rstrip("/") or "/"
         try:
-            body = self._body()
+            body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         except json.JSONDecodeError:
             return _json(self, 400, {"error": "invalid json"})
 
@@ -596,6 +602,10 @@ class Handler(BaseHTTPRequestHandler):
                                       body.get('acceptance', ''), body.get('route'), wait=False)
                     return _json(self, 202, {**row, 'plan_id': row['id']})
                 pid, action = path.split('/')[2:]
+                if action == 'execute':
+                    return _json(self, 202, plan.execute(pid, route=body.get('route'), wait=False))
+                if action == 'replan':
+                    return _json(self, 202, plan.replan(pid, body.get('feedback')))
                 if action == 'review':
                     row = plan.review(pid)
                     return _json(self, 202, row)

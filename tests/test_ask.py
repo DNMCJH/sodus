@@ -223,3 +223,19 @@ def test_status_asks_line(monkeypatch, capsys):
     monkeypatch.setattr(system.budget, 'check', lambda: {'limit': 0})
     assert system.status(None) == 0
     assert 'asks active    open=1 running=2 done=2 failed=1' in capsys.readouterr().out
+
+
+def test_unauthorized_post_consumes_body_before_next_request(mcp_http):
+    from http.client import HTTPConnection
+    connection = HTTPConnection('127.0.0.1', mcp_http.server_port, timeout=5)
+    try:
+        connection.request('POST', '/ask', body=b'{"text":"unauthorized"}')
+        response = connection.getresponse()
+        assert response.status == 401
+        assert json.loads(response.read()) == {'error': 'unauthorized'}
+        connection.request('GET', '/asks', headers={'Authorization': 'Bearer ' + config.token()})
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == []
+    finally:
+        connection.close()

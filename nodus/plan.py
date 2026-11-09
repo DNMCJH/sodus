@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import time
+import threading
 import shutil, tempfile
 import hashlib, json, logging, math, os, re, shlex, subprocess
 from pathlib import PureWindowsPath
@@ -261,7 +262,7 @@ def import_plan(value, cwd="."):
         c.execute('INSERT INTO plan_execution(plan_id,cwd) VALUES(?,?)', (pid, str(Path(cwd).resolve())))
         for n in plan["nodes"]:
             c.execute(
-                "INSERT INTO plan_node VALUES(?,?,?,?,?)",
+                "INSERT INTO plan_node(plan_id,node_id,title,status,task_id) VALUES(?,?,?,?,?)",
                 (pid, n["id"], n.get("title", ""), "pending", None),
             )
     return pid
@@ -458,7 +459,7 @@ def _finish_create(pid):
             c.execute('UPDATE plan SET status=?,base_sha=?,plan_json=?,hash=?,errors_json=?,validated_at=? WHERE id=?',
                       ('validated', value['base_sha'], raw, hashlib.sha256(raw.encode()).hexdigest(), json.dumps(warnings), db.now(), pid))
             for n in value['nodes']:
-                c.execute('INSERT INTO plan_node VALUES(?,?,?,?,?)', (pid, n['id'], n['title'], 'pending', None))
+                c.execute('INSERT INTO plan_node(plan_id,node_id,title,status,task_id) VALUES(?,?,?,?,?)', (pid, n['id'], n['title'], 'pending', None))
     except Exception as exc:
         logging.getLogger(__name__).exception('plan background completion failed: %s', pid)
         _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
@@ -470,7 +471,6 @@ def _finish_create(pid):
 
 def create(goal, cwd='.', acceptance='', route=None, wait=True):
     """Start a fresh, retryable plan attempt; return its persisted view."""
-    import threading
     if not isinstance(goal, str) or not goal.strip():
         raise ValueError('goal required')
     if not isinstance(acceptance, str) or (route is not None and not isinstance(route, str)):
@@ -506,7 +506,6 @@ def create(goal, cwd='.', acceptance='', route=None, wait=True):
 
 def review(plan_id):
     """Launch review asynchronously and return the reviewing plan immediately."""
-    import threading
     row = get_plan(plan_id)
     if row is None:
         raise KeyError(plan_id)
@@ -568,12 +567,144 @@ def approve(plan_id, by):
 
 
 def reconcile():
-    """Startup owns no previous planning collector, even if its run survived."""
+    """Fail orphaned collectors on startup; never resume approved work implicitly."""
     failed = []
     with _connect_meta() as c:
-        rows = c.execute("SELECT id FROM plan WHERE status='planning'").fetchall()
+        rows = c.execute("SELECT id FROM plan WHERE status IN ('planning','executing','materializing')").fetchall()
         for row in rows:
-            errors = json.dumps([dict(kind='planner', message='daemon restarted; orphaned planning collector')])
-            c.execute("UPDATE plan SET status='failed',errors_json=? WHERE id=? AND status='planning'", (errors, row['id']))
+            errors = json.dumps([dict(kind='planner', message='daemon restarted; orphaned plan collector; completed nodes preserved')])
+            c.execute("UPDATE plan SET status='failed',errors_json=? WHERE id=? AND status IN ('planning','executing','materializing')", (errors, row['id']))
+            c.execute("UPDATE plan_node SET status='failed' WHERE plan_id=? AND status='running'", (row['id'],))
             failed.append(row['id'])
     return failed
+
+
+def _ordered_nodes(row):
+    pending = list(row['plan_json']['nodes'])
+    ordered, seen = [], set()
+    while pending:
+        ready = [n for n in pending if set(n['deps']) <= seen]
+        if not ready:
+            raise ValueError('invalid plan DAG')
+        for node in ready:
+            ordered.append(node)
+            seen.add(node['id'])
+            pending.remove(node)
+    return ordered
+
+
+# Serializes materialization within this daemon; execution also uses a DB CAS
+# so independent callers cannot both claim the same approved plan.
+_materialize_lock = threading.RLock()
+
+
+def materialize(plan_id):
+    with _materialize_lock:
+        row = get_plan(plan_id)
+        if row is None:
+            raise KeyError(plan_id)
+        if row['status'] != 'approved':
+            raise ValueError('execution requires a human-approved plan')
+        # Claim before creating tasks, including across daemon processes.
+        with db.connect() as c:
+            claimed = c.execute("UPDATE plan SET status='materializing' WHERE id=? AND status='approved'", (plan_id,)).rowcount
+        if not claimed:
+            raise ValueError('plan is already being materialized or executed')
+        try:
+            session = None
+            for node in _ordered_nodes(row):
+                stored = next(n for n in row['nodes'] if n['node_id'] == node['id'])
+                if stored['task_id']:
+                    continue
+                if session is None:
+                    session = db.create_session(row['cwd'])['id']
+                task = db.create_task(
+                    row['plan_json']['goal'] + '\n' + node['description'] +
+                    '\nFile scope: ' + ', '.join(node['file_scope']),
+                    acceptance='\n'.join(node['acceptance']), title=node['title'], session_id=session)
+                with db.connect() as c:
+                    c.execute("UPDATE plan_node SET task_id=?,status='materialized' WHERE plan_id=? AND node_id=?",
+                              (task['id'], plan_id, node['id']))
+        finally:
+            _update(plan_id, status='approved')
+        return get_plan(plan_id)
+
+
+def execute(plan_id, route=None, wait=True):
+    if route is not None and (not isinstance(route, str) or not route.strip()):
+        raise ValueError('invalid route')
+    with _materialize_lock:
+        row = materialize(plan_id)
+        with db.connect() as c:
+            claimed = c.execute("UPDATE plan SET status='executing',errors_json='[]' WHERE id=? AND status='approved'", (plan_id,)).rowcount
+        if not claimed:
+            raise ValueError('plan is already executing')
+    snapshot = get_plan(plan_id)
+    try:
+        if wait:
+            _execute_nodes(plan_id, route)
+            return get_plan(plan_id)
+        threading.Thread(target=_execute_nodes, args=(plan_id, route), daemon=True).start()
+    except Exception:
+        _update(plan_id, status='failed')
+        raise
+    return snapshot
+
+
+def _execute_nodes(plan_id, route):
+    from . import runner, budget
+    active = None
+    try:
+        row = get_plan(plan_id)
+        stored = {n['node_id']: n for n in row['nodes']}
+        for node in _ordered_nodes(row):
+            active = node['id']
+            chosen = node.get('route_hint') or route
+            info = budget.check(route=chosen or '')
+            if info['over'] or info['gated']:
+                raise ValueError(budget.blocked_message(info))
+            run = runner.RUNNER.start(stored[active]['task_id'], route_name=chosen,
+                                      cwd=row['cwd'], kind='work', verify_run=True)
+            with db.connect() as c:
+                c.execute("UPDATE plan_node SET run_id=?,status='running' WHERE plan_id=? AND node_id=?",
+                          (run['id'], plan_id, active))
+            while True:
+                result = runner.RUNNER.wait(run['id'], timeout=1, poll=0.1)
+                if result['status'] not in ('queued', 'running'):
+                    break
+            if result['status'] != 'completed':
+                raise ValueError(result.get('error') or 'node run ' + result['status'])
+            with db.connect() as c:
+                c.execute("UPDATE plan_node SET status='done' WHERE plan_id=? AND node_id=?", (plan_id, active))
+        _update(plan_id, status='done')
+    except Exception as exc:
+        with db.connect() as c:
+            if active:
+                c.execute("UPDATE plan_node SET status='failed' WHERE plan_id=? AND node_id=?", (plan_id, active))
+        _update(plan_id, status='failed', errors_json=json.dumps([dict(kind='execution', node_id=active, message=str(exc))]))
+
+
+def replan(plan_id, feedback):
+    old = get_plan(plan_id)
+    if old is None:
+        raise KeyError(plan_id)
+    if not isinstance(feedback, str) or not feedback.strip():
+        raise ValueError('feedback required')
+    pid = db.new_id('plan')
+    with db.connect() as c:
+        c.execute('INSERT INTO plan(id,workspace_id,version,parent_id,status,plan_json,errors_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                  (pid, config.workspace_id(), old['version'] + 1, plan_id, 'planning', '{}', '[]', db.now()))
+        c.execute('INSERT INTO plan_execution(plan_id,cwd,feedback) VALUES(?,?,?)', (pid, old['cwd'], feedback))
+    try:
+        prompt = ('Read-only replanning. Do not write files or execute acceptance. Reinspect repository HEAD and AGENTS.md. '
+                  'Return only one JSON object matching this contract:\n' + _plan_contract() +
+                  '\nPrevious plan:\n' + json.dumps(old['plan_json'], ensure_ascii=False) + '\nFeedback:\n' + feedback)
+        run = _start_planner_run(prompt, old['cwd'], config.planner_route())
+        with db.connect() as c:
+            c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', (run['id'], pid))
+        snapshot = get_plan(pid)
+        threading.Thread(target=_finish_create, args=(pid,), daemon=True).start()
+        return snapshot
+    except Exception as exc:
+        _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
+        return get_plan(pid)

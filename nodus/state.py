@@ -53,7 +53,7 @@ def snapshot(now=None):
     spend = sum(1 for r in runs if r["status"] == "failed" and recover.classify(r) != "deterministic"
                 and recover.enabled() and recover.retry_plan(r, now=now)["gate"] in board.SPEND_GATES)
     unverifiable = int(any(r["status"] == "completed" and states.get(r["id"], "none") == "none" for r in runs))
-    return {"version": "0.8.0", "workspace_id": workspace, "now": now,
+    return {"version": "0.8.1", "workspace_id": workspace, "now": now,
             "running": live, "counts": {"running": statuses.get("running", 0), "queued": statuses.get("queued", 0),
             "needs_you": min(proposals, 50) + spend, "unverifiable": unverifiable, "proposals": proposals,
             "asks_open": asks["open"], "memory_candidates": candidates},

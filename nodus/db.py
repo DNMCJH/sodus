@@ -262,7 +262,15 @@ def _migrate_v7(conn: sqlite3.Connection) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS plan_execution (plan_id TEXT PRIMARY KEY REFERENCES plan(id), cwd TEXT NOT NULL, run_id TEXT, review_run_id TEXT, review_json TEXT)""")
 
 
-_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5), (6, _migrate_v6), (7, _migrate_v7))
+def _migrate_v8(conn: sqlite3.Connection) -> None:
+    if 'run_id' not in {r[1] for r in conn.execute('PRAGMA table_info(plan_node)')}:
+        conn.execute("ALTER TABLE plan_node ADD COLUMN run_id TEXT")
+
+    if "feedback" not in {r[1] for r in conn.execute("PRAGMA table_info(plan_execution)")}:
+        conn.execute("ALTER TABLE plan_execution ADD COLUMN feedback TEXT")
+
+
+_MIGRATIONS = ((2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5), (6, _migrate_v6), (7, _migrate_v7), (8, _migrate_v8))
 
 
 SCHEMA_VERSION = max(version for version, _ in _MIGRATIONS)

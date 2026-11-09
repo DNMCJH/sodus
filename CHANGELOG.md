@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.8.1 — Plan execution
+
+- Schema v8: node run evidence and persisted replan feedback, with v7 migration.
+- Approved plans materialize idempotent tasks and execute a serial DAG with budget
+  gates, failure stop, concurrent execution protection and daemon restart reconcile.
+- Add daemon HTTP and CLI plan execute/replan; replanning creates a new parent-linked
+  version through the opus planner and requires fresh review and human approval.
+
 ## 0.8.0（2026-11-09）
 
 交接台与无人值守安全边界：
@@ -98,3 +106,4 @@
 - MCP 工具名仍是 `nodus_*`，`serverInfo.name` 之外没有任何协议变化。
 - 默认状态目录仍是 `~/.nodus`；只有手动跑 `migrate-home --apply` 之后 `sodus` 才会自动读 `~/.sodus`。
 - 托盘 / 桌宠 / MCP 客户端配置不需要改。
+
