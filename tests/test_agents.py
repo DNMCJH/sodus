@@ -251,3 +251,28 @@ def test_cmd_shim_flattens_a_multi_line_prompt(monkeypatch):
     assert argv[:3] == ["cmd.exe", "/c", r"C:\npm\opencode.cmd"]
     assert all("\n" not in part and "\r" not in part for part in argv)
     assert "写 hello.py" in argv[-1]
+
+
+def test_worker_env_allowlist(monkeypatch):
+    monkeypatch.setenv("SECRET_LEAK", "private")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "daemon-key")
+    monkeypatch.setenv("PATH", "worker-path")
+    for spec in agents.SPECS.values():
+        env = agents.build_env(spec, _provider(), {"RELAY_API_KEY": "provider-key"})
+        assert "SECRET_LEAK" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["ANTHROPIC_AUTH_TOKEN"] == "provider-key"
+        assert env["PATH"] == "worker-path"
+        assert env["NODUS_ROLE"] == "worker"
+
+
+def test_readonly_argv(monkeypatch):
+    monkeypatch.setattr(agents.shutil, "which", lambda _: None)
+    for name, flag, value, unsafe in [
+        ("codex", "--sandbox", "read-only", "--dangerously-bypass-approvals-and-sandbox"),
+        ("claude", "--permission-mode", "plan", "bypassPermissions"),
+    ]:
+        cmd = agents.argv(agents.SPECS[name], _provider(), readonly=True)
+        assert cmd[cmd.index(flag) + 1] == value
+        assert unsafe not in cmd
+        assert unsafe in agents.argv(agents.SPECS[name], _provider())

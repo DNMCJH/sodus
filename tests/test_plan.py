@@ -574,3 +574,80 @@ def test_review_timeout_stops_and_finishes(valid, monkeypatch):
     assert stopped == [run['id']]
     assert plan.get_plan(pid)['status'] == 'review_failed'
     assert db.get_run(run['id'])['status'] == 'failed'
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_planner_isolation_cleanup(valid, monkeypatch, failure):
+    from nodus import runner
+    value, repo = valid
+    before = subprocess.run(['git', 'status', '--porcelain'], cwd=repo, capture_output=True).stdout
+    seen = []
+    def start(task_id, **kwargs):
+        isolated = Path(kwargs['cwd'])
+        seen.append(isolated)
+        assert isolated.resolve() != repo.resolve()
+        assert kwargs['readonly'] is True
+        (isolated / 'worker-write.txt').write_text('isolated')
+        if failure:
+            raise RuntimeError('start failed')
+        db.append_event('isolated-test', 1, 'message', {'text': json.dumps(value)})
+        return {'id': 'isolated-test'}
+    monkeypatch.setattr(runner.RUNNER, 'start', start)
+    monkeypatch.setattr(runner.RUNNER, 'wait', lambda *a, **kw: {'status': 'completed'})
+    row = plan.create('isolation', repo)
+    assert row['status'] == ('failed' if failure else 'validated')
+    assert seen and not seen[0].exists()
+    assert not (repo / 'worker-write.txt').exists()
+    assert subprocess.run(['git', 'status', '--porcelain'], cwd=repo, capture_output=True).stdout == before
+    assert str(seen[0]) not in subprocess.run(['git', 'worktree', 'list'], cwd=repo, capture_output=True, text=True).stdout
+
+
+def test_planner_copy_filter(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'keep.txt').write_text('before')
+    for name in ('.venv', 'node_modules', 'cache', 'checkpoints'):
+        (source / name).mkdir()
+        (source / name / 'secret').write_text('excluded')
+    cwd, cleanup = plan._isolated_cwd(str(source))
+    try:
+        copied = Path(cwd)
+        assert (copied / 'keep.txt').read_text() == 'before'
+        assert not any((copied / n).exists() for n in ('.venv', 'node_modules', 'cache', 'checkpoints'))
+        (copied / 'keep.txt').write_text('changed')
+        assert (source / 'keep.txt').read_text() == 'before'
+    finally:
+        cleanup()
+    assert not Path(cwd).exists()
+
+
+def test_isolation_fallback_warning(valid, monkeypatch, caplog):
+    from nodus import runner
+    _, repo = valid
+    def fail(*a):
+        raise OSError('isolation unavailable')
+    monkeypatch.setattr(plan, '_isolated_cwd', fail)
+    seen = []
+    monkeypatch.setattr(runner.RUNNER, 'start', lambda *a, **kw: seen.append(kw) or {'id': 'fallback'})
+    plan._start_planner_run('test', str(repo), 'sol')
+    assert seen[0]['cwd'] == str(repo) and seen[0]['readonly']
+    assert 'falling back to original cwd' in caplog.text
+
+
+@pytest.mark.parametrize('kind', ['plan', 'plan_review'])
+def test_failed_collector_cleans_workspace(valid, monkeypatch, kind):
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    isolated, cleanup = plan._isolated_cwd(str(repo))
+    plan._planner_workspaces['collector-failed'] = cleanup
+    with db.connect() as c:
+        c.execute('UPDATE plan_execution SET run_id=? WHERE plan_id=?', ('collector-failed', pid))
+    def fail(*a, **kw):
+        raise TimeoutError('fake deadline')
+    monkeypatch.setattr(plan, '_wait_run', fail)
+    if kind == 'plan':
+        plan._finish_create(pid)
+    else:
+        plan._finish_review(pid, 'collector-failed')
+    assert not Path(isolated).exists()
+    assert 'collector-failed' not in plan._planner_workspaces

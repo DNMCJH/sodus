@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import time
+import shutil, tempfile
 import hashlib, json, logging, math, os, re, shlex, subprocess
 from pathlib import PureWindowsPath
 from pathlib import Path
@@ -325,12 +326,75 @@ def _update(pid, **fields):
                   (*fields.values(), pid))
 
 
+_planner_workspaces = {}
+
+
+def _isolated_cwd(cwd):
+    root = Path(tempfile.mkdtemp(prefix='sodus-plan-'))
+    target = root / 'workspace'
+    git = False
+
+    def cleanup():
+        try:
+            if git:
+                subprocess.run(['git', 'worktree', 'remove', '--force', str(target)],
+                    cwd=cwd, capture_output=True, timeout=30, creationflags=config.NO_WINDOW)
+        finally:
+            shutil.rmtree(root)
+
+    try:
+        probe = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd,
+            capture_output=True, text=True, timeout=10, creationflags=config.NO_WINDOW)
+        if probe.returncode == 0:
+            git = True
+            subprocess.run(['git', 'worktree', 'add', '--detach', str(target), 'HEAD'],
+                cwd=cwd, capture_output=True, check=True, timeout=60, creationflags=config.NO_WINDOW)
+            relative = Path(cwd).resolve().relative_to(Path(probe.stdout.strip()).resolve())
+            workdir = target / relative
+        else:
+            shutil.copytree(cwd, target, ignore=lambda directory, names: [
+                name for name in names if name in {
+                    '.git', '.venv', 'venv', 'node_modules', '__pycache__',
+                    '.pytest_cache', '.mypy_cache', '.ruff_cache', 'cache',
+                    '.cache', 'checkpoints'} or (Path(directory) / name).is_symlink()])
+            workdir = target
+        return str(workdir), cleanup
+    except Exception:
+        cleanup()
+        raise
+
+
+def _cleanup_planner(rid):
+    cleanup = _planner_workspaces.pop(rid, None)
+    if cleanup:
+        try:
+            cleanup()
+        except Exception:
+            logging.getLogger(__name__).exception('planner workspace cleanup failed: %s', rid)
+
+
 def _start_planner_run(prompt, cwd, route, kind='plan'):
     from . import runner
-    task = db.create_task(prompt)
-    return runner.RUNNER.start(task['id'], route_name=route, cwd=cwd, kind=kind,
-        note='plan-only, do not write files', verify_run=False,
-        include_handoff=False, include_memory=False)
+    cleanup = None
+    try:
+        isolated, cleanup = _isolated_cwd(cwd)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            'planner isolation failed; falling back to original cwd, readonly is not guaranteed: %s', cwd,
+            exc_info=True)
+        isolated = cwd
+    try:
+        task = db.create_task(prompt)
+        run = runner.RUNNER.start(task['id'], route_name=route, cwd=isolated, kind=kind,
+            note='plan-only, do not write files', verify_run=False, readonly=True,
+            include_handoff=False, include_memory=False)
+        if cleanup:
+            _planner_workspaces[run['id']] = cleanup
+        return run
+    except Exception:
+        if cleanup:
+            cleanup()
+        raise
 
 
 def _extract_json(rid):
@@ -370,6 +434,7 @@ def _wait_run(rid, timeout=None):
 
 
 def _finish_create(pid):
+    row = None
     try:
         row = get_plan(pid)
         _wait_run(row['run_id'])
@@ -388,6 +453,10 @@ def _finish_create(pid):
     except Exception as exc:
         logging.getLogger(__name__).exception('plan background completion failed: %s', pid)
         _update(pid, status='failed', errors_json=json.dumps([dict(kind='planner', message=str(exc))]))
+
+    finally:
+        if row:
+            _cleanup_planner(row['run_id'])
 
 
 def create(goal, cwd='.', acceptance='', route=None, wait=True):
@@ -462,6 +531,9 @@ def _finish_review(plan_id, run_id):
     except Exception as exc:
         logging.getLogger(__name__).exception('plan review failed: %s', plan_id)
         _update(plan_id, status='review_failed', errors_json=json.dumps([dict(kind='review', message=str(exc))]))
+
+    finally:
+        _cleanup_planner(run_id)
 
 
 def approve(plan_id, by):
