@@ -285,6 +285,18 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
+        if path in ('/handoff', '/handoffs', '/handoff/check'):
+            from . import handoff
+            try:
+                if path == '/handoffs':
+                    result = handoff.list_projects(remote=True)
+                else:
+                    cwd = (qs.get('cwd') or [None])[0]
+                    result = (handoff.check if path.endswith('/check') else handoff.show)(cwd, remote=True)
+                return _json(self, 200, result)
+            except (ValueError, OSError) as exc:
+                return _json(self, 403, {'error': str(exc)})
+
         if path.startswith('/plans/') and len(path.split('/')) == 3:
             from . import plan
             row = plan.get_plan(path.split('/')[2])
@@ -352,6 +364,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "version": config.VERSION,
+                    "pid": os.getpid(),
                     "profile": config.active_profile(),
                     "home": config.home_id(),
                 },

@@ -47,6 +47,43 @@ tags:
   - name: memory
   - name: events
 paths:
+  /handoff:
+    get:
+      summary: Read the project handoff console (no writes)
+      parameters:
+        - in: query
+          name: cwd
+          schema: {type: string}
+          description: Existing directory resolving to current or task/run-known project root
+      responses:
+        "200":
+          description: path, project_root, exists, snapshot_at, recorded head and content
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Unknown project root or unsafe file path
+  /handoff/check:
+    get:
+      summary: Read-only handoff validation
+      parameters:
+        - in: query
+          name: cwd
+          schema: {type: string}
+      responses:
+        "200":
+          description: Metadata plus ok and errors (validation failures still return 200)
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Unknown project root or unsafe file path
+  /handoffs:
+    get:
+      summary: List current and task/run-known project handoff metadata without content
+      responses:
+        "200":
+          description: Array of project metadata and next actions
+        "401":
+          description: Missing or invalid bearer token
   /reconcile:
     post:
       summary: Reconcile runs owned by the daemon

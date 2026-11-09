@@ -2,13 +2,14 @@
 
 # Sodus CLI
 
-> 18 个顶层命令，`nodus --help` 一屏读完。低频命令和诊断命令收在 `nodus debug` 下，
+> 21 个顶层命令，`nodus --help` 一屏读完。低频命令和诊断命令收在 `nodus debug` 下，
 > 统计报表收在 `nodus stats` 下。旧名字都还能用（隐藏别名），只是不列在帮助里。
 
 ## 顶层命令
 
 | 命令 | 干什么 | 例子 |
 |---|---|---|
+| `handoff` | 项目接力控制台 | `sodus handoff show --json` |
 | `nodus up` | 后台起 daemon，关终端不断 | `nodus up` |
 | `nodus down` | 停掉本机 daemon | `nodus down` |
 | `nodus status` | 最近探针 + 今日用量 + 余额 | `nodus status` |
@@ -94,3 +95,34 @@ The default planner route is `opus`, configurable as `routing.planner` in config
 Planning/review request read-only behavior but do not enforce a filesystem sandbox.
 
 `mcp install` 默认包含 opencode；`--opencode-config PATH` 覆盖其配置路径，也支持 `OPENCODE_CONFIG` / `XDG_CONFIG_HOME`。详见 [MCP 文档](mcp.md)。
+
+## 项目接力控制台
+
+`sodus handoff` 无需启动 daemon；项目根优先取 git root，否则取 cwd。
+默认文件为根目录 `HANDOFF.md`；用户配置 `handoff.path` 可设相对项目根或绝对路径。
+
+```text
+sodus handoff init [--force]
+sodus handoff show [--json]
+sodus handoff append "完成阶段验收" [--section 最近变更]
+sodus handoff sync
+sodus handoff check [--json]
+sodus handoff list [--json]
+```
+
+`init` 默认拒绝覆盖；`append` 在已有二级标题节追加日期 bullet 并刷新
+`snapshot_at`。写文件采用临时文件 + replace。`sync` 仅替换
+`<!-- sodus:auto:start -->` 与 `<!-- sodus:auto:end -->` 之间的机器段，
+包含 HEAD/tag/分支、daemon 版本/pid、项目 task/run/plan 摘要及预算族上限；
+缺少或重复标记会拒绝执行，人工段和 snapshot 不变。
+
+`check` 检查文件、snapshot（默认 7 天，可配 `handoff.max_age_days`）、HEAD、
+“关键路径”节反引号中的路径和 daemon 版本；daemon 不可用也会报告失败，退出码 1。
+`sync/check` 仅尝试读取 daemon，不会自动启动。`list` 从当前 cwd 和现有 DB 的
+task/run cwd 去重，只输出元数据；DB 不可用时退回当前项目，不创建正文库或缓存。
+旧逐 run 交接仍为 `sodus debug handoff <run>`。
+
+HTTP 只读 `GET /handoff?cwd=...`、`GET /handoffs`、`GET /handoff/check?cwd=...`
+均需 bearer token；cwd 必须解析到当前或已有 task/run 的项目根。
+相对控制台路径禁止通过 symlink/上级路径逃到项目外；显式绝对配置路径由用户信任。
+不提供写端点、内容聚合或自动 hook。

@@ -72,6 +72,9 @@ def test_public_endpoints_opt_out_of_auth(spec):
 
 def test_contract_covers_every_route_server_serves(spec):
     expected = {
+        ("get", "/handoff"),
+        ("get", "/handoffs"),
+        ("get", "/handoff/check"),
         ("get", "/"),
         ("get", "/health"),
         ("get", "/pet"),

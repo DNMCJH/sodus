@@ -57,7 +57,7 @@ def test_every_advertised_command_has_a_handler():
     missing = [
         name
         for name, sub in subs.choices.items()
-        if name != "debug" and sub.get_default("func") is None
+        if name not in ("debug", "handoff") and sub.get_default("func") is None
     ]
     assert missing == []
     # Nothing was deleted, only moved: the old fifty plus stats and debug.
@@ -78,16 +78,16 @@ def test_help_flags_do_not_need_a_daemon():
 def test_top_level_help_lists_exactly_the_curated_names(capsys):
     text = _help(capsys, ["--help"])
     assert _listed_in_help(text) == list(TOP_LEVEL)
-    assert len(TOP_LEVEL) == 20
-    assert len(text.splitlines()) <= 31
-    for namespace in ("lineage", "reconcile", "triage", "handoff"):
+    assert len(TOP_LEVEL) == 21
+    assert len(text.splitlines()) <= 33
+    for namespace in ("lineage", "reconcile", "triage"):
         assert f"    {namespace} " not in text
 
 
 def test_hidden_aliases_still_parse_and_share_one_handler():
     parser = build_parser()
     subs = _subparsers(parser)
-    hidden = [*STATS_COMMANDS, *DEBUG_COMMANDS]
+    hidden = [*STATS_COMMANDS, *(n for n in DEBUG_COMMANDS if n != 'handoff')]
     assert sorted(hidden) == sorted(set(hidden))
     assert all(name in subs.choices for name in hidden)
     assert not set(hidden) & set(TOP_LEVEL)

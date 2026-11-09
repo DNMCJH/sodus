@@ -28,6 +28,13 @@ python -m nodus mcp        # 或装好之后：nodus mcp
 | `nodus_cost_today` | 无 | 今日（本地 0 点起）按 agent 分组的成本 |
 | `nodus_memory_remember` | `text`、`source`（可选） | daemon 写入项目 AGENTS.md 的事实，重复不追加 |
 | `nodus_memory_candidates` | `project`、`limit`（1–500）、`conflicts_only`（均可选） | 只读候选事实、来源与冲突；采纳仍由人决定 |
+| `nodus_handoff_show` | `cwd`（可选） | 只读项目控制台：path/project_root/exists/snapshot_at/head/content |
+| `nodus_handoff_list` | 无 | 只读已知项目元数据，无正文 |
+| `nodus_handoff_check` | `cwd`（可选） | 只读校验：ok/errors 与元数据 |
+
+当前共 14 个工具名（含 ask 别名）。handoff 工具仅通过带 token 的 daemon HTTP GET
+读取当前项目或 task/run 已知项目，不提供 init/append/sync 写工具；更新由人显式运行
+本地 `sodus handoff` CLI。check 的校验失败表现为 `ok: false`，越界/鉴权失败为工具错误。
 
 所有工具失败都返回 `isError: true` + 人类可读消息，不会让进程退出。协议层错误
 （坏 JSON、未知 method）仍然是 JSON-RPC error。
