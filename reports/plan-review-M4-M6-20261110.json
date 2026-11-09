@@ -1,0 +1,10 @@
+{
+  "plan_id": "plan-9d7318c01882",
+  "status": "reviewed",
+  "hash": "f8df4b2391edb8883119de1b89b1172320595f10e3ea862734683440bab8d3fa",
+  "review": {
+    "verdict": "approve",
+    "findings": []
+  },
+  "warnings": "[]"
+}
