@@ -694,3 +694,21 @@ def test_cli_approval_gate(valid, monkeypatch, capsys, stdin_tty, stdout_tty, ro
         summary = json.loads(captured.err.splitlines()[0])
         assert summary == dict(id=pid, status='reviewed', review_verdict='approve', plan_hash=before['hash'][:12])
         assert 'Type the plan id' in captured.err
+
+def test_extract_json_accepts_summary_before_object(monkeypatch):
+    from nodus import plan as plan_module
+    payloads = [
+        {'type': 'message', 'payload': {'role': 'assistant', 'text': '这是摘要，不是 JSON。\n\n{"ok": true, "nodes": []}'}},
+    ]
+    monkeypatch.setattr(plan_module.db, 'events_filtered', lambda rid, kinds: payloads)
+    assert plan_module._extract_json('run-test') == {'ok': True, 'nodes': []}
+
+
+def test_extract_json_accepts_fenced_block_with_summary(monkeypatch):
+    from nodus import plan as plan_module
+    payloads = [
+        {'type': 'message', 'payload': {'role': 'assistant', 'text': '说明\n```json\n{"ok": true}\n```'}},
+    ]
+    monkeypatch.setattr(plan_module.db, 'events_filtered', lambda rid, kinds: payloads)
+    assert plan_module._extract_json('run-test') == {'ok': True}
+
