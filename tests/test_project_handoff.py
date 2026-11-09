@@ -49,7 +49,8 @@ def test_sync_preserves_human_and_check_failures(project, monkeypatch):
     assert handoff.sync()['content'] == after
     subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
                     'commit', '--allow-empty', '-m', 'drift'], check=True, capture_output=True)
-    assert 'head_mismatch' in handoff.check()['errors']
+    result = handoff.check()
+    assert result['ok'] and 'head_mismatch' in result['warnings']
     path = project / 'HANDOFF.md'
     text = path.read_text(encoding='utf-8').replace('- `.`', '- `missing.txt`')
     text = text.replace(handoff.show()['snapshot_at'], '2000-01-01T00:00:00+00:00')
@@ -186,3 +187,65 @@ def test_mcp_auth_failure_uses_only_get(project, monkeypatch):
         assert result['isError']
         assert '401' in result['content'][0]['text']
     assert all(method == 'GET' for method, _ in calls)
+
+
+@pytest.mark.parametrize('heading', [True, False])
+def test_sync_migrates_manual_console(project, heading, capsys, monkeypatch):
+    data = handoff.init()
+    text = data['content'].replace(handoff.START + '\n' + handoff.END + '\n', '')
+    if not heading:
+        text = text.replace('## 实时状态', '## 人工状态')
+    path = Path(data['path'])
+    original = text.replace('\n', '\r\n').encode('utf-8')
+    path.write_bytes(original)
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(handoff, 'daemon_info', lambda: {'version': None})
+        result = handoff.check()
+    assert result['ok'] and any(w.startswith('auto_block_missing') for w in result['warnings'])
+    assert 'daemon_unavailable' not in result['errors']
+    handoff.sync()
+    after = path.read_bytes()
+    assert b'\n' not in after.replace(b'\r\n', b'')
+    start, end = after.index(handoff.START.encode()), after.index(handoff.END.encode()) + len(handoff.END) + 2
+    assert after[:start] + after[end:] == original
+    assert next(project.glob('HANDOFF.md.bak-*')).read_bytes() == original
+    assert handoff.check()['ok']
+    assert ('appended' in capsys.readouterr().err) == (not heading)
+    handoff.sync()
+    assert len(list(project.glob('HANDOFF.md.bak-*'))) == 1
+
+
+@pytest.mark.parametrize('markers', [handoff.START, handoff.END, handoff.END + handoff.START, handoff.START * 2 + handoff.END])
+def test_sync_rejects_partial_or_invalid_markers(project, markers):
+    path = project / 'HANDOFF.md'
+    path.write_text(markers, encoding='utf-8')
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='ordered auto marker'):
+        handoff.sync()
+    assert path.read_bytes() == before
+    assert 'auto_markers_invalid' in handoff.check()['errors']
+
+
+def test_migration_replace_failure_preserves_original(project, monkeypatch):
+    path = project / 'HANDOFF.md'
+    path.write_bytes(b'## manual\r\nkeep me\r\n')
+    original = path.read_bytes()
+    def fail(*args):
+        raise OSError('replace failed')
+    monkeypatch.setattr(handoff.os, 'replace', fail)
+    with pytest.raises(OSError):
+        handoff.sync()
+    assert path.read_bytes() == original
+    assert next(project.glob('HANDOFF.md.bak-*')).read_bytes() == original
+    assert not list(project.glob('.handoff-*'))
+
+
+def test_check_cli_warning_is_success(project, capsys):
+    handoff.init()
+    handoff.sync()
+    subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'commit', '--allow-empty', '-m', 'drift'], check=True, capture_output=True)
+    args = build_parser().parse_args(['handoff', 'check', '--json'])
+    assert args.func(args) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['errors'] == [] and result['warnings'] == ['head_mismatch']

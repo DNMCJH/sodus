@@ -408,3 +408,21 @@ It never calls full `board_state`, git, evidence rendering or harness probes.
 entry; `nodus/ui.py` retains the unchanged page template. `/board` and Python
 `server.board_state` keep their existing response keys, and existing pet/statuslight
 readers keep their behavior. HTTP routing, authentication and SSE stay in server.
+
+
+### 项目 handoff 控制台迁移与检查
+
+`nodus.handoff` 只通过显式本地命令写入项目控制台。已有人工 HANDOFF.md
+首次执行 `sodus handoff sync` 时，若完全没有 auto 标记，先建立同目录 `.bak-*`
+原始备份，再在 `## 实时状态` 后插入机器段；缺节时在文件末尾追加并向 stderr 提示。
+单边、逆序、重复标记一律拒绝。临时文件 fsync + replace 保证写入失败不破坏原文件，
+人工段字节和 CRLF 保留；已有完整标记时只替换机器段。
+
+`check` 输出 errors/warnings，ok 和 CLI 退出码只看 errors。HEAD 漂移是 warning，
+因此提交控制台后正常产生的新 HEAD 不阻断检查；无自动段提示 auto_block_missing
+warning 和 sync 迁移，不推断 daemon 故障。缺文件、异常标记、snapshot 无效或过期
+（默认 7 天）、关键路径缺失、已有自动段时 daemon 不可用及版本不一致仍是 error。
+
+HTTP POST 在认证拒绝之前先读取长度受限的请求体，避免未读 JSON 污染持久连接的
+下一个请求，以及 Windows 客户端仍在发送 body 时连接关闭的竞争；非法长度或超限则关闭连接。
+断连识别只处理既有网络断连类型，其他产品异常仍保留错误日志。
