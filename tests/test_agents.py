@@ -269,9 +269,10 @@ def test_worker_env_allowlist(monkeypatch):
 def test_readonly_argv(monkeypatch):
     monkeypatch.setattr(agents.shutil, "which", lambda _: None)
     codex = agents.argv(agents.SPECS["codex"], _provider(), readonly=True)
-    assert codex[codex.index("--sandbox") + 1] == "workspace-write"
-    assert "--dangerously-bypass-approvals-and-sandbox" not in codex
-    assert "--dangerously-bypass-approvals-and-sandbox" in agents.argv(agents.SPECS["codex"], _provider())
+    # Codex keeps its normal headless flags: the Windows sandbox helper is cancelled
+    # inside sodus worktrees, and the temporary cwd is the isolation boundary.
+    assert "--dangerously-bypass-approvals-and-sandbox" in codex
+    assert codex == agents.argv(agents.SPECS["codex"], _provider())
     claude = agents.argv(agents.SPECS["claude"], _provider(), readonly=True)
     assert claude[claude.index("--permission-mode") + 1] == "plan"
     assert "bypassPermissions" not in claude

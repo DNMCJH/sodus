@@ -403,14 +403,23 @@ def _extract_json(rid):
                 and e['payload'].get('role', 'assistant') == 'assistant']
     if not messages:
         raise ValueError('no assistant message')
-    text = messages[-1].strip()
-    if text.startswith('```'):
-        text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'\s*```$', '', text)
-    result = json.loads(text)
-    if not isinstance(result, dict):
-        raise ValueError('last assistant message must contain one JSON object')
-    return result
+    for raw in reversed(messages):
+        text = raw.strip()
+        candidates = re.findall(r'```(?:json)?\s*\n(.*?)\n\s*```', text, re.S | re.IGNORECASE)
+        # A planner may explain the plan before emitting the JSON object; accept
+        # the first balanced-looking object as well as a fenced block.
+        start, end = text.find('{'), text.rfind('}')
+        if 0 <= start < end:
+            candidates.append(text[start:end + 1])
+        candidates.append(text)
+        for candidate in candidates:
+            try:
+                result = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(result, dict):
+                return result
+    raise ValueError('last assistant message must contain one JSON object')
 
 
 def _wait_run(rid, timeout=None):
