@@ -587,7 +587,7 @@ def _stub_execution(monkeypatch, reads_memory_files: bool):
 
     def fake_attempt(
         self, rid, index, spec, provider, workdir, secrets, profile_name,
-        prompt, effort, model, session_id, session_mode,
+        prompt, effort, model, session_id, session_mode, readonly=False,
     ):
         stamp = time.time()
         return {

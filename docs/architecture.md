@@ -174,7 +174,12 @@ ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` �
 | 数据隔离 | 每张表带 `workspace_id`，所有读操作过滤 | `db.py` |
 | 会话读取 | 可选 `session_roots` 白名单；默认不限制但每次显式指定会话 | `sessions._allowed` |
 | 会话写入 | 单写者文件锁 + 会话 cwd 校验 + 120s 新鲜度守卫 | `sessions.session_lock` |
-| 进程 | agent 以 `bypassPermissions` 跑，cwd 是唯一边界 | `agents.argv` |
+| Worker 环境（B3） | 固定基础环境白名单，再注入所选 provider/agent 凭据及 worker 标记；不继承任意 daemon 变量 | `agents.build_env` |
+| 只读运行（B3） | plan/review：Codex `--sandbox read-only`，Claude `--permission-mode plan`；DSH/opencode 无只读开关，记录 warning | `agents.argv` / `runner` |
+| 规划目录（B3） | Git detached 临时 worktree（HEAD 快照，不含未提交修改）；非 Git 过滤 copy（跳过依赖、缓存、检查点、符号链接）；完成/失败 finally 清理 | `plan._start_planner_run` |
+
+隔离创建失败会记录 warning 并回退原 cwd，此时不保证只读；普通 work run 保留原执行权限。
+这不是 OS 级隔离：同用户仍可读取 token/凭据文件或通过绝对路径访问主树，DSH/opencode 尤其依赖 worker 遵守指令；临时 worktree 的 Git 元数据也关联原仓库。进程崩溃/断电可留下临时目录，正常完成、启动失败与超时路径会尝试清理并记录清理错误。
 
 已知缺口（不粉饰）：
 

@@ -1,5 +1,7 @@
 # 更新日志
 
+- B3 安全控制：worker 环境改为固定白名单；plan/review 透传 readonly 参数并使用临时 worktree/过滤副本，完成或失败后清理；无只读开关及隔离失败会记录 warning。未变更 handoff 或批准流程。
+
 ## 0.7.2（2026-11-09）
 
 - 预算改为按模型族软上限：Claude/opus 系 ¥100、GPT 系 ¥80、其它合并 ¥80（CNY，0/缺省=off）。只有软门禁，`--allow-expensive` 可豁免；没有日硬上限，relay 余额仍是真正硬约束。按已记账成本检查，不预留未来/在途成本。

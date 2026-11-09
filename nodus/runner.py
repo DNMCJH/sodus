@@ -246,6 +246,7 @@ class Runner:
         propose_run: bool = False,
         allow_expensive: bool = False,
         kind: str = "work",
+        readonly: bool = False,
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
@@ -347,7 +348,7 @@ class Runner:
         thread = threading.Thread(
             target=self._execute,
             args=(run["id"], route, spec, task, workdir, secrets, profile_name,
-                  include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx),
+                  include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx, readonly),
             daemon=True,
         )
         thread.start()
@@ -552,11 +553,12 @@ class Runner:
         session_mode: str,
         verify_run: bool,
         proposal_ctx: dict | None,
+        readonly: bool = False,
     ) -> None:
         try:
             self._execute_inner(
                 rid, route, spec, task, workdir, secrets, profile_name,
-                include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx,
+                include_handoff, include_memory, session_id, session_mode, verify_run, proposal_ctx, readonly,
             )
         except Exception as exc:  # never leave a run stuck in "running"
             import traceback
@@ -579,6 +581,7 @@ class Runner:
         session_mode: str,
         verify_run: bool,
         proposal_ctx: dict | None,
+        readonly: bool = False,
     ) -> None:
         run_dir = config.HOME / "runs" / rid
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -657,7 +660,7 @@ class Runner:
             model = (pinned if index == 0 else "") or provider.model
             attempt = self._attempt(
                 rid, index, spec, provider, workdir, secrets, profile_name,
-                prompt, effort, model, session_id, session_mode,
+                prompt, effort, model, session_id, session_mode, readonly=readonly,
             )
             if first_started is None:
                 first_started = attempt["started_at"]
@@ -719,6 +722,7 @@ class Runner:
         model: str,
         session_id: str,
         session_mode: str,
+        readonly: bool = False,
     ) -> dict:
         attempt: dict = {
             "index": index,
@@ -743,10 +747,12 @@ class Runner:
             {"provider": provider.name, "model": model, "attempt": index + 1},
         )
         try:
+            if readonly and spec.vendor in ("dsh", "opencode"):
+                self._emit(rid, "run.warning", {"message": f"{spec.vendor} has no readonly flag; relying on isolated cwd (no OS sandbox)"})
             home = profiles.materialize(spec, provider, secrets, profile_name)
             env = agents.build_env(spec, provider, secrets, home=home)
             argv = agents.argv(
-                spec, provider, effort or None, session_id, model or None, session_mode, prompt
+                spec, provider, effort or None, session_id, model or None, session_mode, prompt, readonly=readonly
             )
         except (OSError, ValueError) as exc:
             attempt["error"] = f"{type(exc).__name__}: {exc}"
