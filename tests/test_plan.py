@@ -124,7 +124,7 @@ def test_v5_migration(valid):
                 c.execute(
                     "SELECT value FROM meta WHERE key='schema_version'"
                 ).fetchone()[0]
-                == "7"
+                == "8"
             )
             assert (
                 c.execute("SELECT title FROM task WHERE id='old'").fetchone()[0]
@@ -334,6 +334,16 @@ def test_http_plans(fake_planner, monkeypatch):
     try:
         assert request('/plan', {'goal': 'test'}, auth=False)[0] == 401
         assert request('/plan', {})[0] == 400
+        temporary = plan.import_plan(fake_planner[0], repo)
+        assert request('/plans/' + temporary + '/execute', {})[0] == 400
+        assert request('/plans/' + temporary + '/replan', {})[0] == 400
+        assert request('/plans/' + temporary + '/replan', {'feedback': 'smaller'})[0] == 202
+        plan._update(temporary, status='approved')
+        with monkeypatch.context() as patch:
+            patch.setattr(plan, '_execute_nodes', lambda *args: None)
+            assert request('/plans/' + temporary + '/execute', {})[0] == 202
+        assert request('/plans/' + temporary + '/execute', {})[0] == 400
+
         assert request('/plans/missing')[0] == 404
         assert request('/plans/missing/review', {})[0] == 404
         code, row = request('/plan', {'goal': 'test', 'cwd': str(repo)})
@@ -712,3 +722,150 @@ def test_extract_json_accepts_fenced_block_with_summary(monkeypatch):
     monkeypatch.setattr(plan_module.db, 'events_filtered', lambda rid, kinds: payloads)
     assert plan_module._extract_json('run-test') == {'ok': True}
 
+
+
+@pytest.fixture
+def executable(valid):
+    value, repo = valid
+    second = copy.deepcopy(value['nodes'][0])
+    second.update(id='n2', title='second', deps=['n1'])
+    value['nodes'].insert(0, second)  # deliberately reverse source order
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status='approved', approved_by='human', approved_at=db.now())
+    return pid, repo
+
+
+def test_materialize_topology_idempotence(executable, monkeypatch):
+    pid, repo = executable
+    original, titles = db.create_task, []
+    def create(*args, **kwargs):
+        titles.append(kwargs['title'])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(db, 'create_task', create)
+    first = plan.materialize(pid)
+    assert titles == ['test', 'second']
+    assert plan.materialize(pid)['nodes'] == first['nodes']
+    assert len(titles) == 2
+    for node in first['nodes']:
+        task = db.get_task(node['task_id'])
+        assert task['acceptance'] == 'python -m pytest'
+        assert 'File scope: .' in task['goal']
+        assert node['status'] == 'materialized'
+
+
+@pytest.mark.parametrize('status', ['validated', 'reviewed', 'planning', 'failed', 'executing', 'done'])
+def test_execute_requires_approved(valid, status):
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    plan._update(pid, status=status)
+    for call in (plan.materialize, plan.execute):
+        with pytest.raises(ValueError):
+            call(pid)
+    assert all(n['task_id'] is None for n in plan.get_plan(pid)['nodes'])
+
+
+@pytest.mark.parametrize('failure', [None, 'run', 'budget', 'start'])
+def test_execute_dag(executable, monkeypatch, failure):
+    from nodus import runner, budget
+    pid, repo = executable
+    starts, checks = [], []
+    def check(**kwargs):
+        checks.append(kwargs)
+        return dict(over=False, gated=failure == 'budget' and len(checks) == 2)
+    monkeypatch.setattr(budget, 'check', check)
+    monkeypatch.setattr(budget, 'blocked_message', lambda _: 'budget blocked')
+    def start(tid, **kwargs):
+        starts.append((db.get_task(tid)['title'], kwargs))
+        if failure == 'start':
+            raise RuntimeError('start failed')
+        # Reentrant request must fail before launching another node.
+        with pytest.raises(ValueError):
+            plan.execute(pid)
+        return {'id': 'work-' + str(len(starts))}
+    monkeypatch.setattr(runner.RUNNER, 'start', start)
+    monkeypatch.setattr(runner.RUNNER, 'wait', lambda *a, **kw: {'status': 'failed' if failure == 'run' else 'completed'})
+    row = plan.execute(pid, route='fallback')
+    nodes = {n['node_id']: n for n in row['nodes']}
+    assert row['status'] == ('done' if failure is None else 'failed')
+    assert len(starts) == (2 if failure is None else 1)
+    assert starts[0][1] == dict(route_name='sol', cwd=str(repo), kind='work', verify_run=True)
+    if failure is None:
+        assert [x[0] for x in starts] == ['test', 'second']
+        assert all(n['status'] == 'done' and n['run_id'] for n in nodes.values())
+    elif failure == 'budget':
+        assert nodes['n1']['status'] == 'done' and nodes['n2']['status'] == 'failed'
+    else:
+        assert nodes['n1']['status'] == 'failed' and nodes['n2']['status'] == 'materialized'
+
+
+def test_execute_async_concurrency_and_reconcile(executable, monkeypatch):
+    import threading
+    from nodus import runner, budget
+    pid, _ = executable
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(budget, 'check', lambda **kw: dict(over=False, gated=False))
+    def start(*args, **kwargs):
+        entered.set()
+        release.wait(10)
+        raise RuntimeError('test stop')
+    monkeypatch.setattr(runner.RUNNER, 'start', start)
+    assert plan.execute(pid, wait=False)['status'] == 'executing'
+    try:
+        assert entered.wait(5)
+        with pytest.raises(ValueError):
+            plan.execute(pid, wait=False)
+    finally:
+        release.set()
+    _await_plan_status(pid, 'failed')
+    plan._update(pid, status='executing')
+    assert plan.reconcile() == [pid]
+    assert plan.get_plan(pid)['status'] == 'failed'
+    assert plan.reconcile() == []
+
+
+def test_replan_version_feedback(fake_planner):
+    _, repo, calls, _ = fake_planner
+    old = plan.create('goal', repo)
+    before = plan.get_plan(old['id'])
+    new = plan.replan(old['id'], 'reduce scope')
+    assert new['status'] == 'planning'
+    assert new['parent_id'] == old['id'] and new['version'] == 2
+    assert new['feedback'] == 'reduce scope'
+    assert calls[-1]['route'] == 'opus'
+    assert 'reduce scope' in calls[-1]['prompt'] and 'Previous plan' in calls[-1]['prompt']
+    assert _await_plan_status(new['id'], 'validated')['nodes']
+    assert plan.get_plan(old['id']) == before
+    with pytest.raises(ValueError):
+        plan.replan(old['id'], '')
+
+
+def test_v7_to_v8_preserves_nodes(valid):
+    value, repo = valid
+    pid = plan.import_plan(value, repo)
+    with db.connect() as c:
+        c.execute('ALTER TABLE plan_node DROP COLUMN run_id')
+        c.execute('ALTER TABLE plan_execution DROP COLUMN feedback')
+        c.execute("UPDATE meta SET value='7' WHERE key='schema_version'")
+    for _ in range(2):
+        db._SCHEMA_READY.clear()
+        row = plan.get_plan(pid)
+        assert row['nodes'][0]['run_id'] is None
+        assert row['plan_json'] == value
+        with db.connect() as c:
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '8'
+
+
+@pytest.mark.parametrize('action,extra,payload', [
+    ('execute', ['--route', 'sol', '--no-wait'], {'route': 'sol'}),
+    ('execute', ['--wait'], {'route': None}),
+    ('replan', ['--feedback', 'smaller'], {'feedback': 'smaller'})])
+def test_cli_execution_actions(monkeypatch, capsys, action, extra, payload):
+    from nodus.cli import client
+    calls = []
+    monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
+    def call(method, path, body=None):
+        calls.append((method, path, body))
+        return dict(id='p', status='done')
+    monkeypatch.setattr(client, 'call', call)
+    assert main(['plan', action, 'p', *extra]) == 0
+    assert calls == [('POST', '/plans/p/' + action, payload)]

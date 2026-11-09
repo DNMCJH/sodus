@@ -602,6 +602,10 @@ class Handler(BaseHTTPRequestHandler):
                                       body.get('acceptance', ''), body.get('route'), wait=False)
                     return _json(self, 202, {**row, 'plan_id': row['id']})
                 pid, action = path.split('/')[2:]
+                if action == 'execute':
+                    return _json(self, 202, plan.execute(pid, route=body.get('route'), wait=False))
+                if action == 'replan':
+                    return _json(self, 202, plan.replan(pid, body.get('feedback')))
                 if action == 'review':
                     row = plan.review(pid)
                     return _json(self, 202, row)

@@ -65,7 +65,7 @@ def test_v7_idempotent(tmp_path, monkeypatch):
     for _ in range(2):
         db._SCHEMA_READY.clear()
         with db.connect() as c:
-            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '7'
+            assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
             assert c.execute('SELECT count(*) FROM plan_execution').fetchone()[0] == 0
 
 

@@ -14,15 +14,23 @@ def add(sub):
     p = sub.add_parser("plan", help="validate, import and inspect plans")
     p.set_defaults(func=run, needs_daemon=False)
     actions = p.add_subparsers(dest="plan_action", required=True)
-    for action in ("validate", "import", "show", "list", "new", "review", "approve"):
+    for action in ("validate", "import", "show", "list", "new", "review", "approve", "execute", "replan"):
         child = actions.add_parser(action)
         if action in ("validate", "import"):
             child.add_argument("file")
             child.add_argument("--cwd", default=".")
-        if action in ("show", "review", "approve"):
+        if action in ("show", "review", "approve", "execute", "replan"):
             child.add_argument("id")
         if action == "approve":
             child.add_argument("--by", required=True, choices=["human"])
+        if action == "replan":
+            child.add_argument("--feedback", required=True)
+        if action == "execute":
+            child.description = "Execution requires a human-approved plan"
+            child.add_argument("--route")
+            group = child.add_mutually_exclusive_group()
+            group.add_argument("--wait", dest="wait", action="store_true", default=True)
+            group.add_argument("--no-wait", dest="wait", action="store_false")
         if action == "new":
             child.add_argument("goal")
             child.add_argument("--cwd", default=".")
@@ -58,6 +66,16 @@ def run(args):
             value = service.approve(args.id, "human")
             print(json.dumps(value, ensure_ascii=False, indent=2))
             return 0
+        if args.plan_action in ("execute", "replan"):
+            client.ensure_daemon()
+            payload = {"route": args.route} if args.plan_action == "execute" else {"feedback": args.feedback}
+            value = client.call("POST", "/plans/" + args.id + "/" + args.plan_action, payload)
+            if args.plan_action == "execute" and args.wait:
+                while value.get("status") == "executing":
+                    time.sleep(0.5)
+                    value = client.call("GET", "/plans/" + args.id)
+            print(json.dumps(value, ensure_ascii=False, indent=2))
+            return int(value.get("status") == "failed")
         if args.plan_action in ("new", "review"):
             client.ensure_daemon()
             if args.plan_action == "new":

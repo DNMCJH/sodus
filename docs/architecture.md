@@ -426,3 +426,23 @@ warning 和 sync 迁移，不推断 daemon 故障。缺文件、异常标记、s
 HTTP POST 在认证拒绝之前先读取长度受限的请求体，避免未读 JSON 污染持久连接的
 下一个请求，以及 Windows 客户端仍在发送 body 时连接关闭的竞争；非法长度或超限则关闭连接。
 断连识别只处理既有网络断连类型，其他产品异常仍保留错误日志。
+
+### Approved plan execution (0.8.1)
+
+Schema v8 adds plan_node.run_id and plan_execution.feedback. Materialization claims
+an approved plan as materializing, creates tasks in topological order, and records
+task ids for idempotence. The daemon serializes local materialization and uses a
+SQLite conditional state update to exclude concurrent execution across callers.
+Execution claims executing before returning HTTP 202, checks the machine daily/
+soft/family budget before every node, then starts a work run with verify_run=True
+in the plan cwd (route_hint first, explicit fallback route second). Completed runs
+mark nodes done. Any start/wait/budget failure marks the active node and plan failed
+and leaves remaining nodes unstarted. Plan errors retain the failing node and reason;
+run ids retain detailed run evidence. A completed run is the execution criterion;
+it does not by itself certify a passing verification verdict.
+Daemon startup reconciles orphaned planning/executing/materializing plans to failed,
+retaining tasks, run ids and completed nodes; it never automatically resumes work.
+POST /plans/{id}/execute and /replan inherit bearer authentication and worker depth
+protection. Replan persists parent_id, version+1 and feedback, uses the configured
+opus planner and existing validation collector, and never copies prior approval.
+Failure recovery is an explicit replan/review/approval cycle, not implicit retry.

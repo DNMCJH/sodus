@@ -133,3 +133,14 @@ HTTP 只读 `GET /handoff?cwd=...`、`GET /handoffs`、`GET /handoff/check?cwd=.
 均需 bearer token；cwd 必须解析到当前或已有 task/run 的项目根。
 相对控制台路径禁止通过 symlink/上级路径逃到项目外；显式绝对配置路径由用户信任。
 不提供写端点、内容聚合或自动 hook。
+
+### Plan execution and replanning (0.8.1)
+
+`sodus plan execute <id> [--route ROUTE] [--wait|--no-wait]` requires an explicitly
+human-approved plan; the default waits for completion through daemon polling.
+Nodes become tasks once, then run serially in dependency order with verification.
+A node route_hint takes precedence over --route. A failed node or budget refusal
+stops further nodes and marks the plan failed; completed nodes remain recorded.
+`sodus plan replan <id> --feedback TEXT` submits a new asynchronous planner version.
+The new version must be reviewed and manually approved before execution.
+The old plan is unchanged. Use `sodus plan show <new-id>` to inspect progress.
