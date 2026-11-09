@@ -270,7 +270,6 @@ def test_readonly_argv(monkeypatch):
     monkeypatch.setattr(agents.shutil, "which", lambda _: None)
     codex = agents.argv(agents.SPECS["codex"], _provider(), readonly=True)
     assert codex[codex.index("--sandbox") + 1] == "workspace-write"
-    assert codex[codex.index("--ask-for-approval") + 1] == "never"
     assert "--dangerously-bypass-approvals-and-sandbox" not in codex
     assert "--dangerously-bypass-approvals-and-sandbox" in agents.argv(agents.SPECS["codex"], _provider())
     claude = agents.argv(agents.SPECS["claude"], _provider(), readonly=True)

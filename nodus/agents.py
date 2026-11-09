@@ -239,7 +239,7 @@ def argv(
         # keeps the write boundary at the temporary cwd, which is the isolation that
         # matters here, while still allowing read commands (and their shell helper).
         cmd = [arg for arg in cmd if arg != "--dangerously-bypass-approvals-and-sandbox"]
-        cmd += ["--sandbox", "workspace-write", "--ask-for-approval", "never"]
+        cmd += ["--sandbox", "workspace-write"]
     elif readonly and spec.vendor == "claude":
         cmd[cmd.index("--permission-mode") + 1] = "plan"
     chosen = model or provider.model
