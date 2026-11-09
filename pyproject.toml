@@ -1,6 +1,6 @@
 [project]
 name = "nodus"
-version = "0.7.2"
+version = "0.8.0"
 description = "Task acceptance layer for multi-agent work"
 readme = "README.md"
 requires-python = ">=3.11"
