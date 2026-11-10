@@ -33,7 +33,7 @@ import statistics
 import time
 from pathlib import Path
 
-from . import config, db, decision, ledger, routes
+from . import config, db, decision, ledger, route_meta, routes
 
 SCHEMA_VERSION = 2
 
@@ -47,6 +47,29 @@ ROUTE_NAMES = (
     "opencode-glm",
     "opencode-gemini",
 )
+
+
+def present_routes() -> list[str]:
+    """Every runnable route, including routes.json additions.
+
+    The tuple above stays as the built-in compatibility set; allocation must
+    not be limited to it, or a route the operator added can never be chosen.
+    """
+    table = routes.load()
+    names = [name for name, route in table.items() if not routes.problems(route)]
+    return names or list(table) or list(ROUTE_NAMES)
+
+
+def _caps(route: str) -> dict:
+    if route in _ROUTE_CAPS:
+        return _ROUTE_CAPS[route]
+    return route_meta.caps(route, routes.resolve(route))
+
+
+def _fit(route: str) -> dict:
+    if route in _ROUTE_FIT:
+        return _ROUTE_FIT[route]
+    return route_meta.fit(route, routes.resolve(route))
 
 KINDS = ("code", "analysis", "writing", "retrieval", "ops")
 NEEDS = ("tool_use", "long_context", "reasoning", "vision")
@@ -961,7 +984,7 @@ def evidence_for(
     the computed blocks in, so one recommendation does not re-read the same
     table or the same JSON six times.
     """
-    if route not in ROUTE_NAMES:
+    if route not in routes.load():
         raise ValueError(f"unknown route: {route}")
 
     hist = _run_history(route) if history is None else history
@@ -987,7 +1010,7 @@ def evidence_for(
     # Vision is a declared ability, not a measurement: the ledger assigns
     # multimodal work to one route. Saying "unknown" for the others would let
     # scoring dispatch a screenshot to a text-only route.
-    if need == "vision" and route not in _VISION_ROUTES:
+    if need == "vision" and not route_meta.meta_for(route, routes.resolve(route)).vision:
         return with_sources(
             {
                 "status": "unsupported",
@@ -1076,7 +1099,7 @@ def evidence_for(
             }
         )
 
-    caps = _ROUTE_CAPS[route]
+    caps = _caps(route)
     if need == "vision":
         note = "没有视觉评测；不能假设这条路由能看图"
     else:
@@ -1102,9 +1125,7 @@ def evidence_for(
 
 
 def _present_routes() -> list[str]:
-    table = routes.load()
-    names = [name for name in ROUTE_NAMES if name in table]
-    return names or list(ROUTE_NAMES)
+    return present_routes()
 
 
 def _route_spec(name: str) -> dict:
@@ -1128,7 +1149,7 @@ def _capability_fit(route: str, difficulty: int, kind: str) -> float:
     route is declared for the fit decays, so a small-task route does not win a
     refactor just because it is cheap.
     """
-    spec = _ROUTE_FIT[route]
+    spec = _fit(route)
     fit = float(spec["kinds"].get(kind, 0.3))
     if difficulty > spec["ceiling"]:
         fit *= max(0.25, 1.0 - 0.35 * (difficulty - spec["ceiling"]))
@@ -1147,7 +1168,7 @@ def _measure(route: str, evidence: dict) -> dict:
     complete; `cost: 0.0` from a provider without a price table is unknown,
     not free.
     """
-    caps = _ROUTE_CAPS[route]
+    caps = _caps(route)
     out = {
         "route": route,
         "status": evidence.get("status") or "unknown",
@@ -1240,9 +1261,19 @@ def _score_candidates(
     rows: list[dict] = []
     for route, measure in measures.items():
         cap = _capability_fit(route, difficulty, kind)
+        meta = route_meta.meta_for(route, routes.resolve(route))
         rows.append(
             {
                 "route": route,
+                "label": meta.label,
+                "strengths": list(meta.strengths),
+                "weaknesses": list(meta.weaknesses),
+                "floor": meta.floor,
+                "ceiling": meta.ceiling,
+                "price": meta.price,
+                "value": meta.value,
+                "requirements": list(meta.requirements),
+                "prompt_hints": list(meta.prompt_hints),
                 "score": cap,
                 "capability_fit": cap,
                 "measured_solve_bonus": 0.0,
@@ -1257,7 +1288,7 @@ def _score_candidates(
                 "measured_by": measure.get("measured_by") or "",
                 "tested_difficulty": measure.get("tested_difficulty"),
                 "covers_difficulty": _covers(measure, difficulty),
-                "declared_cost_tier": measure.get("declared_cost_tier"),
+                "declared_cost_tier": meta.cost_tier if meta.cost_tier is not None else measure.get("declared_cost_tier"),
                 "cost_basis": "unknown",
                 "time_basis": "unknown",
                 "excluded": "",
@@ -1276,6 +1307,9 @@ def _score_candidates(
 
     raw_cost: dict[str, float] = {}
     raw_time: dict[str, float] = {}
+    raw_declared: dict[str, float] = {}
+    tiers = {row["route"]: row["declared_cost_tier"] for row in eligible if row["declared_cost_tier"]}
+    cheapest_tier = min(tiers.values()) if tiers else None
     for row in eligible:
         if row["cost_known"] and cheapest:
             raw_cost[row["route"]] = min(
@@ -1285,6 +1319,11 @@ def _score_candidates(
             raw_time[row["route"]] = min(
                 _TIME_CAP, _TIME_WEIGHT * math.log2(row["seconds"] / fastest)
             )
+        tier = row["declared_cost_tier"]
+        if tier and cheapest_tier:
+            raw_declared[row["route"]] = min(
+                _COST_CAP, _COST_WEIGHT * math.log2(tier / cheapest_tier)
+            )
     # A missing number takes the middle of the measured field, not zero.
     neutral_cost = statistics.median(raw_cost.values()) if raw_cost else 0.0
     neutral_time = statistics.median(raw_time.values()) if raw_time else 0.0
@@ -1292,18 +1331,18 @@ def _score_candidates(
     sensitivity = _PRICE_SENSITIVITY.get(difficulty, 0.4)
     solve_weight = _SOLVE_WEIGHT.get(difficulty, 0.55)
     for row in eligible:
-        row["cost_penalty"] = round(
-            raw_cost.get(row["route"], neutral_cost) * sensitivity, 3
-        )
+        if row["cost_known"]:
+            row["cost_penalty"] = round(raw_cost.get(row["route"], neutral_cost) * sensitivity, 3)
+            row["cost_basis"] = "measured"
+        elif row["route"] in raw_declared and not known_costs:
+            row["cost_penalty"] = round(raw_declared[row["route"]] * sensitivity, 3)
+            row["cost_basis"] = "declared cost tier"
+        else:
+            row["cost_penalty"] = round(neutral_cost * sensitivity, 3)
+            row["cost_basis"] = "unknown (median of measured)" if known_costs else "unknown (no measured cost)"
         row["time_penalty"] = round(
             raw_time.get(row["route"], neutral_time) * sensitivity, 3
         )
-        if row["cost_known"]:
-            row["cost_basis"] = "measured"
-        elif known_costs:
-            row["cost_basis"] = "unknown (median of measured)"
-        else:
-            row["cost_basis"] = "unknown (no measured cost)"
         if row["seconds"]:
             row["time_basis"] = "measured"
         elif known_times:
@@ -1574,9 +1613,12 @@ def _alternative_pool(primary: str, kind: str, needs: list[str]) -> list[str]:
 
 
 def _capability(route: str) -> str:
-    cap = _ROUTE_CAPS[route]
-    tier = f"成本档 {cap['cost_tier']}/3" if cap["cost_tier"] else "成本档未知"
-    return f"{cap['label']}；{tier}；元数据：{cap['strengths']}"
+    cap = _caps(route)
+    tier = f"成本档 {cap['cost_tier']}/5" if cap.get("cost_tier") else "成本档未知"
+    strengths = cap.get("strengths") or ""
+    price = cap.get("price") or "价格未声明"
+    req = "；".join(cap.get("requirements") or []) or "无特殊要求"
+    return f"{cap.get('label') or route}；{tier}；{price}；{req}；元数据：{strengths}"
 
 
 def _why_alternative(route: str, evidence: dict) -> str:
@@ -1634,32 +1676,37 @@ def recommend(assessment: dict) -> dict:
         primary = present[0]
 
     evidence = table[primary]
+    profile = route_meta.public(primary, routes.resolve(primary))
     need_text = ", ".join(needs) if needs else "无特殊能力"
-    rationale = f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}。"
+    rationale = (
+        f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}。"
+        f" {profile['label']}；价格：{profile['price']}；"
+        f"要求：{'；'.join(profile['requirements']) or '无'}。"
+    )
     if evidence["status"] == "measured":
         rationale += f" 实测范围：{evidence['scope']}。"
     else:
         rationale += " 这条路由在本仓库没有实测数据，属于弱证据推荐，值得先测。"
 
+    scored = {row["route"]: row for row in scoring.get("candidates") or []}
+    alternative_names = [
+        route for route in present
+        if route != primary and (route in table)
+    ]
+    alternative_names.sort(
+        key=lambda route: (-(scored.get(route) or {}).get("score", -1.0), route)
+    )
     alternatives = []
-    for route in _alternative_pool(primary, kind, needs):
-        if route == primary or route not in present:
-            continue
+    for route in alternative_names[:3]:
         alternatives.append(
             {
                 "route": route,
                 "why": _why_alternative(route, table[route]),
                 "evidence": table[route],
+                "profile": route_meta.public(route, routes.resolve(route)),
+                "route_spec": _route_spec(route),
             }
         )
-    # Same order as the score line: the strongest alternative is the one a
-    # reader wants to compare against, not whichever the declaration list
-    # happens to name first.
-    scored = {row["route"]: row for row in scoring.get("candidates") or []}
-    alternatives.sort(
-        key=lambda alt: (-(scored.get(alt["route"]) or {}).get("score", -1.0), alt["route"])
-    )
-    alternatives = alternatives[:3]
 
     unmeasured = [
         name for name in present if table[name]["status"] != "measured"
@@ -1673,6 +1720,7 @@ def recommend(assessment: dict) -> dict:
         "unmeasured": unmeasured,
         "scoring": scoring,
         "route_spec": _route_spec(primary),
+        "profile": profile,
         "basis": assessment.get("basis") or "rules-only",
         "assessment": {
             "difficulty": difficulty,

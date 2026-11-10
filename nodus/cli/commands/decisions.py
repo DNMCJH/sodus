@@ -35,7 +35,9 @@ def route(args) -> int:
     if not result.get("ok"):
         print(f"unavailable: {result.get('unavailable')}")
         return 1
-    picked, conf, probs = choice(result, "agent")
+    picked, conf, probs = choice(result, "route")
+    if picked is None:
+        picked, conf, probs = choice(result, "agent")
     effort, econf, _ = choice(result, "effort")
     print(f"{picked}  confidence={conf:.2f}  model={result.get('model')}")
     if effort:

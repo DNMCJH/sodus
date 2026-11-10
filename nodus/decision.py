@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config
+from . import config, route_meta, routes
 
 DEFAULT_BASE = "https://api.typesafe.ai"
 DEFAULT_PROXY = "http://127.0.0.1:7890"
@@ -174,12 +174,22 @@ EFFORT_CRITERIA = {
 
 
 def route_task(task: dict, agents: list[str]) -> dict:
-    """Pick an agent and a reasoning effort. Returns both in `answers`."""
-    profiles = {k: v for k, v in AGENT_PROFILE.items() if k in agents}
-    if len(profiles) < 2:
-        return {"ok": False, "unavailable": "need at least two agents to route"}
+    """Pick a route and a reasoning effort. Returns both in `answers`.
+
+    Candidates come from the live route table, not a hardcoded agent list, so
+    routes added in routes.json (opus/fable/sol/terra/...) are selectable. The
+    criteria carry capability, price and requirements, not just a name.
+    """
+    table = routes.load()
+    ready = set(agents or [])
+    candidates = {
+        name: route for name, route in table.items()
+        if not ready or route.agent in ready
+    }
+    if len(candidates) < 2:
+        return {"ok": False, "unavailable": "need at least two ready routes to route"}
     criteria = {
-        k: f"成本档 {v['cost_tier']}/3；{v['strengths']}" for k, v in profiles.items()
+        name: route_meta.criterion(name, route) for name, route in candidates.items()
     }
     state = json.dumps(
         {
@@ -190,9 +200,12 @@ def route_task(task: dict, agents: list[str]) -> dict:
         ensure_ascii=False,
     )
     questions = {
-        "agent": {
+        "route": {
             "type": "choice",
-            "instructions": "选择最适合独立完成这个任务的 agent。按任务形态判断，不要按公司偏好；成本档低的不一定够用。",
+            "instructions": (
+                "选择最适合独立完成这个任务的路线。按任务形态、能力上下限、价格/性价比、"
+                "以及列出的特殊要求判断；成本档低的不一定够用，贵的不一定更好。"
+            ),
             "criteria": criteria,
         },
         "effort": {

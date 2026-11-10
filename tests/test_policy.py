@@ -202,10 +202,10 @@ def test_every_recommendation_names_a_real_route(home, rules_only, reports):
     ]
     for text in texts:
         rec = policy.recommend(policy.assess(text))
-        assert rec["route"] in policy.ROUTE_NAMES, (text, rec)
+        assert rec["route"] in policy.present_routes(), (text, rec)
         assert rec["alternatives"], text
         for alt in rec["alternatives"]:
-            assert alt["route"] in policy.ROUTE_NAMES
+            assert alt["route"] in policy.present_routes()
             assert alt["route"] != rec["route"]
             assert alt["why"]
             assert alt["evidence"]["status"] in ("measured", "unknown", "unsupported")
@@ -803,7 +803,7 @@ def test_the_decision_event_carries_every_candidate_breakdown(home, rules_only, 
 
     assert scoring["winner"] == recommendation["route"]
     assert payload["recommend"]["scoring"]["winner"] == recommendation["route"]
-    assert set(candidates) == set(policy.ROUTE_NAMES)
+    assert set(candidates) == set(policy.present_routes())
     for row in candidates.values():
         for key in (
             "score",
@@ -837,3 +837,80 @@ def test_route_for_text_shows_the_scoring_line(capsys, home, rules_only, reports
     assert "dsh" in scoring_line
     assert "minimax" in scoring_line
     assert "护栏" in out
+
+# ---- route metadata and dynamic candidates ----------------------------
+
+
+def _write_routes(home, extra):
+    (home / "routes.json").write_text(json.dumps(extra), encoding="utf-8")
+
+
+def test_route_metadata_carries_capability_price_and_requirements():
+    from nodus import route_meta
+
+    for name in ("opus", "fable", "sol", "terra"):
+        profile = route_meta.public(name)
+        assert profile["label"]
+        assert profile["strengths"]
+        assert profile["weaknesses"]
+        assert profile["price"]
+        assert profile["requirements"]
+        assert profile["prompt_hints"]
+        assert profile["cost_tier"] is not None
+        assert 1 <= profile["floor"] <= profile["ceiling"] <= 5
+
+
+def test_custom_routes_are_policy_candidates_without_hardcoding(home, rules_only, reports):
+    _write_routes(
+        home,
+        {
+            "opus": {"agent": "claude", "providers": ["relay"], "model": "claude-opus-5-5"},
+            "sol": {"agent": "codex", "providers": ["relay-openai"], "model": "gpt-6.1-sol"},
+        },
+    )
+    present = policy.present_routes()
+    assert "opus" in present
+    assert "sol" in present
+    assert policy.evidence_for("opus")["status"] == "unknown"
+    rec = policy.recommend(policy.assess("把 DB 连接管理重构成上下文管理器，跨模块改动"))
+    assert rec["route"] in present
+    assert rec["profile"]["price"]
+    assert rec["profile"]["requirements"]
+
+
+def test_decision_route_task_lists_live_routes_and_sends_capabilities(home, monkeypatch):
+    _write_routes(
+        home,
+        {
+            "opus": {"agent": "claude", "providers": ["relay"], "model": "claude-opus-5-5"},
+            "sol": {"agent": "codex", "providers": ["relay-openai"], "model": "gpt-6.1-sol"},
+        },
+    )
+    captured = {}
+
+    def fake_decide(state, questions, model="jev-latest"):
+        captured["questions"] = questions
+        return {
+            "ok": True,
+            "answers": {
+                "route": {"choice": "opus", "confidence": 0.8, "probabilities": {"opus": 0.8}},
+                "effort": {"choice": "high", "confidence": 0.7, "probabilities": {"high": 0.7}},
+            },
+            "model": "jev-latest",
+            "latency_ms": 1,
+        }
+
+    monkeypatch.setattr(decision, "decide", fake_decide)
+    result = decision.route_task(
+        {"id": "task-test", "goal": "重构跨模块数据库连接", "acceptance": "pytest 通过"},
+        ["claude", "codex", "dsh", "opencode-glm", "opencode-gemini"],
+    )
+    assert result["ok"] is True
+    criteria = captured["questions"]["route"]["criteria"]
+    assert "opus" in criteria
+    assert "sol" in criteria
+    assert "优点" in criteria["opus"]
+    assert "缺点" in criteria["opus"]
+    assert "成本" in criteria["opus"]
+    assert "要求" in criteria["opus"]
+    assert result["answers"]["route"]["choice"] == "opus"
