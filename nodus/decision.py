@@ -184,7 +184,8 @@ def route_task(task: dict, agents: list[str]) -> dict:
     ready = set(agents or [])
     candidates = {
         name: route for name, route in table.items()
-        if not ready or route.agent in ready
+        if (not ready or route.agent in ready)
+        and route_meta.meta_for(name, route).canonical
     }
     if len(candidates) < 2:
         return {"ok": False, "unavailable": "need at least two ready routes to route"}

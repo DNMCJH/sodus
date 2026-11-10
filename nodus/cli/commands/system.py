@@ -794,6 +794,8 @@ def _print_recommendation(recommendation: dict) -> None:
         f"  route       {recommendation['route']}   "
         f"({spec.get('agent') or '?'} @ {providers})"
     )
+    if recommendation.get("effort"):
+        print(f"  effort      {recommendation['effort']}")
     print(f"  为什么       {recommendation['rationale']}")
     if scoring.get("explain"):
         print(f"  打分        {scoring['explain']}")

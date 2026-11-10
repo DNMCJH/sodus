@@ -56,8 +56,14 @@ def present_routes() -> list[str]:
     not be limited to it, or a route the operator added can never be chosen.
     """
     table = routes.load()
-    names = [name for name, route in table.items() if not routes.problems(route)]
-    return names or list(table) or list(ROUTE_NAMES)
+    names = [
+        name for name, route in table.items()
+        if not routes.problems(route)
+        and route_meta.meta_for(name, route).canonical
+    ]
+    return names or [
+        name for name, route in table.items() if not routes.problems(route)
+    ] or list(ROUTE_NAMES)
 
 
 def _caps(route: str) -> dict:
@@ -1637,6 +1643,19 @@ def _difficulty_of(assessment: dict) -> int:
     return int(_clamp(value, 1, 5))
 
 
+def _recommended_effort(route: str, difficulty: int) -> str:
+    """A default effort for this model at this difficulty; Jev may override."""
+    meta = route_meta.meta_for(route, routes.resolve(route))
+    efforts = list(meta.efforts)
+    if not efforts:
+        return "default"
+    order = ("low", "medium", "med", "high") if difficulty <= 2 else ("high", "xhigh", "max", "medium")
+    for effort in order:
+        if effort in efforts:
+            return effort
+    return efforts[0]
+
+
 def _recommendation_confidence(assessment: dict, evidence: dict) -> float:
     difficulty = _difficulty_of(assessment)
     if evidence["status"] == "measured" and difficulty <= 2:
@@ -1677,11 +1696,12 @@ def recommend(assessment: dict) -> dict:
 
     evidence = table[primary]
     profile = route_meta.public(primary, routes.resolve(primary))
+    effort = _recommended_effort(primary, difficulty)
     need_text = ", ".join(needs) if needs else "无特殊能力"
     rationale = (
         f"难度 {difficulty}/5，类型 {kind}，需要 {need_text}。{fit}。"
         f" {profile['label']}；价格：{profile['price']}；"
-        f"要求：{'；'.join(profile['requirements']) or '无'}。"
+        f"要求：{'；'.join(profile['requirements']) or '无'}；建议 effort：{effort}。"
     )
     if evidence["status"] == "measured":
         rationale += f" 实测范围：{evidence['scope']}。"
@@ -1721,6 +1741,7 @@ def recommend(assessment: dict) -> dict:
         "scoring": scoring,
         "route_spec": _route_spec(primary),
         "profile": profile,
+        "effort": effort,
         "basis": assessment.get("basis") or "rules-only",
         "assessment": {
             "difficulty": difficulty,

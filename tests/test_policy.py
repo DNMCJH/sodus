@@ -218,9 +218,10 @@ def test_routes_without_measurements_carry_unknown(home, rules_only, reports):
     rec = policy.recommend(
         policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     )
-    assert rec["route"] == "claude"
+    assert rec["route"] in policy.present_routes()
+    assert rec["route"] != "claude"
     assert rec["evidence"]["status"] == "unknown"
-    assert "claude" in rec["unmeasured"]
+    assert rec["route"] in rec["unmeasured"]
     assert "没有实测" in rec["rationale"]
     for alt in rec["alternatives"]:
         if alt["evidence"]["status"] == "unknown":
@@ -276,7 +277,8 @@ def test_trivial_and_hard_tasks_do_not_get_the_same_route(home, rules_only, repo
         policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     )
     assert typo["route"] == "dsh"
-    assert hard["route"] == "claude"
+    assert hard["route"] in policy.present_routes()
+    assert hard["route"] != "claude"
     assert typo["route"] != hard["route"]
 
 
@@ -871,6 +873,9 @@ def test_custom_routes_are_policy_candidates_without_hardcoding(home, rules_only
     present = policy.present_routes()
     assert "opus" in present
     assert "sol" in present
+    assert "claude" not in present
+    assert "opus-high" not in present
+    assert "fable-high" not in present
     assert policy.evidence_for("opus")["status"] == "unknown"
     rec = policy.recommend(policy.assess("把 DB 连接管理重构成上下文管理器，跨模块改动"))
     assert rec["route"] in present
@@ -909,6 +914,9 @@ def test_decision_route_task_lists_live_routes_and_sends_capabilities(home, monk
     criteria = captured["questions"]["route"]["criteria"]
     assert "opus" in criteria
     assert "sol" in criteria
+    assert "opus-high" not in criteria
+    assert "可选 effort" in criteria["opus"]
+    assert "high" in criteria["opus"]
     assert "优点" in criteria["opus"]
     assert "缺点" in criteria["opus"]
     assert "成本" in criteria["opus"]

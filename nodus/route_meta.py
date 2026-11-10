@@ -34,6 +34,12 @@ class RouteMeta:
     requirements: tuple[str, ...]
     prompt_hints: tuple[str, ...]
     source: str = "declared"
+    efforts: tuple[str, ...] = ()
+    alias_of: str | None = None
+
+    @property
+    def canonical(self) -> bool:
+        return self.alias_of is None
 
     def caps(self) -> dict:
         return {
@@ -48,6 +54,9 @@ class RouteMeta:
             "value": self.value,
             "requirements": list(self.requirements),
             "prompt_hints": list(self.prompt_hints),
+            "efforts": list(self.efforts),
+            "alias_of": self.alias_of,
+            "canonical": self.canonical,
             "source": self.source,
         }
 
@@ -70,6 +79,9 @@ class RouteMeta:
             "value": self.value,
             "requirements": list(self.requirements),
             "prompt_hints": list(self.prompt_hints),
+            "efforts": list(self.efforts),
+            "alias_of": self.alias_of,
+            "canonical": self.canonical,
             "source": self.source,
         }
 
@@ -219,6 +231,29 @@ _BUILTIN = {
     ),
 }
 
+# Canonical model-level routes expose effort as a separate choice. Effort
+# variants are not independent models; they are aliases excluded from auto
+# allocation and kept only for explicit --route dispatch.
+_EFFORTS = {
+    "opus": ("high", "xhigh"),
+    "fable": ("medium", "high"),
+    "sonnet": ("high",),
+    "sol": ("high", "xhigh"),
+    "terra": ("high",),
+}
+for _name, _efforts in _EFFORTS.items():
+    _BUILTIN[_name] = replace(_BUILTIN[_name], efforts=_efforts)
+
+# `claude` is the Claude Code CLI entry point, not a model. In this account its
+# default model is opus, with a MiniMax fallback; treat it as an explicit
+# compatibility alias, never as a separate model candidate.
+_BUILTIN["claude"] = replace(
+    _BUILTIN["claude"],
+    label="Claude CLI 默认入口（当前 opus）+ minimax 兜底",
+    alias_of="opus",
+    source="alias of opus (CLI default model)",
+)
+
 # Alias routes added by the operator; exact entries keep their effort in the
 # name but share the underlying model's capability profile.
 _ALIAS = {
@@ -269,7 +304,16 @@ def meta_for(name: str, route=None) -> RouteMeta:
     if name in _ALIAS:
         base = _BUILTIN[_ALIAS[name]]
         return replace(base, name=name, label=f"{base.label}（{name}）",
-                       source="declared alias")
+                       source="declared alias", efforts=(), alias_of=base.name)
+    import re as _re
+    m = _re.match(r"^(opus|fable|sonnet|sol|terra)-(low|medium|med|high|xhigh|max)$", name)
+    if m and m.group(1) in _BUILTIN:
+        base = _BUILTIN[m.group(1)]
+        return replace(
+            base, name=name, label=f"{base.label}（{m.group(2)}）",
+            source="effort alias", efforts=(), alias_of=base.name,
+            requirements=base.requirements + (f"effort: {m.group(2)}",),
+        )
     agent = str(getattr(route, "agent", "") or "")
     model = str(getattr(route, "model", "") or "")
     low = model.lower()
@@ -301,9 +345,12 @@ def criterion(name: str, route=None) -> str:
     cost = f"成本档 {m.cost_tier}/5" if m.cost_tier else "成本未知"
     req = "；".join(m.requirements) if m.requirements else "无额外要求"
     hints = "；".join(m.prompt_hints) if m.prompt_hints else "无"
+    efforts = "/".join(m.efforts) if m.efforts else "无（固定）"
+    alias = f"；别名 of {m.alias_of}" if m.alias_of else ""
     return (
-        f"{m.label}；{cost}；优点：{'/'.join(m.strengths)}；"
-        f"缺点：{'/'.join(m.weaknesses)}；{req}；提示词要求：{hints}"
+        f"{m.label}{alias}；{cost}；可选 effort：{efforts}；"
+        f"优点：{'/'.join(m.strengths)}；缺点：{'/'.join(m.weaknesses)}；"
+        f"{req}；提示词要求：{hints}"
     )
 
 
