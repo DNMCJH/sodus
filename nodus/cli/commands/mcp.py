@@ -11,7 +11,21 @@ import tempfile
 import tomllib
 from datetime import datetime
 
-COMMAND = sys.executable
+def _mcp_command() -> str:
+    """The host must not pop a console window for an stdio server.
+
+    A GUI host (DSH, Claude, Codex) spawns this command itself; on Windows a
+    console-subsystem python.exe gets its own visible console. pythonw.exe
+    keeps the same stdio pipes without a window.
+    """
+    if os.name == "nt":
+        candidate = Path(sys.executable).with_name("pythonw.exe")
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
+COMMAND = _mcp_command()
 ARGS = ["-m", "sodus", "mcp"]
 
 

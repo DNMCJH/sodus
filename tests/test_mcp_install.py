@@ -1,5 +1,6 @@
 """Installer behavior with isolated host files, never real user configuration."""
 import json
+import os
 from pathlib import Path
 import pytest
 from nodus.cli import main
@@ -98,7 +99,7 @@ def test_interpreter_and_legacy_drift(home, capsys):
     assert run('claude') == 0
     path = home / '.claude.json'
     data = json.loads(path.read_text(encoding='utf-8'))
-    assert data['mcpServers']['sodus']['command'] == sys.executable
+    assert data['mcpServers']['sodus']['command'] == mcp.COMMAND
     data['mcpServers']['sodus']['command'] = 'Z:/legacy/python.exe'
     path.write_text(json.dumps(data), encoding='utf-8')
     assert run('claude', '--check') == 1
@@ -161,3 +162,9 @@ def test_opencode_atomic_failure(home, monkeypatch):
     assert run('opencode') == 1
     assert path.read_text(encoding='utf-8') == '{}'
     assert not list(path.parent.glob('*.tmp'))
+
+def test_mcp_command_hides_console_window_on_windows():
+    """A GUI host must not pop a console window for the stdio bridge."""
+    if os.name != "nt":
+        return
+    assert Path(mcp.COMMAND).name.lower() == "pythonw.exe"
