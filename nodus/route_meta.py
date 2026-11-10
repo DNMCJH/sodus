@@ -229,6 +229,17 @@ _BUILTIN = {
         ("provider: relay-openai", "视觉任务优先"),
         ("附图片并说明要看什么",),
     ),
+    "carbon": _meta(
+        "carbon", "Gemini 4 Carbon 高智能多模态",
+        ("高智能", "长上下文", "文本/图像/音频/视频输入", "强推理"),
+        ("贵", "慢", "输出冗长", "普通代码任务不划算"),
+        {"code": 0.9, "analysis": 1.0, "ops": 0.8, "writing": 0.85, "retrieval": 0.9},
+        3, 5, "1M", True, True, 5,
+        "$4/M 输入、$20/M 输出；缓存折扣 95%（官方价）",
+        "高难多模态/长上下文；价格高，别用于日常小任务",
+        ("provider: relay-openai", "model: codes9527/gemini-4-carbon", "opencode 模型表需登记"),
+        ("把图片/音视频路径附上，说明要看什么", "不要让它做机械改名"),
+    ),
 }
 
 # Canonical model-level routes expose effort as a separate choice. Effort
