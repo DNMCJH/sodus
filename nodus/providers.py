@@ -213,7 +213,7 @@ def _builtin() -> dict[str, Provider]:
                 "opus": "claude-opus-5-5[1M]",
                 "sonnet": "claude-sonnet-5-5[1M]",
                 "haiku": "gemini-3.8-flash",
-                "fable": "claude-opus-5-5[1M]",
+                "fable": "claude-fable-5-2",
             },
             meter="relay",
             note="9527 中转，站内余额计价",
