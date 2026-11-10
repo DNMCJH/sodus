@@ -13,6 +13,7 @@ and the dynamic fallback for custom routes.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from typing import Iterable
 
 
@@ -36,6 +37,7 @@ class RouteMeta:
     source: str = "declared"
     efforts: tuple[str, ...] = ()
     alias_of: str | None = None
+    promotion: dict | None = None
 
     @property
     def canonical(self) -> bool:
@@ -57,6 +59,7 @@ class RouteMeta:
             "efforts": list(self.efforts),
             "alias_of": self.alias_of,
             "canonical": self.canonical,
+            "promotion": dict(self.promotion) if self.promotion else None,
             "source": self.source,
         }
 
@@ -82,6 +85,7 @@ class RouteMeta:
             "efforts": list(self.efforts),
             "alias_of": self.alias_of,
             "canonical": self.canonical,
+            "promotion": dict(self.promotion) if self.promotion else None,
             "source": self.source,
         }
 
@@ -90,10 +94,12 @@ def _meta(name: str, label: str, strengths: Iterable[str], weaknesses: Iterable[
           kinds: dict[str, float], floor: int, ceiling: int, context: str,
           tools: bool, vision: bool, cost_tier: int | None, price: str,
           value: str, requirements: Iterable[str] = (),
-          prompt_hints: Iterable[str] = (), source: str = "declared") -> RouteMeta:
+          prompt_hints: Iterable[str] = (), source: str = "declared",
+          promotion: dict | None = None) -> RouteMeta:
     return RouteMeta(name, label, tuple(strengths), tuple(weaknesses), dict(kinds),
                      floor, ceiling, context, tools, vision, cost_tier, price,
-                     value, tuple(requirements), tuple(prompt_hints), source)
+                     value, tuple(requirements), tuple(prompt_hints), source, (),
+                     None, promotion)
 
 
 _BUILTIN = {
@@ -235,10 +241,16 @@ _BUILTIN = {
         ("贵", "慢", "输出冗长", "普通代码任务不划算"),
         {"code": 0.9, "analysis": 1.0, "ops": 0.8, "writing": 0.85, "retrieval": 0.9},
         3, 5, "1M", True, True, 5,
-        "$4/M 输入、$20/M 输出；缓存折扣 95%（官方价）",
+        "$2/M 输入、$10/M 输出（到 2026-11-30）；12/1 起 $4/$20；缓存折扣 95%（官方价）",
         "高难多模态/长上下文；价格高，别用于日常小任务",
         ("provider: relay-openai", "model: codes9527/gemini-4-carbon", "opencode 模型表需登记"),
         ("把图片/音视频路径附上，说明要看什么", "不要让它做机械改名"),
+        promotion={
+            "until": "2026-12-01",
+            "cost_tier": 2,
+            "prefer_over": ["argon"],
+            "note": "首发价 $2/M 输入、$10/M 输出；12 月 1 日前优先于 argon",
+        },
     ),
 }
 
@@ -306,6 +318,19 @@ def _generic(name: str, agent: str, model: str | None) -> RouteMeta:
                      "未知", True, False, tier, price, value,
                      ("未声明 provider/代理要求",), ("未声明临时提示词要求",),
                      "inferred")
+
+
+def active_promotion(name: str, route=None, today: date | None = None) -> dict | None:
+    """The route's promotion if today is before its exclusive end date."""
+    promotion = meta_for(name, route).promotion
+    if not promotion:
+        return None
+    try:
+        until = date.fromisoformat(str(promotion["until"]))
+    except (KeyError, ValueError):
+        return None
+    now = today or date.today()
+    return dict(promotion) if now < until else None
 
 
 def meta_for(name: str, route=None) -> RouteMeta:

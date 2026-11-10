@@ -1268,6 +1268,8 @@ def _score_candidates(
     for route, measure in measures.items():
         cap = _capability_fit(route, difficulty, kind)
         meta = route_meta.meta_for(route, routes.resolve(route))
+        promotion = route_meta.active_promotion(route, routes.resolve(route))
+        tier = promotion.get("cost_tier") if promotion else meta.cost_tier
         rows.append(
             {
                 "route": route,
@@ -1294,7 +1296,8 @@ def _score_candidates(
                 "measured_by": measure.get("measured_by") or "",
                 "tested_difficulty": measure.get("tested_difficulty"),
                 "covers_difficulty": _covers(measure, difficulty),
-                "declared_cost_tier": meta.cost_tier if meta.cost_tier is not None else measure.get("declared_cost_tier"),
+                "declared_cost_tier": tier if tier is not None else measure.get("declared_cost_tier"),
+                "promotion": promotion,
                 "cost_basis": "unknown",
                 "time_basis": "unknown",
                 "excluded": "",
@@ -1385,7 +1388,7 @@ def _score_candidates(
             if row["solve_rate"] is not None
             and float(row["solve_rate"]) >= _CHEAP_SOLVE
             and row["capability_fit"] >= 0.5
-            and _is_cheap(row, cheapest)
+            and (_is_cheap(row, cheapest) or bool(row.get("promotion")))
         ]
         if qualified:
             qualified_routes = {row["route"] for row in qualified}
@@ -1441,6 +1444,28 @@ def _score_candidates(
                             "dropped": dropped,
                         }
                     )
+
+    # A dated promotion may explicitly prefer one route over another. This is
+    # a policy rule, not a benchmark claim; it expires on its own date.
+    for promoted in [row for row in eligible if row.get("promotion")]:
+        targets = set((promoted.get("promotion") or {}).get("prefer_over") or [])
+        dropped = [row["route"] for row in pool if row["route"] in targets and row["route"] != promoted["route"]]
+        missing = not any(row["route"] == promoted["route"] for row in pool)
+        if dropped or missing:
+            pool = [row for row in pool if row["route"] not in targets]
+            if missing and not promoted.get("excluded"):
+                pool.append(promoted)
+            guardrails.append(
+                {
+                    "rule": "dated-promotion",
+                    "reason": (
+                        f"{promoted['route']} 有日期促销："
+                        f"{(promoted.get('promotion') or {}).get('note') or '优先于 ' + ', '.join(dropped)}"
+                    ),
+                    "kept": [row["route"] for row in pool],
+                    "dropped": dropped,
+                }
+            )
 
     if not pool:
         # Every route was excluded (should not happen with the built-ins). Fall

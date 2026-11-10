@@ -922,3 +922,29 @@ def test_decision_route_task_lists_live_routes_and_sends_capabilities(home, monk
     assert "成本" in criteria["opus"]
     assert "要求" in criteria["opus"]
     assert result["answers"]["route"]["choice"] == "opus"
+
+def test_carbon_promotion_prefers_it_over_argon(monkeypatch):
+    from nodus import route_meta
+
+    def measure(route):
+        return {
+            "route": route, "status": "unknown", "measured_by": "",
+            "solve_rate": None, "solved": None, "attempts": None,
+            "seconds": None, "cost_cny": None, "cost_known": False,
+            "tested_difficulty": None, "declared_cost_tier": None, "note": "",
+        }
+
+    monkeypatch.setattr(
+        route_meta, "active_promotion",
+        lambda name, route=None, today=None: (
+            {"until": "2026-12-01", "cost_tier": 2, "prefer_over": ["argon"],
+             "note": "首发价优先"}
+            if name == "carbon" else None
+        ),
+    )
+    rows, guardrails = policy._score_candidates(
+        3, "code", {"carbon": measure("carbon"), "argon": measure("argon")}
+    )
+    assert any(rule["rule"] == "dated-promotion" for rule in guardrails)
+    assert "argon" not in {row["route"] for row in rows if row["pool"]}
+    assert route_meta.active_promotion("carbon")["prefer_over"] == ["argon"]
