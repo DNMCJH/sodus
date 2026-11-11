@@ -5,6 +5,7 @@
 - 包名、Python 模块、CLI 命令、MCP 工具名、状态目录、数据库文件、环境变量统一改为 sodus；nodus 命令和包移除。
 - sodus migrate-home --apply 把 ~/.nodus 复制到 ~/.sodus，数据库改名为 sodus.sqlite3；源目录不动。
 - MCP 工具名 nodus_* 改为 sodus_*，宿主需重跑 sodus mcp install。
+- 新增 pyyaml 运行时依赖：sodus mcp install --host dsh 合并 YAML 配置需要它（干净环境 CI 首次暴露）。
 
 ## 0.8.1 — Plan execution
 
