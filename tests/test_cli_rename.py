@@ -1,9 +1,8 @@
-"""Phase B/C1: the two entry names, the migration command, and what must not move.
+"""migrate-home: the only path from the old ~/.nodus home to ~/.sodus.
 
-`migrate-home` is the only thing that writes a `~/.sodus`, and only when asked:
-dry-run prints a plan, `--apply` copies and verifies, and a failed verification
-leaves no half-copied directory. The MCP tool names stay `nodus_*` because
-renaming them would break every saved client config.
+Dry-run prints a plan; --apply copies, renames nodus.sqlite3 to sodus.sqlite3,
+verifies row counts, and removes its own half-finished target on failure. The
+source is never moved or deleted. MCP tool names are all sodus_* now.
 """
 
 from __future__ import annotations
@@ -14,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from nodus import config, mcp
-from nodus.cli import TOP_LEVEL, build_parser, main
-from nodus.cli.commands import migrate
+from sodus import config, mcp
+from sodus.cli import TOP_LEVEL, build_parser, main
+from sodus.cli.commands import migrate
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
@@ -29,41 +28,51 @@ def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-rename")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-rename")
     return tmp_path / "home"
 
 
 def _source_home(tmp_path: Path) -> Path:
-    """A believable state directory: one database plus one loose file."""
+    """A believable old state directory: one sqlite db plus one loose file."""
     source = tmp_path / "old" / ".nodus"
     (source / "tasks").mkdir(parents=True)
     (source / "tasks" / "task-abc").mkdir()
-    (source / "tasks" / "task-abc" / "report.md").write_text("done\n", encoding="utf-8")
+    (source / "tasks" / "task-abc" / "report.md").write_text("done" + chr(10), encoding="utf-8")
     (source / "config.json").write_text('{"profile": "default"}', encoding="utf-8")
     conn = sqlite3.connect(source / "nodus.sqlite3")
     try:
         for table in ("task", "run", "artifact"):
-            conn.execute(f"CREATE TABLE {table} (id TEXT)")
+            conn.execute("CREATE TABLE " + table + " (id TEXT)")
         conn.execute("INSERT INTO task VALUES ('task-abc')")
         for index in range(3):
-            conn.execute("INSERT INTO run VALUES (?)", (f"run-{index}",))
+            conn.execute("INSERT INTO run VALUES (?)", ("run-" + str(index),))
         for index in range(2):
-            conn.execute("INSERT INTO artifact VALUES (?)", (f"art-{index}",))
+            conn.execute("INSERT INTO artifact VALUES (?)", ("art-" + str(index),))
         conn.commit()
     finally:
         conn.close()
     return source
 
 
-def test_usage_follows_the_name_it_was_called_as():
+def test_usage_is_sodus():
+    assert build_parser().prog == "sodus"
     assert build_parser("sodus").prog == "sodus"
-    assert build_parser("nodus").prog == "nodus"
 
 
 def test_the_description_names_the_product():
     description = build_parser().description or ""
     assert "Sodus" in description
-    assert "nodus" in description  # the implementation name stays stated
+
+
+def test_migrate_home_skips_setup_that_would_create_the_target(tmp_path, monkeypatch):
+    from sodus import profiles
+
+    called = []
+    monkeypatch.setattr(profiles, "ensure_ready", lambda: called.append(True))
+    source = _source_home(tmp_path)
+    target = tmp_path / "plain" / ".sodus"
+    assert main(["migrate-home", "--from", str(source), "--to", str(target)]) == 0
+    assert called == []
 
 
 def test_migrate_home_is_advertised_and_wired():
@@ -93,15 +102,16 @@ def test_apply_copies_and_proves_the_copy(tmp_path, home, capsys):
     out = capsys.readouterr().out
     assert "done:" in out and "verified" in out
 
-    assert (target / "tasks" / "task-abc" / "report.md").read_text(encoding="utf-8") == "done\n"
+    assert (target / "tasks" / "task-abc" / "report.md").read_text(encoding="utf-8") == "done" + chr(10)
     assert (target / "config.json").read_text(encoding="utf-8") == '{"profile": "default"}'
-    conn = sqlite3.connect(target / "nodus.sqlite3")
+    conn = sqlite3.connect(target / "sodus.sqlite3")
     try:
         assert conn.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 3
         assert conn.execute("SELECT COUNT(*) FROM artifact").fetchone()[0] == 2
     finally:
         conn.close()
-    # One-way: the source is never moved or deleted.
+    assert not (target / "nodus.sqlite3").exists()
+    # One-way: the source is never moved, renamed or deleted.
     assert (source / "nodus.sqlite3").is_file()
     assert (source / "config.json").is_file()
 
@@ -114,7 +124,6 @@ def test_apply_refuses_a_non_empty_target(tmp_path, home, capsys):
 
     assert main(["migrate-home", "--from", str(source), "--to", str(target), "--apply"]) == 1
     assert "already exists" in capsys.readouterr().out
-    # Nothing was overwritten and nothing was deleted.
     assert (target / "keep").read_text(encoding="utf-8") == "mine"
 
 
@@ -139,16 +148,13 @@ def test_the_missing_source_is_an_error_not_an_empty_migration(tmp_path, home, c
     assert not target.exists()
 
 
-def test_mcp_legacy_names_and_ask_transition():
+def test_mcp_tools_are_all_sodus():
     names = [tool["name"] for tool in mcp.TOOLS]
     assert names, "the MCP server advertises no tools"
-    assert {name for name in names if not name.startswith("nodus_")} == {
-        "sodus_ask", "sodus_ask_status",
-    }
-    assert {"nodus_ask", "nodus_ask_status"} <= set(names)
+    assert all(name.startswith("sodus_") for name in names)
+    assert {"sodus_ask", "sodus_ask_status", "sodus_run"} <= set(names)
 
     reply = mcp.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     listed = [tool["name"] for tool in reply["result"]["tools"]]
     assert listed == names
-    # The server identifies as the product name; the tool names stay identifiers.
     assert mcp.SERVER_NAME == "sodus"

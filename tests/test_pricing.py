@@ -11,7 +11,7 @@ import datetime
 
 import pytest
 
-from nodus import config, ledger, pricing, providers
+from sodus import config, ledger, pricing, providers
 
 BEIJING = datetime.timezone(datetime.timedelta(hours=8))
 

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "route": "fable-med",
+  "repeat": 1,
+  "started_at": "2026-11-10T15:27:08",
+  "ended_at": "2026-11-10T15:28:58",
+  "base_dir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-152708",
+  "totals": {
+    "attempts": 2,
+    "solved": 2,
+    "rate": 1.0,
+    "seconds": 102.6,
+    "mean_s": 51.3,
+    "costs": {
+      "CNY": 0.670412,
+      "USD": 0.128129
+    },
+    "cost_cny": 0.670412,
+    "unlabeled": []
+  },
+  "attempts": [
+    {
+      "task": "fix-range-parser",
+      "title": "修复 ranges.parse_ranges 的差一错误",
+      "verdict": "solve",
+      "run_id": "run-b0a90fd79279",
+      "run_status": "completed",
+      "provider": "relay",
+      "error": "",
+      "duration_s": 51.4,
+      "cost": 0.128129,
+      "currency": "USD",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "...........                                                              [100%]\n11 passed in 0.04s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-152708\\work\\fix-range-parser-1",
+      "attempt": 1
+    },
+    {
+      "task": "pricing-discount",
+      "title": "从含糊的折扣需求里补全接口并接进报价",
+      "verdict": "solve",
+      "run_id": "run-598cf3dc82bf",
+      "run_status": "completed",
+      "provider": "relay",
+      "error": "",
+      "duration_s": 51.2,
+      "cost": 0.670412,
+      "currency": "CNY",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "....................                                                     [100%]\n20 passed in 0.07s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-152708\\work\\pricing-discount-1",
+      "attempt": 1
+    }
+  ],
+  "report": "task              verdict  time   cost       detail\n----------------  -------  -----  ---------  ------\nfix-range-parser  solve    51.4s  USD 0.128\npricing-discount  solve    51.2s  ¥0.670\n\nsolve 2/2 (100%) · 平均 51s\n  CNY  0.6704\n  USD  0.1281"
+}

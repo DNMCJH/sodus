@@ -13,7 +13,7 @@ import subprocess
 
 import pytest
 
-from nodus import recover, ui
+from sodus import recover, ui
 
 
 def test_the_page_asks_for_the_token_exactly_once():
@@ -59,7 +59,7 @@ def test_unverified_runs_are_listed_before_they_are_rerun():
 
 
 def test_a_run_is_named_by_its_task_before_its_directory():
-    # "Temp/nodus-oc-smoke" said where, not what. The server sends the task
+    # "Temp/sodus-oc-smoke" said where, not what. The server sends the task
     # title with every decision; paths that do appear keep a full-path tooltip.
     assert "d.task_title" in ui.PAGE
     assert 'title="${esc(r.cwd)}"' in ui.PAGE

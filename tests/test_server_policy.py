@@ -15,7 +15,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from nodus import config, server
+from sodus import config, server
 
 
 def test_authorized_accepts_only_the_real_token(tmp_path, monkeypatch):
@@ -36,7 +36,7 @@ def test_body_cap():
 
 def test_non_loopback_bind_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.delenv("NODUS_ALLOW_REMOTE", raising=False)
+    monkeypatch.delenv("SODUS_ALLOW_REMOTE", raising=False)
     with pytest.raises(SystemExit):
         server.serve(port=1, host="0.0.0.0")
 

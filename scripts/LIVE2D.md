@@ -76,7 +76,7 @@ git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 `
 
 ### 串起来
 
-三个脚本已随本文件存在 `nodus\scripts\live2d\`（`capture.mjs` 顶部的 `REPO`/`PW`/`OUT` 是常量，换机器改这三行）：
+三个脚本已随本文件存在 `sodus\scripts\live2d\`（`capture.mjs` 顶部的 `REPO`/`PW`/`OUT` 是常量，换机器改这三行）：
 
 ```powershell
 node capture.mjs --fps 24 --idle 8 --react 3.9 --dsf 1   # 起服务 + 开 Chromium + 两段抓帧 → raw\idle, raw\react

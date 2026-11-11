@@ -1,0 +1,91 @@
+{
+  "fable-med": {
+    "solved": 2,
+    "n": 2,
+    "mean_s": 51.3,
+    "costs": {
+      "USD": 0.1281,
+      "CNY": 0.6704
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        51.4,
+        0.128129,
+        "USD"
+      ],
+      "pricing-discount": [
+        "solve",
+        51.2,
+        0.670412,
+        "CNY"
+      ]
+    }
+  },
+  "fable-high": {
+    "solved": 2,
+    "n": 2,
+    "mean_s": 96.7,
+    "costs": {
+      "USD": 0.4698
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        63.9,
+        0.1328748,
+        "USD"
+      ],
+      "pricing-discount": [
+        "solve",
+        129.4,
+        0.3369342,
+        "USD"
+      ]
+    }
+  },
+  "opus-high": {
+    "solved": 2,
+    "n": 2,
+    "mean_s": 73.4,
+    "costs": {
+      "USD": 0.3364
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        70.8,
+        0.1316128,
+        "USD"
+      ],
+      "pricing-discount": [
+        "solve",
+        76.1,
+        0.2048128,
+        "USD"
+      ]
+    }
+  },
+  "opus-xhigh": {
+    "solved": 2,
+    "n": 2,
+    "mean_s": 85.2,
+    "costs": {
+      "USD": 0.4978
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        48.5,
+        0.14171160000000002,
+        "USD"
+      ],
+      "pricing-discount": [
+        "solve",
+        122.0,
+        0.3561134,
+        "USD"
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """watch_pet.py — 让 DSH 桌宠"看着屏幕说话"的独立单文件脚本。
 
-不 import nodus 包，只用 Pillow + 标准库 + Win32 ctypes。
+不 import sodus 包，只用 Pillow + 标准库 + Win32 ctypes。
 依据：reports/2026-10-21_桌宠看屏幕技术与接入方案.md
   dry     截屏/指纹/打印，不调模型不说话，零成本（默认）
   vision  调模型，只写日志，不 broadcast（人工抽查用）
@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageGrab
 
-UA, DURATION_MS, PET_PATH, MAX_TEXT = "nodus-watch-pet/1.0", 8000, "/dsh-pet-7340", 30
+UA, DURATION_MS, PET_PATH, MAX_TEXT = "sodus-watch-pet/1.0", 8000, "/dsh-pet-7340", 30
 NET_ERRORS = (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError)
 
 #: system prompt，约 150 tokens。看不清/敏感就闭嘴，<=30 字，只出 JSON。
@@ -434,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
     for flag, key in ((args.interval, "interval"), (args.min_gap, "min_gap"), (args.max_per_day, "max_per_day")):
         if flag is not None:
             cfg["capture"][key] = flag
-    state_dir = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "nodus-watch-pet"
+    state_dir = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "sodus-watch-pet"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path, log_path = state_dir / "state.json", state_dir / "watch_pet.jsonl"
     state, interval = load_state(state_path), float(cfg["capture"]["interval"])

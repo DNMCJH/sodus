@@ -19,17 +19,17 @@ import time
 
 import pytest
 
-from nodus import config, db, lifecycle, runner, server, watchdog
+from sodus import config, db, lifecycle, runner, server, watchdog
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-watchdog")
-    monkeypatch.delenv("NODUS_WATCHDOG", raising=False)
-    monkeypatch.delenv("NODUS_STALL_SECONDS", raising=False)
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-watchdog")
+    monkeypatch.delenv("SODUS_WATCHDOG", raising=False)
+    monkeypatch.delenv("SODUS_STALL_SECONDS", raising=False)
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -156,7 +156,7 @@ def test_a_fresh_tool_call_keeps_the_run_running(home):
 
 
 def test_the_window_is_strict_and_configurable(home, monkeypatch):
-    monkeypatch.setenv("NODUS_STALL_SECONDS", "60")
+    monkeypatch.setenv("SODUS_STALL_SECONDS", "60")
     run = seed(home, age=1000, started_at=1000.0)
 
     # Exactly at the window is still given the benefit of the doubt, matching
@@ -295,29 +295,29 @@ def test_serve_starts_the_watchdog_unless_turned_off():
     source = inspect.getsource(server._serve_bound)
     assert "watchdog.enabled()" in source
     assert "watchdog.start(log=_log)" in source
-    assert "NODUS_WATCHDOG" in inspect.getsource(watchdog.enabled)
+    assert "SODUS_WATCHDOG" in inspect.getsource(watchdog.enabled)
 
 
 # ---- the knobs ---------------------------------------------------------
 
 
 def test_enabled_reads_the_switch(monkeypatch):
-    monkeypatch.delenv("NODUS_WATCHDOG", raising=False)
+    monkeypatch.delenv("SODUS_WATCHDOG", raising=False)
     assert watchdog.enabled() is True
-    monkeypatch.setenv("NODUS_WATCHDOG", "0")
+    monkeypatch.setenv("SODUS_WATCHDOG", "0")
     assert watchdog.enabled() is False
-    monkeypatch.setenv("NODUS_WATCHDOG", "1")
+    monkeypatch.setenv("SODUS_WATCHDOG", "1")
     assert watchdog.enabled() is True
 
 
 def test_stall_seconds_defaults_and_ignores_junk(monkeypatch):
-    monkeypatch.delenv("NODUS_STALL_SECONDS", raising=False)
+    monkeypatch.delenv("SODUS_STALL_SECONDS", raising=False)
     assert watchdog.stall_seconds() == 600.0
-    monkeypatch.setenv("NODUS_STALL_SECONDS", "30")
+    monkeypatch.setenv("SODUS_STALL_SECONDS", "30")
     assert watchdog.stall_seconds() == 30.0
-    monkeypatch.setenv("NODUS_STALL_SECONDS", "not-a-number")
+    monkeypatch.setenv("SODUS_STALL_SECONDS", "not-a-number")
     assert watchdog.stall_seconds() == 600.0
-    monkeypatch.setenv("NODUS_STALL_SECONDS", "0")
+    monkeypatch.setenv("SODUS_STALL_SECONDS", "0")
     assert watchdog.stall_seconds() == 600.0
 
 

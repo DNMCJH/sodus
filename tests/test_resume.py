@@ -11,15 +11,15 @@ import json
 
 import pytest
 
-from nodus import config, db
-from nodus.cli import build_parser
-from nodus.cli.commands import tasks as tasks_cmd
+from sodus import config, db
+from sodus.cli import build_parser
+from sodus.cli.commands import tasks as tasks_cmd
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-resume")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-resume")
     (tmp_path / "home").mkdir()
     return tmp_path / "home"
 

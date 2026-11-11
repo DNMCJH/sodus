@@ -14,14 +14,14 @@ from pathlib import Path
 
 import pytest
 
-from nodus import config, db, lineage
-from nodus.cli import main
+from sodus import config, db, lineage
+from sodus.cli import main
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-a")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-a")
     return tmp_path
 
 
@@ -175,7 +175,7 @@ def test_for_run_reports_sitting_chain_siblings_and_proposals(home):
     a = sitting("A", vendor="v-a")
     b = sitting("B", vendor="v-a", resume="v-a", mode="resume")
     prop = db.create_proposal(
-        b["run"]["id"], b["task"]["id"], "repo", "nodus/x", "/tmp/wt", "main",
+        b["run"]["id"], b["task"]["id"], "repo", "sodus/x", "/tmp/wt", "main",
         "/tmp/x.patch", [{"path": "a.py"}], "1 file changed",
     )
 
@@ -309,7 +309,7 @@ def test_a_completed_run_with_red_verification_is_not_a_success(home):
 
 
 def test_an_old_session_table_is_migrated_not_rebuilt(home):
-    path = config.HOME / "nodus.sqlite3"
+    path = config.HOME / "sodus.sqlite3"
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.executescript(
@@ -407,7 +407,7 @@ def test_unverified_completion_is_not_a_success(tmp_path, monkeypatch):
     skips verification.
     """
     import json
-    from nodus import db, lineage
+    from sodus import db, lineage
 
     task = db.create_task("unverified-case")
     created = db.create_run(task_id=task["id"], agent="claude", cwd=".")

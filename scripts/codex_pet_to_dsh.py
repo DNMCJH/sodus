@@ -7,7 +7,7 @@
   python scripts/codex_pet_to_dsh.py --pet gpt-maiden-refined --kind gpt --name "GPT娘" --corner bottom-left
 
 做什么：
-  1. 从 codex-pets.net 取 pet.json + spritesheet.webp（缓存在 %TEMP%\\nodus-codex-pets）
+  1. 从 codex-pets.net 取 pet.json + spritesheet.webp（缓存在 %TEMP%\\sodus-codex-pets）
   2. 按 192×208 切格，只取 v1/v2 的 9 个状态行（v2 的第 10/11 行是 16 向注视格，丢弃）
   3. 每格贴到 640×360 的 16:9 画布上（dsh-pet 的 <video> 就是这个比例，否则会被压扁）
   4. ffmpeg → VP9 + alpha（ALPHA_MODE=1）、24fps，规格与包内素材一致
@@ -148,7 +148,7 @@ def log(msg: str) -> None:
 
 # codex-pets.net 对没有 User-Agent 的请求直接 403（urllib 默认就带 python-urllib/3.x，
 # 被 Cloudflare 一类的前置挡掉）。带上明确 UA 才能取到 JSON。
-UA = {"User-Agent": "nodus-codex-pet/1.0 (+https://github.com/DNMCJH/nodus)"}
+UA = {"User-Agent": "sodus-codex-pet/1.0 (+https://github.com/DNMCJH/sodus)"}
 
 
 def http_json(url: str):
@@ -162,7 +162,7 @@ def http_bytes(url: str) -> bytes:
 
 
 def cache_dir() -> Path:
-    d = Path(tempfile.gettempdir()) / "nodus-codex-pets"
+    d = Path(tempfile.gettempdir()) / "sodus-codex-pets"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -232,7 +232,7 @@ def encode_webm(frames, out: Path, fps: int, seconds: float, ffmpeg: str) -> Non
     scale = min(CHAR_HEIGHT / content_h, (CANVAS_W - 40) / content_w)
 
     reps = max(1, round(seconds * fps / len(frames)))
-    tmp = Path(tempfile.mkdtemp(prefix="nodus-frames-"))
+    tmp = Path(tempfile.mkdtemp(prefix="sodus-frames-"))
     try:
         idx = 0
         for _ in range(reps):
@@ -346,11 +346,11 @@ def main() -> int:
     # 直接覆盖写会 EBUSY（ffmpeg 退出码 3199971767）。临时目录编码完再 os.replace，
     # 失败时至少不会留下半个文件把正在播的动画弄坏。
     if args.dry_run:
-        out_dir = Path(tempfile.mkdtemp(prefix=f"nodus-pet-{args.kind}-"))
+        out_dir = Path(tempfile.mkdtemp(prefix=f"sodus-pet-{args.kind}-"))
         log(f"dry-run：编码到 {out_dir}")
     else:
         anim_dir.mkdir(parents=True, exist_ok=True)
-        out_dir = Path(tempfile.mkdtemp(prefix=f"nodus-pet-{args.kind}-"))
+        out_dir = Path(tempfile.mkdtemp(prefix=f"sodus-pet-{args.kind}-"))
 
     row_frames = {}
     for state, row, expected in ATLAS_STATES:

@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 import pytest
-from nodus.cli import main
-from nodus.cli.commands import mcp
+from sodus.cli import main
+from sodus.cli.commands import mcp
 
 
 @pytest.fixture

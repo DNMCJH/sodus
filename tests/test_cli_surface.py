@@ -1,6 +1,6 @@
 """The CLI surface: every advertised command must actually be wired.
 
-The surface is curated on purpose: a user should be able to read `nodus
+The surface is curated on purpose: a user should be able to read `sodus
 --help` in one screen. Everything that left the top level still has to work
 as a hidden alias, because scripts and muscle memory outlive help text.
 """
@@ -12,15 +12,15 @@ import re
 
 import pytest
 
-from nodus import config
-from nodus.cli import (
+from sodus import config
+from sodus.cli import (
     DEBUG_COMMANDS,
     STATS_COMMANDS,
     TOP_LEVEL,
     build_parser,
     main,
 )
-from nodus.cli.commands import system
+from sodus.cli.commands import system
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
@@ -42,9 +42,9 @@ def _help(capsys, argv: list[str]) -> str:
     return capsys.readouterr().out
 
 
-def test_parser_is_named_nodus():
+def test_parser_is_named_sodus():
     parser = build_parser()
-    assert parser.prog == "nodus"
+    assert parser.prog == "sodus"
     assert "Sodus" in (parser.description or "")
 
 
@@ -144,6 +144,6 @@ def test_a_debug_entry_point_runs_for_real(tmp_path, monkeypatch, capsys):
     # Namespace parsing is cheap to assert; this one goes through `main` so a
     # broken needs_daemon or dispatch shows up here rather than at the user.
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cli")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-cli")
     assert main(["debug", "locks"]) == 0
     assert "locked" in capsys.readouterr().out

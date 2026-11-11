@@ -2,13 +2,13 @@ import json
 
 import pytest
 
-from nodus import config, db, dream, memory
+from sodus import config, db, dream, memory
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'HOME', tmp_path/'state')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'w3c')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'w3c')
     monkeypatch.setattr(memory, 'saved_project', lambda: tmp_path)
 
 
@@ -90,7 +90,7 @@ def test_approved_only(tmp_path):
 
 
 def test_rollback_cli(tmp_path,capsys):
-    from nodus.cli import main
+    from sodus.cli import main
     target = tmp_path/'AGENTS.md'
     memory.apply_ops(target,[dict(op='add',text='- alpha')])
     assert main(['memory','rollback','--to','1','--project',str(tmp_path)],prog='sodus') == 0
@@ -98,7 +98,7 @@ def test_rollback_cli(tmp_path,capsys):
 
 
 def test_review_controls_and_board(tmp_path):
-    from nodus import server, ui
+    from sodus import server, ui
     cid = db.memory_add_candidate('board fact',workspace=str(tmp_path))
     row = server._memory_board()[0]
     assert row['id'] == cid and row['version'] == 1
@@ -110,7 +110,7 @@ def test_review_controls_and_board(tmp_path):
 
 
 def test_memory_board_merges_staged_and_harvest(monkeypatch, tmp_path):
-    from nodus import memory, server
+    from sodus import memory, server
     staged = db.memory_add_candidate('same fact', workspace=str(tmp_path))
     harvest = [{'id':'h', 'text':'harvest fact', 'sources':[], 'conflict':False, 'adopted':False},
                {'id':'dup', 'text':'same fact', 'sources':[], 'conflict':False, 'adopted':False}]

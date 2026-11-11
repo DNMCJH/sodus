@@ -2,13 +2,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from nodus import config, db, dream
+from sodus import config, db, dream
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'HOME', tmp_path / 'state')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'dream-tests')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'dream-tests')
 
 
 def episode(root, verdict='pass', **kw):
@@ -73,7 +73,7 @@ def test_extract_invalid_output_fails_and_allows_replan(monkeypatch):
 
 
 def test_count_atomic_threshold_exposure_and_self_evidence(monkeypatch):
-    from nodus import memory
+    from sodus import memory
     text = '数据库迁移需要事务'
     cid = db.memory_add_candidate(text, hash=memory._hash(memory._norm(text)), status='pending')
     ids = [episode(root, run_id='r'+str(i)) for i, root in enumerate(['a','a','b','c','d'])]
@@ -109,7 +109,7 @@ def test_pending_and_harvest_exemption(monkeypatch):
 
 
 def test_limit_and_cli(monkeypatch, capsys):
-    from nodus.cli import main
+    from sodus.cli import main
     monkeypatch.setattr(config, 'dream_daily_tokens', lambda: 0)
     episode('a')
     with pytest.raises(RuntimeError, match='token limit'):
@@ -123,7 +123,7 @@ def test_limit_and_cli(monkeypatch, capsys):
 
 
 def test_model_adapter_route_kind_ledger_and_daily_cap(monkeypatch):
-    from nodus import runner, ledger
+    from sodus import runner, ledger
     calls = []
     monkeypatch.setattr(config, 'dream_route', lambda: 'cheap')
     def start(tid, **kwargs):
@@ -180,6 +180,6 @@ def test_v5_migration_failure_rolls_back(monkeypatch):
     with pytest.raises(RuntimeError, match='migration failure'):
         db.connect()
     import sqlite3
-    with sqlite3.connect(config.HOME / 'nodus.sqlite3') as c:
+    with sqlite3.connect(config.HOME / 'sodus.sqlite3') as c:
         assert c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == '4'
         assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='candidate_evidence'").fetchone()

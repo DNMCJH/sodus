@@ -12,14 +12,14 @@ import time
 
 import pytest
 
-from nodus import agents, config, db, decision, providers, routes, runner
-from nodus.cli import build_parser
+from sodus import agents, config, db, decision, providers, routes, runner
+from sodus.cli import build_parser
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-auto")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-auto")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -125,7 +125,7 @@ def test_auto_uses_the_policy_recommendation(home, stub, tmp_path):
 def test_auto_judges_title_goal_and_acceptance(home, stub, tmp_path):
     run = _run(
         tmp_path,
-        goal="把 nodus/db.py 里的连接管理重构成上下文管理器",
+        goal="把 sodus/db.py 里的连接管理重构成上下文管理器",
         acceptance="pytest 全绿",
         route="auto",
     )
@@ -202,7 +202,7 @@ def test_a_policy_failure_on_an_explicit_route_does_not_block_the_run(
 
 
 def test_cli_run_sends_auto_to_the_daemon(monkeypatch):
-    from nodus.cli.commands import tasks as tasks_cmd
+    from sodus.cli.commands import tasks as tasks_cmd
 
     sent: dict = {}
 

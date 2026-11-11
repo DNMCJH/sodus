@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nodus import observe, observe_sync
+from sodus import observe, observe_sync
 
 
 def test_sync_once_uses_the_import_path(monkeypatch):
@@ -15,19 +15,19 @@ def test_sync_once_uses_the_import_path(monkeypatch):
 
 
 def test_disabled_means_no_thread(monkeypatch):
-    monkeypatch.setenv("NODUS_OBSERVE_SYNC", "0")
+    monkeypatch.setenv("SODUS_OBSERVE_SYNC", "0")
     assert observe_sync.enabled() is False
     assert observe_sync.start() is None
 
 
 def test_interval_reads_the_environment(monkeypatch):
-    monkeypatch.delenv("NODUS_OBSERVE_SYNC_SECONDS", raising=False)
+    monkeypatch.delenv("SODUS_OBSERVE_SYNC_SECONDS", raising=False)
     assert observe_sync.interval() == 300.0
-    monkeypatch.setenv("NODUS_OBSERVE_SYNC_SECONDS", "45")
+    monkeypatch.setenv("SODUS_OBSERVE_SYNC_SECONDS", "45")
     assert observe_sync.interval() == 45.0
-    monkeypatch.setenv("NODUS_OBSERVE_SYNC_SECONDS", "later")
+    monkeypatch.setenv("SODUS_OBSERVE_SYNC_SECONDS", "later")
     assert observe_sync.interval() == 300.0
-    monkeypatch.setenv("NODUS_OBSERVE_SYNC_SECONDS", "0")
+    monkeypatch.setenv("SODUS_OBSERVE_SYNC_SECONDS", "0")
     assert observe_sync.interval() == 300.0
 
 

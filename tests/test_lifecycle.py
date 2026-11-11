@@ -7,7 +7,7 @@ needs_you / handling / stopped. None of them is changed here. These tests copy
 their rules out -- including reading recover's gate names out of its own source
 -- and assert `lifecycle` does not contradict them.
 
-The last test replays 20 rows from the real `~/.nodus/nodus.sqlite3` (a
+The last test replays 20 rows from the real `~/.sodus/sodus.sqlite3` (a
 read-only snapshot, so a running daemon cannot be disturbed) and asserts the
 same agreement on history rather than on fixtures. It skips on a machine that
 has no history database; it is a regression on real data, not a CI dependency.
@@ -24,14 +24,14 @@ from pathlib import Path
 
 import pytest
 
-from nodus import config, db, lifecycle, lineage, recover, runner, server
+from sodus import config, db, lifecycle, lineage, recover, runner, server
 
 @pytest.fixture(autouse=True)
 def recovery_enabled(monkeypatch):
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
 
 
-REAL_DB = Path.home() / ".nodus" / "nodus.sqlite3"
+REAL_DB = Path.home() / ".sodus" / "sodus.sqlite3"
 
 #: Every gate `recover.retry_plan` names today. The source-reading test below
 #: fails if this list and the source disagree, which is the point: a new gate
@@ -346,9 +346,9 @@ def test_lineage_never_calls_a_failed_run_ok():
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-lifecycle")
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-lifecycle")
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -410,7 +410,7 @@ def test_the_money_gate_is_the_only_human_question(home, monkeypatch):
     # is refused for money, which is the only failure a person is asked about.
     _seed(home, "", status="completed", usage={"cost": 0.5, "currency": "CNY"})
     run = _seed(home, "exit code 1", usage={"cost": 0.4, "currency": "CNY"})
-    monkeypatch.setenv("NODUS_DAILY_BUDGET", "1.0")
+    monkeypatch.setenv("SODUS_DAILY_BUDGET", "1.0")
     board = server.board_state()
     entry = next(item for item in board["needs_you"] if item.get("run") == run["id"])
     assert entry["kind"] == "budget"
@@ -453,15 +453,15 @@ def history(tmp_path, monkeypatch):
         pytest.skip(f"no history database at {REAL_DB}")
     home_dir = tmp_path / "history-home"
     home_dir.mkdir()
-    snapshot = home_dir / "nodus.sqlite3"
+    snapshot = home_dir / "sodus.sqlite3"
     try:
         _snapshot_db(REAL_DB, snapshot)
     except sqlite3.DatabaseError as exc:  # locked / mid-write: not this test's job
         pytest.skip(f"could not snapshot {REAL_DB}: {exc}")
     monkeypatch.setattr(config, "HOME", home_dir)
-    monkeypatch.setenv("NODUS_WORKSPACE", _dominant_workspace(snapshot))
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_WORKSPACE", _dominant_workspace(snapshot))
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
     return home_dir
 
 
@@ -696,7 +696,7 @@ def test_ask_mapping(status, expected):
 @pytest.mark.parametrize('version', [None, '1', '2'])
 def test_accepted_by_upgrade_and_reconnect(home, version):
     config.ensure_dirs()
-    path = config.HOME / 'nodus.sqlite3'
+    path = config.HOME / 'sodus.sqlite3'
     if version:
         with sqlite3.connect(path) as c:
             c.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
@@ -726,7 +726,7 @@ def test_lineage_matches_task_derivation(verify):
 
 @pytest.mark.parametrize('green,review,expected', [(True,'accept','done'), (True,'revise','needs_review'), (False,'revise','failed')])
 def test_fix_cache_uses_task_mapping(home, monkeypatch, green, review, expected):
-    from nodus import fix
+    from sodus import fix
     task = db.create_task('repair', 'pytest')
     target = db.create_run(task['id'], 'codex', str(home))
     db.update_run(target['id'], status='completed')
@@ -749,7 +749,7 @@ def test_fix_cache_uses_task_mapping(home, monkeypatch, green, review, expected)
 
 @pytest.mark.parametrize('review,expected', [('accept','done'), ('revise','needs_review')])
 def test_tdd_cache_uses_task_mapping(home, monkeypatch, review, expected):
-    from nodus import tdd
+    from sodus import tdd
     task = db.create_task('implement', 'pytest')
     monkeypatch.setattr(tdd, 'plan', lambda *a: {'cmd':['pytest']})
     monkeypatch.setattr(tdd.verify, 'test_file_hashes', lambda *a: {})

@@ -7,8 +7,8 @@ import json
 import pytest
 import zstandard
 
-from nodus import agents, config, db, providers, sessions
-from nodus.sessions import claude, codex, dsh, model
+from sodus import agents, config, db, providers, sessions
+from sodus.sessions import claude, codex, dsh, model
 
 NOW = 1_791_000_000_000
 
@@ -138,7 +138,7 @@ def make_codex(sessions_root, sid: str, cwd: str, text: str = "写个文件") ->
 
 @pytest.fixture()
 def world(tmp_path, monkeypatch):
-    home = tmp_path / "nodus"
+    home = tmp_path / "sodus"
     home.mkdir()
     monkeypatch.setattr(config, "HOME", home)
     dsh_root = tmp_path / "dshsessions"
@@ -295,7 +295,7 @@ def test_continue_plans_the_endpoint_that_wrote_the_session(world):
 
 
 def test_continue_refuses_a_session_outside_our_profiles(tmp_path, monkeypatch):
-    home = tmp_path / "nodus"
+    home = tmp_path / "sodus"
     home.mkdir()
     monkeypatch.setattr(config, "HOME", home)
     monkeypatch.setattr(config, "session_roots", lambda: [])
@@ -343,7 +343,7 @@ def test_handing_a_conversation_to_another_vendor_is_a_seed(world):
 
 def test_a_seed_needs_no_endpoint_for_the_source(world, monkeypatch, tmp_path):
     """A claude session outside our profiles can still be read and handed over."""
-    from nodus.sessions import claude
+    from sodus.sessions import claude
 
     home = tmp_path / "other"
     monkeypatch.setattr(claude, "roots", lambda: [(home, "", "")])

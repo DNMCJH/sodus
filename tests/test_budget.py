@@ -6,7 +6,7 @@ import pytest
 
 import json
 
-from nodus import budget, config, db
+from sodus import budget, config, db
 
 
 @pytest.fixture
@@ -17,11 +17,11 @@ def home(tmp_path, monkeypatch):
     had really spent today, so it went red whenever the workspace was busy
     enough -- a test that fails because of the user's afternoon.
     """
-    from nodus import config
+    from sodus import config
 
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-budget-test")
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-budget-test")
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -50,9 +50,9 @@ def test_no_limit_means_no_refusal(monkeypatch):
 
 
 def test_limit_reads_the_environment_first(monkeypatch):
-    monkeypatch.setenv("NODUS_DAILY_BUDGET", "12.5")
+    monkeypatch.setenv("SODUS_DAILY_BUDGET", "12.5")
     assert budget.limit() == 12.5
-    monkeypatch.setenv("NODUS_DAILY_BUDGET", "not-a-number")
+    monkeypatch.setenv("SODUS_DAILY_BUDGET", "not-a-number")
     assert budget.limit() == 0.0
 
 
@@ -79,7 +79,7 @@ def test_over_the_limit_is_reported_with_numbers(monkeypatch):
 def test_the_ceiling_refuses_new_runs(monkeypatch, home):
     monkeypatch.setattr(budget, "limit", lambda: 1.0)
     monkeypatch.setattr(budget, "spent", lambda now=None: 9.0)
-    from nodus import runner
+    from sodus import runner
 
     try:
         runner.RUNNER.start(task_id="budget-refuse", route_name="claude", cwd=".")
@@ -115,7 +115,7 @@ def test_the_soft_limit_refuses_an_expensive_run(monkeypatch, home):
     monkeypatch.setattr(budget, "soft_limit", lambda: 20.0)
     monkeypatch.setattr(budget, "expensive_routes", lambda: ("claude",))
     monkeypatch.setattr(budget, "spent", lambda now=None: 25.0)
-    from nodus import runner
+    from sodus import runner
 
     try:
         runner.RUNNER.start(task_id="budget-soft", route_name="claude", cwd=".")
@@ -202,7 +202,7 @@ def test_legacy_config(home, monkeypatch):
 
 
 def test_runner_checks_resolved_family_before_claim(home, monkeypatch):
-    from nodus import runner, routes, profiles
+    from sodus import runner, routes, profiles
     monkeypatch.setattr(config, 'load_config', lambda: {'budget': {'soft_families': {'gpt': 80}}})
     monkeypatch.setattr(budget, 'spent_by_family', lambda now=None: {'claude': 0, 'gpt': 80, 'other': 0})
     monkeypatch.setattr(profiles, 'ensure_ready', lambda: None)

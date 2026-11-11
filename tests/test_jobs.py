@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from nodus import config, db, jobs
+from sodus import config, db, jobs
 
 
 @pytest.fixture()

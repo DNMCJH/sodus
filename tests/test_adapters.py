@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from nodus import adapters
+from sodus import adapters
 
 
 def test_claude_result_carries_cost():

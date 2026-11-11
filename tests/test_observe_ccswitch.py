@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from nodus import observe_ccswitch
+from sodus import observe_ccswitch
 
 ROLLUPS = """
 create table usage_daily_rollups (

@@ -3,13 +3,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from nodus import config, db
+from sodus import config, db
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'HOME', tmp_path / 'state')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'staging-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'staging-test')
 
 
 def test_schema_and_reconnect():
@@ -27,7 +27,7 @@ def test_schema_and_reconnect():
 
 def test_v1_upgrade_preserves_rows():
     config.ensure_dirs()
-    with sqlite3.connect(config.HOME / 'nodus.sqlite3') as c:
+    with sqlite3.connect(config.HOME / 'sodus.sqlite3') as c:
         c.executescript("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES('schema_version','1'); CREATE TABLE task(id TEXT PRIMARY KEY, title TEXT); INSERT INTO task VALUES('old','保留');")
     for _ in range(2):
         db._SCHEMA_READY.clear()

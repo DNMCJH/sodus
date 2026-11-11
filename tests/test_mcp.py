@@ -8,28 +8,28 @@ import time
 
 import pytest
 
-from nodus import config, db, mcp
+from sodus import config, db, mcp
 
 EXPECTED_TOOLS = {
-    "nodus_handoff_show", "nodus_handoff_list", "nodus_handoff_check",
-    "sodus_ask", "sodus_ask_status", "nodus_ask", "nodus_ask_status",
-    "nodus_task_create",
-    "nodus_run",
-    "nodus_run_status",
-    "nodus_proposals",
-    "nodus_cost_today",
-    "nodus_memory_remember",
-    "nodus_memory_candidates",
+    "sodus_handoff_show", "sodus_handoff_list", "sodus_handoff_check",
+    "sodus_ask", "sodus_ask_status",
+    "sodus_task_create",
+    "sodus_run",
+    "sodus_run_status",
+    "sodus_proposals",
+    "sodus_cost_today",
+    "sodus_memory_remember",
+    "sodus_memory_candidates",
 }
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch, mcp_http):
     """A state directory per test: db.connect() creates it on demand."""
-    monkeypatch.delenv("NODUS_ROLE", raising=False)
-    monkeypatch.delenv("NODUS_DEPTH", raising=False)
+    monkeypatch.delenv("SODUS_ROLE", raising=False)
+    monkeypatch.delenv("SODUS_DEPTH", raising=False)
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-mcp-test")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-mcp-test")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -99,7 +99,7 @@ def test_tools_list_returns_every_tool(home):
     reply = call("tools/list")
     tools = reply["result"]["tools"]
     assert {item["name"] for item in tools} == EXPECTED_TOOLS
-    assert len(tools) == 14
+    assert len(tools) == 12
 
 
 def test_every_tool_has_an_object_input_schema(home):
@@ -111,9 +111,9 @@ def test_every_tool_has_an_object_input_schema(home):
         assert isinstance(schema["properties"], dict)
         assert set(schema["required"]) <= set(schema["properties"])
     required = {item["name"]: set(item["inputSchema"]["required"]) for item in tools}
-    assert required["nodus_task_create"] == {"title", "description"}
-    assert required["nodus_run"] == {"task_id"}
-    assert required["nodus_run_status"] == {"run_id"}
+    assert required["sodus_task_create"] == {"title", "description"}
+    assert required["sodus_run"] == {"task_id"}
+    assert required["sodus_run_status"] == {"run_id"}
 
 
 # ---- tools/call --------------------------------------------------------
@@ -121,10 +121,10 @@ def test_every_tool_has_an_object_input_schema(home):
 
 def test_task_create_writes_a_real_task(home):
     got = tool(
-        "nodus_task_create",
+        "sodus_task_create",
         {
             "title": "Add MCP",
-            "description": "Expose Nodus over stdio",
+            "description": "Expose Sodus over stdio",
             "acceptance": "pytest -q is green",
         },
     )
@@ -132,40 +132,40 @@ def test_task_create_writes_a_real_task(home):
     payload = got["payload"]
     task = db.get_task(payload["task_id"])
     assert task["title"] == "Add MCP"
-    assert task["goal"] == "Expose Nodus over stdio"
+    assert task["goal"] == "Expose Sodus over stdio"
     assert task["acceptance"] == "pytest -q is green"
     assert payload["status"] == "open"
 
 
 def test_task_create_acceptance_is_optional(home):
-    got = tool("nodus_task_create", {"title": "t", "description": "d"})
+    got = tool("sodus_task_create", {"title": "t", "description": "d"})
     assert got["result"]["isError"] is False
     assert db.get_task(got["payload"]["task_id"])["acceptance"] == ""
 
 
 def test_missing_required_argument_is_a_tool_error(home):
-    got = tool("nodus_task_create", {"description": "no title"})
+    got = tool("sodus_task_create", {"description": "no title"})
     assert got["result"]["isError"] is True
     assert "title" in got["text"]
 
 
 def test_wrong_argument_type_is_a_tool_error(home):
-    got = tool("nodus_task_create", {"title": 7, "description": "d"})
+    got = tool("sodus_task_create", {"title": 7, "description": "d"})
     assert got["result"]["isError"] is True
     assert "字符串" in got["text"]
 
 
 def test_unknown_argument_is_rejected(home):
-    got = tool("nodus_task_create", {"title": "t", "description": "d", "goal": "typo"})
+    got = tool("sodus_task_create", {"title": "t", "description": "d", "goal": "typo"})
     assert got["result"]["isError"] is True
     assert "goal" in got["text"]
 
 
 def test_unknown_tool_is_a_tool_error(home):
-    got = tool("nodus_does_not_exist")
+    got = tool("sodus_does_not_exist")
     assert got["result"]["isError"] is True
     assert "未知工具" in got["text"]
-    assert "nodus_cost_today" in got["text"]
+    assert "sodus_cost_today" in got["text"]
 
 
 def test_exception_inside_a_tool_becomes_is_error(home, monkeypatch):
@@ -173,7 +173,7 @@ def test_exception_inside_a_tool_becomes_is_error(home, monkeypatch):
         raise RuntimeError("database exploded")
 
     monkeypatch.setattr(mcp.client, "call", boom)
-    got = tool("nodus_task_create", {"title": "t", "description": "d"})
+    got = tool("sodus_task_create", {"title": "t", "description": "d"})
     assert got["result"]["isError"] is True
     assert "database exploded" in got["text"]
     # The session survives: the next request is still answered.
@@ -181,7 +181,7 @@ def test_exception_inside_a_tool_becomes_is_error(home, monkeypatch):
 
 
 def test_run_refuses_a_missing_cwd(home, tmp_path):
-    got = tool("nodus_run", {"task_id": "task-x", "cwd": str(tmp_path / "nope")})
+    got = tool("sodus_run", {"task_id": "task-x", "cwd": str(tmp_path / "nope")})
     assert got["result"]["isError"] is True
     assert "cwd" in got["text"]
 
@@ -215,7 +215,7 @@ def _seed_run(agent: str, cost: float, verify: str = "none") -> dict:
 
 def test_run_status_reports_cost_and_acceptance(home):
     run = _seed_run("claude", 0.012345, verify="green")
-    got = tool("nodus_run_status", {"run_id": run["id"]})
+    got = tool("sodus_run_status", {"run_id": run["id"]})
     assert got["result"]["isError"] is False
     payload = got["payload"]
     assert payload["status"] == "completed"
@@ -228,7 +228,7 @@ def test_run_status_reports_cost_and_acceptance(home):
 
 
 def test_run_status_unknown_id_is_a_tool_error(home):
-    got = tool("nodus_run_status", {"run_id": "run-nope"})
+    got = tool("sodus_run_status", {"run_id": "run-nope"})
     assert got["result"]["isError"] is True
     assert "run-nope" in got["text"]
 
@@ -238,8 +238,8 @@ def test_proposals_lists_only_open_ones(home):
         run_id="run-a",
         task_id="task-a",
         repo="C:/repo",
-        branch="nodus/run-a",
-        worktree="C:/repo/.nodus-worktrees/run-a",
+        branch="sodus/run-a",
+        worktree="C:/repo/.sodus-worktrees/run-a",
         base="abc123",
         patch_path="C:/home/runs/run-a/proposal.patch",
         files=[{"path": "a.py", "added": 2, "removed": 1}],
@@ -249,8 +249,8 @@ def test_proposals_lists_only_open_ones(home):
         run_id="run-b",
         task_id="task-b",
         repo="C:/repo",
-        branch="nodus/run-b",
-        worktree="C:/repo/.nodus-worktrees/run-b",
+        branch="sodus/run-b",
+        worktree="C:/repo/.sodus-worktrees/run-b",
         base="abc123",
         patch_path="C:/home/runs/run-b/proposal.patch",
         files=[],
@@ -258,12 +258,12 @@ def test_proposals_lists_only_open_ones(home):
     )
     db.close_proposal(closed["id"], "merged")
 
-    got = tool("nodus_proposals")
+    got = tool("sodus_proposals")
     assert got["result"]["isError"] is False
     assert got["payload"]["count"] == 1
     item = got["payload"]["proposals"][0]
     assert item["proposal_id"] == open_one["id"]
-    assert item["branch"] == "nodus/run-a"
+    assert item["branch"] == "sodus/run-a"
     assert item["files"] == [{"path": "a.py", "added": 2, "removed": 1}]
 
 
@@ -272,7 +272,7 @@ def test_cost_today_groups_by_agent(home):
     _seed_run("claude", 0.25)
     _seed_run("codex", 0.1)
 
-    got = tool("nodus_cost_today")
+    got = tool("sodus_cost_today")
     assert got["result"]["isError"] is False
     payload = got["payload"]
     assert payload["runs"] == 3
@@ -295,7 +295,7 @@ def test_stdio_session_is_newline_delimited(home):
         {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-         "params": {"name": "nodus_cost_today", "arguments": {}}},
+         "params": {"name": "sodus_cost_today", "arguments": {}}},
     ]
     raw = b"".join(json.dumps(item).encode("utf-8") + b"\n" for item in requests)
     out = io.BytesIO()
@@ -319,30 +319,30 @@ def test_parse_error_does_not_end_the_session(home):
     assert replies[0]["error"]["code"] == -32700
     assert replies[1]["result"] == {}
 
-@pytest.mark.parametrize('name', ['sodus_ask', 'nodus_ask', 'nodus_run', 'nodus_task_create'])
+@pytest.mark.parametrize('name', ['sodus_ask', 'sodus_ask', 'sodus_run', 'sodus_task_create'])
 @pytest.mark.parametrize('role,depth', [('worker', '0'), ('user', '1'), ('user', '3'), ('worker', 'bad')])
 def test_worker_denied_before_any_side_effect(monkeypatch, name, role, depth):
-    from nodus.cli import client
+    from sodus.cli import client
     def unexpected(*args, **kwargs):
         pytest.fail('worker must not perform HTTP or dispatch')
     monkeypatch.setattr(client, 'call', unexpected)
     monkeypatch.setattr(db, 'create_task', unexpected)
-    monkeypatch.setenv('NODUS_ROLE', role)
-    monkeypatch.setenv('NODUS_DEPTH', depth)
+    monkeypatch.setenv('SODUS_ROLE', role)
+    monkeypatch.setenv('SODUS_DEPTH', depth)
     result = tool(name)
     assert result['result']['isError']
     assert result['text'] == 'recursion_denied'
 
 
-@pytest.mark.parametrize('name', ['sodus_ask', 'nodus_ask'])
+@pytest.mark.parametrize('name', ['sodus_ask', 'sodus_ask'])
 @pytest.mark.parametrize('depth', [None, '0'])
 def test_ask_http_forwarding(monkeypatch, name, depth):
-    from nodus.cli import client
-    monkeypatch.delenv('NODUS_ROLE', raising=False)
+    from sodus.cli import client
+    monkeypatch.delenv('SODUS_ROLE', raising=False)
     if depth is None:
-        monkeypatch.delenv('NODUS_DEPTH', raising=False)
+        monkeypatch.delenv('SODUS_DEPTH', raising=False)
     else:
-        monkeypatch.setenv('NODUS_DEPTH', depth)
+        monkeypatch.setenv('SODUS_DEPTH', depth)
     args = dict(request_id='req-1', text='why?', cwd='A:/project', route='codex', follow_up_of='ask-1')
     expected = dict(id='ask-2', status='queued', poll='/ask/ask-2')
     def forward(method, path, body, *, headers):
@@ -352,13 +352,13 @@ def test_ask_http_forwarding(monkeypatch, name, depth):
         return expected
     monkeypatch.setattr(client, 'call', forward)
     assert tool(name, args)['payload'] == expected
-    assert mcp._HANDLERS['sodus_ask'] is mcp._HANDLERS['nodus_ask']
+    assert mcp._HANDLERS['sodus_ask'] is mcp._HANDLERS['sodus_ask']
 
 
-@pytest.mark.parametrize('name', ['sodus_ask_status', 'nodus_ask_status'])
+@pytest.mark.parametrize('name', ['sodus_ask_status', 'sodus_ask_status'])
 def test_ask_status_expired_error_unchanged(monkeypatch, name):
-    from nodus.cli import client
-    monkeypatch.setenv('NODUS_ROLE', 'worker')
+    from sodus.cli import client
+    monkeypatch.setenv('SODUS_ROLE', 'worker')
     def forward(method, path):
         assert (method, path) == ('GET', '/ask/ask-old')
         raise RuntimeError('HTTP 410: {"error": "expired"}')
@@ -369,21 +369,21 @@ def test_ask_status_expired_error_unchanged(monkeypatch, name):
 
 
 def test_ask_status_success(monkeypatch):
-    from nodus.cli import client
+    from sodus.cli import client
     monkeypatch.setattr(client, 'call', lambda *a: {'id': 'ask-1', 'status': 'answered', 'answer': 'yes'})
     assert tool('sodus_ask_status', {'id': 'ask-1'})['payload']['answer'] == 'yes'
 
 @pytest.mark.parametrize('name,args,method,path,response', [
-    ('nodus_task_create', {'title':'t','description':'d'}, 'POST', '/tasks', {'id':'task-1'}),
-    ('nodus_run_status', {'run_id':'run-1'}, 'GET', '/runs/run-1', {'status':'completed'}),
-    ('nodus_proposals', {}, 'GET', '/proposals', []),
-    ('nodus_cost_today', {}, 'GET', '/cost/today', {'runs':0}),
-    ('nodus_memory_remember', {'text':'fact'}, 'POST', '/memory/remember', {'added':1}),
-    ('nodus_memory_candidates', {}, 'GET', '/memory/harvest?', {'candidates':[]}),
+    ('sodus_task_create', {'title':'t','description':'d'}, 'POST', '/tasks', {'id':'task-1'}),
+    ('sodus_run_status', {'run_id':'run-1'}, 'GET', '/runs/run-1', {'status':'completed'}),
+    ('sodus_proposals', {}, 'GET', '/proposals', []),
+    ('sodus_cost_today', {}, 'GET', '/cost/today', {'runs':0}),
+    ('sodus_memory_remember', {'text':'fact'}, 'POST', '/memory/remember', {'added':1}),
+    ('sodus_memory_candidates', {}, 'GET', '/memory/harvest?', {'candidates':[]}),
 ])
 def test_all_legacy_tools_forward_only_http(monkeypatch, name, args, method, path, response):
-    monkeypatch.delenv('NODUS_ROLE', raising=False)
-    monkeypatch.delenv('NODUS_DEPTH', raising=False)
+    monkeypatch.delenv('SODUS_ROLE', raising=False)
+    monkeypatch.delenv('SODUS_DEPTH', raising=False)
     calls = []
     def forward(m, p, body=None):
         calls.append((m,p,body))
@@ -397,8 +397,8 @@ def test_all_legacy_tools_forward_only_http(monkeypatch, name, args, method, pat
 
 @pytest.mark.parametrize('status,timeout', [('running',True), ('completed',False)])
 def test_run_http_wait_timeout(monkeypatch, tmp_path, status, timeout):
-    monkeypatch.delenv('NODUS_ROLE', raising=False)
-    monkeypatch.delenv('NODUS_DEPTH', raising=False)
+    monkeypatch.delenv('SODUS_ROLE', raising=False)
+    monkeypatch.delenv('SODUS_DEPTH', raising=False)
     monkeypatch.setattr(mcp, 'WAIT_TIMEOUT', 0)
     calls = []
     def forward(method,path,body=None):
@@ -408,7 +408,7 @@ def test_run_http_wait_timeout(monkeypatch, tmp_path, status, timeout):
             return {'id':'run-1'}
         return {'mcp': {'run_id':'run-1', 'status':status}}
     monkeypatch.setattr(mcp.client,'call', forward)
-    result = tool('nodus_run', {'task_id':'task-1','cwd':str(tmp_path),'wait':True})
+    result = tool('sodus_run', {'task_id':'task-1','cwd':str(tmp_path),'wait':True})
     assert result['payload']['wait_timed_out'] is timeout
     assert calls == [('POST','/runs'), ('GET','/runs/run-1')]
 
@@ -417,6 +417,6 @@ def test_daemon_unavailable_has_start_hint(monkeypatch):
     def unavailable(*a, **k):
         raise RuntimeError('daemon unreachable: refused')
     monkeypatch.setattr(mcp.client,'call',unavailable)
-    result = tool('nodus_cost_today')
+    result = tool('sodus_cost_today')
     assert result['result']['isError']
     assert 'sodus up' in result['text']

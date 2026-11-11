@@ -1,13 +1,13 @@
 """`/board` may gain fields; the ones already consumed must keep their shape.
 
-MCP (`nodus/mcp.py`) and the desktop pet (`nodus-status.js`) read `today`,
+MCP (`sodus/mcp.py`) and the desktop pet (`sodus-status.js`) read `today`,
 `running` and `decisions`. `unverified_runs` is additive, and it exists so the
 page can name the runs behind a count instead of offering one blind rerun.
 """
 
 from __future__ import annotations
 
-from nodus import board as server
+from sodus import board as server
 
 
 def _run(rid: str, **over) -> dict:

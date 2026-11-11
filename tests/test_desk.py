@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from nodus import desk
+from sodus import desk
 
 
 def _row(**over) -> dict:

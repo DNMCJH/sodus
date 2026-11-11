@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 
-from nodus import budget, config, db, ledger, server, usage
+from sodus import budget, config, db, ledger, server, usage
 
 
 def _run(task, minutes_ago: float, usage_obj: dict, *, status: str = "completed"):

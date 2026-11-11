@@ -3,7 +3,7 @@
 What is worth pinning here is the *contract*, not the network: the caller names
 an agent and never an endpoint, the two limits hold, a failed provider falls
 through to the route's next one, and a successful call leaves a priced row that
-`nodus stats` counts. The HTTP shapes are checked by `test_openapi.py`.
+`sodus stats` counts. The HTTP shapes are checked by `test_openapi.py`.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from nodus import config, db, llm, providers, routes
+from sodus import config, db, llm, providers, routes
 
 
 @pytest.fixture(autouse=True)
@@ -209,7 +209,7 @@ def test_a_pet_utterance_is_recorded_as_a_chat_run(tmp_path, monkeypatch):
     """
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     (tmp_path / "home").mkdir()
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-llm-chat")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-llm-chat")
     route = routes.resolve("claude")
     provider = providers.load()["relay"]
     started = time.time()

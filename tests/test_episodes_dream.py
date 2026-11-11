@@ -3,14 +3,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from nodus import config, db, dream, episodes
-from nodus.cli import main, build_parser
+from sodus import config, db, dream, episodes
+from sodus.cli import main, build_parser
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'HOME', tmp_path / 'state')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'episodes-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'episodes-test')
 
 
 def run(status='completed', mark=None, **fields):
@@ -51,9 +51,9 @@ def test_replay_idempotent_filters_and_workspace(monkeypatch):
     run(mark='green')
     run('failed')
     run('running')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'other')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'other')
     run()
-    monkeypatch.setenv('NODUS_WORKSPACE', 'episodes-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'episodes-test')
     assert episodes.replay_episodes(since='2020-01-01T00:00:00Z')['scanned'] == 0
     assert episodes.replay_episodes(limit=0)['scanned'] == 0
     first = episodes.replay_episodes()
@@ -73,9 +73,9 @@ def counts():
 def test_dream_read_only_groups_and_cursor(monkeypatch):
     for mark in ('green', 'green', 'red', None):
         episodes.record_episode(run(mark=mark))
-    monkeypatch.setenv('NODUS_WORKSPACE', 'other')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'other')
     episodes.record_episode(run(mark='green'))
-    monkeypatch.setenv('NODUS_WORKSPACE', 'episodes-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'episodes-test')
     before = counts()
     preview = dream.dry_run()
     assert counts() == before
@@ -108,7 +108,7 @@ def test_cli_json_and_help(capsys):
 
 
 def test_runner_episode_failure_is_isolated(monkeypatch, caplog):
-    from nodus.runner import Runner
+    from sodus.runner import Runner
     row = run('running')
     def broken(*args, **kwargs):
         raise RuntimeError('episode unavailable')
@@ -119,7 +119,7 @@ def test_runner_episode_failure_is_isolated(monkeypatch, caplog):
 
 
 def test_runner_failure_records_episode():
-    from nodus.runner import Runner
+    from sodus.runner import Runner
     row = run('running')
     Runner()._fail(row['id'], 'worker failed')
     stored = db.memory_episodes_after(0)

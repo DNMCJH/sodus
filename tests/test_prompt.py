@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nodus.runner import build_prompt
+from sodus.runner import build_prompt
 
 
 TASK = {"goal": "implement add", "acceptance": "pytest green"}

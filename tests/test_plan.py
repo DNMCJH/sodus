@@ -4,14 +4,14 @@ import sqlite3
 import subprocess
 from pathlib import Path
 import pytest
-from nodus import config, db, plan
+from sodus import config, db, plan
 from sodus.cli import main
 
 
 @pytest.fixture
 def valid(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "state")
-    monkeypatch.setenv("NODUS_WORKSPACE", "plan-test")
+    monkeypatch.setenv("SODUS_WORKSPACE", "plan-test")
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
@@ -113,7 +113,7 @@ def test_roundtrip_cli(valid, tmp_path, capsys):
 
 def test_v5_migration(valid):
     config.ensure_dirs()
-    with sqlite3.connect(config.HOME / "nodus.sqlite3") as c:
+    with sqlite3.connect(config.HOME / "sodus.sqlite3") as c:
         c.executescript(db.SCHEMA)
         c.execute("INSERT INTO meta VALUES('schema_version','5')")
         c.execute("INSERT INTO task(id,title) VALUES('old','preserved')")
@@ -163,7 +163,7 @@ def test_node_constraints(valid, field, value):
 def test_workspace_isolation(valid, monkeypatch):
     value, repo = valid
     pid = plan.import_plan(value, repo)
-    monkeypatch.setenv("NODUS_WORKSPACE", "other-plan-workspace")
+    monkeypatch.setenv("SODUS_WORKSPACE", "other-plan-workspace")
     assert plan.get_plan(pid) is None
     assert plan.list_plans() == []
 
@@ -311,13 +311,13 @@ def test_validator_agents_missing_warning(valid):
 
 
 def test_http_plans(fake_planner, monkeypatch):
-    monkeypatch.delenv("NODUS_ROLE", raising=False)
+    monkeypatch.delenv("SODUS_ROLE", raising=False)
     import threading
     import time
     import urllib.request
     import urllib.error
     from http.server import ThreadingHTTPServer
-    from nodus import server
+    from sodus import server
     _, repo, _, outputs = fake_planner
     httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -386,8 +386,8 @@ def test_http_plans(fake_planner, monkeypatch):
 
 def test_cli_execution(valid, capsys, monkeypatch):
     _, repo = valid
-    from nodus.cli import client
-    from nodus.cli.commands import plan as cli_plan
+    from sodus.cli import client
+    from sodus.cli.commands import plan as cli_plan
     calls = []
     def call(method, path, body=None, **kwargs):
         calls.append((method, path, body, kwargs))
@@ -414,7 +414,7 @@ def test_cli_execution(valid, capsys, monkeypatch):
 
 
 def test_runner_contract_and_failure(valid, monkeypatch):
-    from nodus import runner
+    from sodus import runner
     value, repo = valid
     calls = []
     def start(task_id, **kwargs):
@@ -447,9 +447,9 @@ def test_contract_packaged_and_read_failure(fake_planner, monkeypatch):
 
 
 def test_planning_deadline(valid, monkeypatch):
-    from nodus import runner
+    from sodus import runner
     _, repo = valid
-    monkeypatch.setenv('NODUS_PLAN_TIMEOUT', '0.01')
+    monkeypatch.setenv('SODUS_PLAN_TIMEOUT', '0.01')
     monkeypatch.setattr(plan, '_start_planner_run', lambda *a, **kw: {'id': 'forever'})
     monkeypatch.setattr(runner.RUNNER, 'wait', lambda *a, **kw: {'status': 'running'})
     row = plan.create('goal', repo)
@@ -475,8 +475,8 @@ def test_startup_reconcile(valid, monkeypatch, run_status):
 
 
 def test_cli_deadline(valid, monkeypatch, capsys):
-    from nodus.cli import client
-    from nodus.cli.commands import plan as cli_plan
+    from sodus.cli import client
+    from sodus.cli.commands import plan as cli_plan
     monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
     monkeypatch.setattr(client, 'call', lambda *a, **kw: {'id': 'forever', 'status': 'planning'})
     ticks = iter([0, 0, 1900, 1900])
@@ -490,7 +490,7 @@ def test_cli_deadline(valid, monkeypatch, capsys):
 @pytest.mark.parametrize('path', ['/plan', '/plans/unused/review', '/plans/unused/approve'])
 @pytest.mark.parametrize('mode', ['depth', 'worker'])
 def test_plan_recursion_denied(valid, monkeypatch, path, mode):
-    from nodus import server
+    from sodus import server
     from email.message import Message
     import io
     handler = object.__new__(server.Handler)
@@ -501,7 +501,7 @@ def test_plan_recursion_denied(valid, monkeypatch, path, mode):
     if mode == 'depth':
         handler.headers['X-Sodus-Depth'] = '1'
     else:
-        monkeypatch.setenv('NODUS_ROLE', 'worker')
+        monkeypatch.setenv('SODUS_ROLE', 'worker')
     handler.rfile = io.BytesIO(b'{}')
     replies = []
     monkeypatch.setattr(server, '_json', lambda h, code, body: replies.append((code, body)))
@@ -513,17 +513,17 @@ def test_plan_recursion_denied(valid, monkeypatch, path, mode):
 
 def test_plan_timeout_config(monkeypatch):
     monkeypatch.setattr(config, 'load_config', lambda: {})
-    monkeypatch.delenv('NODUS_PLAN_TIMEOUT', raising=False)
+    monkeypatch.delenv('SODUS_PLAN_TIMEOUT', raising=False)
     assert config.plan_timeout() == 1800
-    monkeypatch.setenv('NODUS_PLAN_TIMEOUT', '12.5')
+    monkeypatch.setenv('SODUS_PLAN_TIMEOUT', '12.5')
     assert config.plan_timeout() == 12.5
     for invalid in ('nan', 'inf', '-1', 'bad'):
-        monkeypatch.setenv('NODUS_PLAN_TIMEOUT', invalid)
+        monkeypatch.setenv('SODUS_PLAN_TIMEOUT', invalid)
         assert config.plan_timeout() == 1800
 
 
 def test_cli_poll_network_timeout(valid, monkeypatch, capsys):
-    from nodus.cli import client
+    from sodus.cli import client
     monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
     def call(method, *a, **kwargs):
         if method == 'POST':
@@ -559,7 +559,7 @@ def test_approval_revalidates(valid, change, monkeypatch):
 
 
 def test_timeout_stops_worker(valid, monkeypatch):
-    from nodus import runner
+    from sodus import runner
     task = db.create_task('timeout')
     run = db.create_run(task['id'], 'sol', cwd=str(valid[1]))
     stopped = []
@@ -571,7 +571,7 @@ def test_timeout_stops_worker(valid, monkeypatch):
 
 
 def test_review_timeout_stops_and_finishes(valid, monkeypatch):
-    from nodus import runner
+    from sodus import runner
     value, repo = valid
     pid = plan.import_plan(value, repo)
     task = db.create_task('review timeout')
@@ -587,7 +587,7 @@ def test_review_timeout_stops_and_finishes(valid, monkeypatch):
 
 @pytest.mark.parametrize("failure", [False, True])
 def test_planner_isolation_cleanup(valid, monkeypatch, failure):
-    from nodus import runner
+    from sodus import runner
     value, repo = valid
     before = subprocess.run(['git', 'status', '--porcelain'], cwd=repo, capture_output=True).stdout
     seen = []
@@ -631,7 +631,7 @@ def test_planner_copy_filter(tmp_path):
 
 
 def test_isolation_fallback_warning(valid, monkeypatch, caplog):
-    from nodus import runner
+    from sodus import runner
     _, repo = valid
     def fail(*a):
         raise OSError('isolation unavailable')
@@ -672,15 +672,15 @@ def test_failed_collector_cleans_workspace(valid, monkeypatch, kind):
 ])
 def test_cli_approval_gate(valid, monkeypatch, capsys, stdin_tty, stdout_tty, role, run, confirmation, success):
     import sys
-    from nodus.cli import client
+    from sodus.cli import client
     value, repo = valid
     pid = plan.import_plan(value, repo)
     plan._update(pid, status='reviewed')
     with db.connect() as c:
         c.execute('UPDATE plan_execution SET review_json=? WHERE plan_id=?', ('{"verdict":"approve"}', pid))
     before = plan.get_plan(pid)
-    monkeypatch.setenv('NODUS_ROLE', role)
-    monkeypatch.setenv('NODUS_RUN', run)
+    monkeypatch.setenv('SODUS_ROLE', role)
+    monkeypatch.setenv('SODUS_RUN', run)
     monkeypatch.setattr(sys.stdin, 'isatty', lambda: stdin_tty)
     monkeypatch.setattr(sys.stdout, 'isatty', lambda: stdout_tty)
     monkeypatch.setattr(client, 'ensure_daemon', lambda: pytest.fail('approval must be local'))
@@ -706,7 +706,7 @@ def test_cli_approval_gate(valid, monkeypatch, capsys, stdin_tty, stdout_tty, ro
         assert 'Type the plan id' in captured.err
 
 def test_extract_json_accepts_summary_before_object(monkeypatch):
-    from nodus import plan as plan_module
+    from sodus import plan as plan_module
     payloads = [
         {'type': 'message', 'payload': {'role': 'assistant', 'text': '这是摘要，不是 JSON。\n\n{"ok": true, "nodes": []}'}},
     ]
@@ -715,7 +715,7 @@ def test_extract_json_accepts_summary_before_object(monkeypatch):
 
 
 def test_extract_json_accepts_fenced_block_with_summary(monkeypatch):
-    from nodus import plan as plan_module
+    from sodus import plan as plan_module
     payloads = [
         {'type': 'message', 'payload': {'role': 'assistant', 'text': '说明\n```json\n{"ok": true}\n```'}},
     ]
@@ -766,7 +766,7 @@ def test_execute_requires_approved(valid, status):
 
 @pytest.mark.parametrize('failure', [None, 'run', 'budget', 'start'])
 def test_execute_dag(executable, monkeypatch, failure):
-    from nodus import runner, budget
+    from sodus import runner, budget
     pid, repo = executable
     starts, checks = [], []
     def check(**kwargs):
@@ -800,7 +800,7 @@ def test_execute_dag(executable, monkeypatch, failure):
 
 def test_execute_async_concurrency_and_reconcile(executable, monkeypatch):
     import threading
-    from nodus import runner, budget
+    from sodus import runner, budget
     pid, _ = executable
     entered, release = threading.Event(), threading.Event()
     monkeypatch.setattr(budget, 'check', lambda **kw: dict(over=False, gated=False))
@@ -860,7 +860,7 @@ def test_v7_to_v8_preserves_nodes(valid):
     ('execute', ['--wait'], {'route': None}),
     ('replan', ['--feedback', 'smaller'], {'feedback': 'smaller'})])
 def test_cli_execution_actions(monkeypatch, capsys, action, extra, payload):
-    from nodus.cli import client
+    from sodus.cli import client
     calls = []
     monkeypatch.setattr(client, 'ensure_daemon', lambda: None)
     def call(method, path, body=None):

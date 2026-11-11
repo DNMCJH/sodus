@@ -13,7 +13,7 @@ import textwrap
 
 import pytest
 
-from nodus import agents, config, db, providers, routes, runner
+from sodus import agents, config, db, providers, routes, runner
 
 FAKE = textwrap.dedent(
     """

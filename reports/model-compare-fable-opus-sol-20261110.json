@@ -1,0 +1,155 @@
+{
+  "sol": {
+    "solved": 4,
+    "n": 4,
+    "mean_s": 83.9,
+    "costs": {},
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        91.7,
+        null,
+        "-",
+        ""
+      ],
+      "pricing-discount": [
+        "solve",
+        107.6,
+        null,
+        "-",
+        ""
+      ],
+      "unify-slugs": [
+        "solve",
+        69.3,
+        null,
+        "-",
+        ""
+      ],
+      "word-metrics": [
+        "solve",
+        67.1,
+        null,
+        "-",
+        ""
+      ]
+    }
+  },
+  "fable-high": {
+    "solved": 4,
+    "n": 4,
+    "mean_s": 76.5,
+    "costs": {
+      "CNY": 0.4827,
+      "USD": 0.5402
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        43.0,
+        0.482728,
+        "CNY",
+        ""
+      ],
+      "pricing-discount": [
+        "solve",
+        144.4,
+        0.33499300000000004,
+        "USD",
+        ""
+      ],
+      "unify-slugs": [
+        "solve",
+        57.9,
+        0.1358982,
+        "USD",
+        ""
+      ],
+      "word-metrics": [
+        "solve",
+        60.9,
+        0.0693218,
+        "USD",
+        ""
+      ]
+    }
+  },
+  "fable-xhigh": {
+    "solved": 4,
+    "n": 4,
+    "mean_s": 91.1,
+    "costs": {
+      "USD": 0.5901,
+      "CNY": 0.769
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        54.1,
+        0.0764664,
+        "USD",
+        ""
+      ],
+      "pricing-discount": [
+        "solve",
+        209.9,
+        0.5136153999999999,
+        "USD",
+        ""
+      ],
+      "unify-slugs": [
+        "solve",
+        59.3,
+        0.26754,
+        "CNY",
+        "exit code 1"
+      ],
+      "word-metrics": [
+        "solve",
+        41.2,
+        0.501424,
+        "CNY",
+        ""
+      ]
+    }
+  },
+  "opus-max": {
+    "solved": 3,
+    "n": 4,
+    "mean_s": 118.2,
+    "costs": {
+      "USD": 0.3817,
+      "CNY": 1.9464
+    },
+    "detail": {
+      "fix-range-parser": [
+        "solve",
+        145.7,
+        0.38173579999999996,
+        "USD",
+        ""
+      ],
+      "pricing-discount": [
+        "timeout",
+        306.4,
+        null,
+        "-",
+        "exit code 1"
+      ],
+      "unify-slugs": [
+        "solve",
+        95.3,
+        0.954158,
+        "CNY",
+        ""
+      ],
+      "word-metrics": [
+        "solve",
+        113.7,
+        0.99225,
+        "CNY",
+        ""
+      ]
+    }
+  }
+}

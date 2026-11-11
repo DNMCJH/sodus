@@ -1,8 +1,8 @@
 import json
 from types import SimpleNamespace
 
-from nodus import config, db
-from nodus.cli.commands.memory import memory_stats
+from sodus import config, db
+from sodus.cli.commands.memory import memory_stats
 
 
 def test_memory_stats_rot_json_uses_temp_db(tmp_path, monkeypatch, capsys):

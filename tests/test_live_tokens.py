@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from nodus import config, db, ledger, server
+from sodus import config, db, ledger, server
 
 
 def _running_run(tmp_path, monkeypatch):

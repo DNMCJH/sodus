@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from nodus import diagnosis, recover, server
+from sodus import diagnosis, recover, server
 
 #: One real-looking error line per cause. The first two and `[WinError 2]` are
-#: verbatim from `~/.nodus/nodus.sqlite3` (37 failed runs, 2026-11-03); the
+#: verbatim from `~/.sodus/sodus.sqlite3` (37 failed runs, 2026-11-03); the
 #: rest are the shapes that history and the old tests recorded. `tests-red`
 #: and `no-change` are inferred from facts, not from an error line, and get
 #: their own cases below.

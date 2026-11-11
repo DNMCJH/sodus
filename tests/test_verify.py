@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from nodus import config, db, verify
+from sodus import config, db, verify
 
 
 def test_detect_pytest_from_pyproject(tmp_path):

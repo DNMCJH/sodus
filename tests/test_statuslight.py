@@ -3,7 +3,7 @@
 These tests are pure: no database, no pet, no clock.
 """
 
-from nodus import statuslight
+from sodus import statuslight
 
 
 def snap(waiting: int = 0, running: int = 0, failed: int = 0) -> dict:

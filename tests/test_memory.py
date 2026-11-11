@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from nodus import agents, config, db, mcp, memory, providers, routes, runner
-from nodus.cli import build_parser
+from sodus import agents, config, db, mcp, memory, providers, routes, runner
+from sodus.cli import build_parser
 TODAY = date.today().isoformat()
 
 
@@ -31,11 +31,11 @@ def env(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     home.mkdir()
     project.mkdir()
-    monkeypatch.setattr(config, "HOME", tmp_path / "nodus")
+    monkeypatch.setattr(config, "HOME", tmp_path / "sodus")
     monkeypatch.setattr(memory, "_user_home", lambda: home)
     monkeypatch.delenv("DSH_HOME", raising=False)
-    monkeypatch.delenv("NODUS_PROJECT", raising=False)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-mem")
+    monkeypatch.delenv("SODUS_PROJECT", raising=False)
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-mem")
     return SimpleNamespace(home=home, project=project, tmp=tmp_path)
 
 
@@ -58,7 +58,7 @@ def test_sources_reports_scope_owner_and_size(env):
     write(env.project / "sub" / "AGENTS.md", "- 子目录里的一条\n")
     write(env.home / ".codex" / "AGENTS.md", "- 全局一条\n")
     write(env.home / ".claude" / "CLAUDE.md", "- 全局二条\n")
-    write(env.home / ".nodus" / "AGENTS.md", "- 第三条\n")
+    write(env.home / ".sodus" / "AGENTS.md", "- 第三条\n")
 
     rows = {
         memory.short_path(row["path"], env.project): (
@@ -74,19 +74,19 @@ def test_sources_reports_scope_owner_and_size(env):
         "sub/AGENTS.md": ("project", "other", 1),
         "~/.codex/AGENTS.md": ("global", "codex", 1),
         "~/.claude/CLAUDE.md": ("global", "claude", 1),
-        "~/.nodus/AGENTS.md": ("global", "other", 1),
+        "~/.sodus/AGENTS.md": ("global", "other", 1),
     }
 
 
 def test_sources_only_looks_one_level_down_and_skips_debris(env):
     write(env.project / "AGENTS.md", "- 顶层\n")
-    write(env.project / "nodus" / "AGENTS.md", "- 一层\n")
-    write(env.project / "nodus" / "deep" / "AGENTS.md", "- 两层，不该读到\n")
+    write(env.project / "sodus" / "AGENTS.md", "- 一层\n")
+    write(env.project / "sodus" / "deep" / "AGENTS.md", "- 两层，不该读到\n")
     write(env.project / "node_modules" / "AGENTS.md", "- 依赖目录，不该读到\n")
     write(env.project / ".hidden" / "AGENTS.md", "- 隐藏目录，不该读到\n")
 
     paths = {memory.short_path(row["path"], env.project) for row in memory.sources(env.project)}
-    assert paths == {"AGENTS.md", "nodus/AGENTS.md"}
+    assert paths == {"AGENTS.md", "sodus/AGENTS.md"}
 
 
 def test_a_missing_memory_file_is_not_reported(env):
@@ -239,7 +239,7 @@ def test_adopt_appends_the_fact_with_date_and_source(env):
     result = memory.adopt([_only(env.project, "构建用 pnpm")["id"]], env.project)
 
     assert result["added"] == 1
-    target = env.home / ".nodus" / "AGENTS.md"
+    target = env.home / ".sodus" / "AGENTS.md"
     assert result["path"] == str(target)
     text = target.read_text(encoding="utf-8")
     assert "## 已验证事实" in text
@@ -258,7 +258,7 @@ def test_a_project_fact_goes_to_the_project_file_only(env):
     assert result["path"] == str(env.project / "AGENTS.md")
     text = (env.project / "AGENTS.md").read_text(encoding="utf-8")
     assert f"- {TODAY}（来源 sub/AGENTS.md）提交信息用中文" in text
-    assert not (env.home / ".nodus" / "AGENTS.md").exists()
+    assert not (env.home / ".sodus" / "AGENTS.md").exists()
 
 
 def test_adopt_names_every_source_of_a_merged_fact(env):
@@ -284,7 +284,7 @@ def test_adopting_twice_does_not_write_twice(env):
 def test_adopt_creates_the_global_file_for_a_global_fact(env):
     write(env.home / ".codex" / "AGENTS.md", "- 提交信息用中文\n")
     memory.adopt([_only(env.project, "提交信息用中文")["id"]], env.project)
-    text = (env.home / ".nodus" / "AGENTS.md").read_text(encoding="utf-8")
+    text = (env.home / ".sodus" / "AGENTS.md").read_text(encoding="utf-8")
     assert text.startswith("## 已验证事实")
     assert "提交信息用中文" in text
     assert not (env.project / "AGENTS.md").exists()
@@ -398,9 +398,9 @@ def board_server(env, monkeypatch):
     import urllib.request
     from http.server import ThreadingHTTPServer
 
-    from nodus import server
+    from sodus import server
 
-    monkeypatch.setenv("NODUS_PROJECT", str(env.project))
+    monkeypatch.setenv("SODUS_PROJECT", str(env.project))
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     httpd.daemon_threads = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -453,7 +453,7 @@ def test_http_adopt_writes_the_fact_and_is_idempotent(env, board_server):
 
     status, body = board_server("/memory/adopt", {"ids": [cand["id"]]}, token=token)
     assert (status, body["added"]) == (200, 1)
-    target = env.home / ".nodus" / "AGENTS.md"
+    target = env.home / ".sodus" / "AGENTS.md"
     assert body["path"] == str(target)
     assert "构建用 pnpm" in target.read_text(encoding="utf-8")
     # the project file is not created for a global fact
@@ -521,7 +521,7 @@ def test_project_dir_is_the_cwd_unless_the_environment_says_otherwise(env, monke
 
     other = env.tmp / "other"
     other.mkdir()
-    monkeypatch.setenv("NODUS_PROJECT", str(other))
+    monkeypatch.setenv("SODUS_PROJECT", str(other))
     assert memory.project_root() == str(other.resolve())
 
 
@@ -539,7 +539,7 @@ def test_the_board_follows_the_project_the_cli_recorded(env, monkeypatch):
 
     other = env.tmp / "other"
     other.mkdir()
-    monkeypatch.setenv("NODUS_PROJECT", str(other))
+    monkeypatch.setenv("SODUS_PROJECT", str(other))
     assert memory.saved_project() == other.resolve()
 
 
@@ -548,7 +548,7 @@ def test_the_board_follows_the_project_the_cli_recorded(env, monkeypatch):
 
 def test_connect_drops_the_legacy_memory_table_and_keeps_its_rows(env):
     config.ensure_dirs()
-    raw = sqlite3.connect(config.HOME / "nodus.sqlite3")
+    raw = sqlite3.connect(config.HOME / "sodus.sqlite3")
     raw.execute("CREATE TABLE memory (id TEXT PRIMARY KEY, text TEXT)")
     raw.execute("INSERT INTO memory VALUES('mem-0000000001','旧的一条事实')")
     raw.commit()
@@ -556,7 +556,7 @@ def test_connect_drops_the_legacy_memory_table_and_keeps_its_rows(env):
 
     db.connect().close()
 
-    raw = sqlite3.connect(config.HOME / "nodus.sqlite3")
+    raw = sqlite3.connect(config.HOME / "sodus.sqlite3")
     tables = {row[0] for row in raw.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     raw.close()
     assert "memory" not in tables
@@ -677,16 +677,16 @@ def _payload(result: dict) -> dict:
 
 def test_mcp_exposes_the_memory_tools(env):
     names = {tool["name"] for tool in mcp.TOOLS}
-    assert {"nodus_memory_remember", "nodus_memory_candidates"} <= names
-    assert "nodus_memory_recall" not in names
+    assert {"sodus_memory_remember", "sodus_memory_candidates"} <= names
+    assert "sodus_memory_recall" not in names
 
 
 def test_mcp_remember_writes_into_agents_md(env, monkeypatch, mcp_http):
     monkeypatch.chdir(env.project)
-    saved = _payload(mcp.call_tool("nodus_memory_remember", {"text": "构建用 pnpm"}))
+    saved = _payload(mcp.call_tool("sodus_memory_remember", {"text": "构建用 pnpm"}))
     assert saved["added"] == 1
     assert (env.project / "AGENTS.md").is_file()
-    again = _payload(mcp.call_tool("nodus_memory_remember", {"text": "构建用 pnpm"}))
+    again = _payload(mcp.call_tool("sodus_memory_remember", {"text": "构建用 pnpm"}))
     assert again["added"] == 0
 
 
@@ -695,21 +695,21 @@ def test_mcp_candidates_lists_sources_and_conflicts(env, monkeypatch, mcp_http):
     write(env.home / ".codex" / "AGENTS.md", "- 构建用 npm\n")
     monkeypatch.chdir(env.project)
 
-    everything = _payload(mcp.call_tool("nodus_memory_candidates", {}))
+    everything = _payload(mcp.call_tool("sodus_memory_candidates", {}))
     assert everything["count"] == 2
     assert {row["text"] for row in everything["candidates"]} == {"构建用 pnpm", "构建用 npm"}
     assert all(row["sources"] for row in everything["candidates"])
     assert everything["project"] == str(env.project.resolve())
 
-    conflicts = _payload(mcp.call_tool("nodus_memory_candidates", {"conflicts_only": True}))
+    conflicts = _payload(mcp.call_tool("sodus_memory_candidates", {"conflicts_only": True}))
     assert conflicts["count"] == 2
     assert all(row["conflict"] for row in conflicts["candidates"])
 
-    limited = _payload(mcp.call_tool("nodus_memory_candidates", {"limit": 1}))
+    limited = _payload(mcp.call_tool("sodus_memory_candidates", {"limit": 1}))
     assert len(limited["candidates"]) == 1
 
 
 def test_mcp_memory_tools_reject_bad_arguments(env, monkeypatch):
     monkeypatch.chdir(env.project)
-    assert mcp.call_tool("nodus_memory_remember", {"text": ""})["isError"] is True
-    assert mcp.call_tool("nodus_memory_candidates", {"nope": 1})["isError"] is True
+    assert mcp.call_tool("sodus_memory_remember", {"text": ""})["isError"] is True
+    assert mcp.call_tool("sodus_memory_candidates", {"nope": 1})["isError"] is True

@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nodus import config, db, meter, providers  # noqa: E402
+from sodus import config, db, meter, providers  # noqa: E402
 
 FILLER = "以下是一段需要忽略的填充文本。" * 120
 CASES = [
@@ -52,7 +52,7 @@ def balance(provider, secrets) -> float:
 def run_once(task_id: str, work: Path, note: str, model: str) -> dict:
     subprocess.run(
         [sys.executable, "-c",
-         "import sys; from nodus.cli import main; sys.exit(main(sys.argv[1:]))",
+         "import sys; from sodus.cli import main; sys.exit(main(sys.argv[1:]))",
          "run", task_id, "--route", "claude", "--model", model, "--no-verify",
          "--cwd", str(work), "--note", note],
         capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace",
@@ -120,7 +120,7 @@ def main() -> int:
             "measured": time.strftime("%Y-%m-%d"),
         }
     }
-    print("\nadd this to ~/.nodus/config.json under cost_models:\n")
+    print("\nadd this to ~/.sodus/config.json under cost_models:\n")
     print(json.dumps({"cost_models": block}, indent=2)[1:-1])
     if args.out:
         Path(args.out).write_text(json.dumps(block, indent=2), encoding="utf-8")

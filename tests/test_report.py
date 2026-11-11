@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from nodus import config, db, report
+from sodus import config, db, report
 
 
 def _data(**over):
@@ -234,7 +234,7 @@ def test_collect_finds_verify_event_after_many_events(tmp_path, monkeypatch):
 
 def test_collect_reads_the_decisions_log_and_skips_broken_lines(tmp_path, monkeypatch):
     """Regression: a refactor dropped report's json import, so every home with a
-    decisions log made `nodus report` crash before it printed anything."""
+    decisions log made `sodus report` crash before it printed anything."""
     monkeypatch.setattr(config, "HOME", tmp_path)
     task = db.create_task("demo", "pytest green")
     (tmp_path / "decisions.jsonl").write_text(

@@ -1,8 +1,8 @@
-> 产品名 Sodus，实现名 nodus。
+> 产品名 Sodus。
 
 # Sodus 0.6 设计定稿（v0.2）
 
-> 2026-11-08 · 分支 `feat/sodus-0.6`（worktree `nodus-0.6`），**不合并 main**，等用户确认。
+> 2026-11-08 · 分支 `feat/sodus-0.6`（worktree `sodus-0.6`），**不合并 main**，等用户确认。
 > 基线：main 的 0.5.1 tag。输入：`reports/brief-0.6-20261108.md`、`_reviews/opus-review.md`、
 > `_reviews/sol-review.md`、`docs/architecture.md`（ADR-001–018）、`docs/routing-memory-lineage.md`、`docs/vision.md`。
 > v0.1（spec-sodus-memory）经两份评审后修订为本版；本版只是设计，**W0 不改任何 .py**。
@@ -45,7 +45,7 @@ brief 的 10 条已确认决策，每条在本文的落点：
 
 ### 2.1 请求判别：问答 vs 执行
 
-`/ask` **只产生回答**，不改主树。执行必须显式升级（§2.4）或走已有的 `nodus_task_create` + `nodus_run`。
+`/ask` **只产生回答**，不改主树。执行必须显式升级（§2.4）或走已有的 `sodus_task_create` + `sodus_run`。
 这样「追问」和「派活」不会被同一个入口模糊处理（sol-review 第 1 条）。
 
 - 回答由一条 `kind='ask'` 的 run 产生，走正常的 routes / ledger / budget 闸（不用 `llm.py`：那是宠物聊天，
@@ -63,7 +63,7 @@ X-Sodus-Depth: 0            # 可选；见 §2.5
 {
   "request_id": "dsh-<uuid>",     # 必填，客户端生成
   "text": "为什么 watchdog 默认 600 秒？",
-  "cwd": "A:\\...\\nodus",         # 工作区；决定 workspace_id 与 AGENTS.md
+  "cwd": "A:\\...\\sodus",         # 工作区；决定 workspace_id 与 AGENTS.md
   "follow_up_of": "ask-xxxx",      # 可选：追问续接，带上一问的 id
   "route": "claude"                # 可选
 }
@@ -74,8 +74,8 @@ GET /ask/{id}
 ```
 
 MCP `sodus_ask` 是同一契约的薄壳（参数同 body，返回 202 的 JSON）；配套 `sodus_ask_status(id)` 等价 `GET /ask/{id}`。
-MCP 工具名：现有工具前缀是 `nodus_`，新工具按 sodus 命名过渡（`docs/sodus-migration.md`）用 `sodus_`，并给
-`nodus_ask` 别名，避免一个服务器里两套前缀没人解释。
+MCP 工具名：现有工具前缀是 `sodus_`，新工具按 sodus 命名过渡（`docs/sodus-migration.md`）用 `sodus_`，并给
+`sodus_ask` 别名，避免一个服务器里两套前缀没人解释。
 
 `follow_up_of`：追问把上一问的问答作为上下文前缀拼进 brief（只读 ask 表，不读 DSH 会话），新问题仍是新 id。
 
@@ -103,12 +103,12 @@ POST /ask/{id}/promote   {"acceptance": "测试命令或验收标准", "route": 
 
 DSH 既是入口又是 worker；worker 里的 DSH 也挂着 sodus MCP，所以 run 内可能再调 `sodus_ask`。
 
-- runner 起 worker 时在环境里设 `NODUS_ROLE=worker` 和 `NODUS_DEPTH=<父 depth+1>`（经 `agents.build_env`，
+- runner 起 worker 时在环境里设 `SODUS_ROLE=worker` 和 `SODUS_DEPTH=<父 depth+1>`（经 `agents.build_env`，
   不进生成的配置文件，符合 ADR-007/011 "配置里不出现 env 块"）。
-- MCP 服务进程继承这两个变量；`sodus_ask` 发现 `NODUS_ROLE=worker` 时直接返回错误，不发 HTTP。
-- HTTP 侧兜底：`X-Sodus-Depth ≥ 1` → **403** `recursion_denied`。MCP 客户端转发时把 `NODUS_DEPTH` 写成该头。
+- MCP 服务进程继承这两个变量；`sodus_ask` 发现 `SODUS_ROLE=worker` 时直接返回错误，不发 HTTP。
+- HTTP 侧兜底：`X-Sodus-Depth ≥ 1` → **403** `recursion_denied`。MCP 客户端转发时把 `SODUS_DEPTH` 写成该头。
 - 最多 1 层：DSH 用户会话（depth 0）→ ask/task 的 worker（depth 1），worker 不能再发 ask。
-  `nodus_run`/`nodus_task_create` 在 worker 内同样拒绝，理由相同。
+  `sodus_run`/`sodus_task_create` 在 worker 内同样拒绝，理由相同。
 - 已知缺口：绕过 MCP、直接带 token 打 HTTP 且不带头的 worker 拦不住；token 只在用户目录，这与 ADR-005 的
   "会话锁是建议性的"同一性质，写明不粉饰。
 
@@ -126,7 +126,7 @@ DSH 既是入口又是 worker；worker 里的 DSH 也挂着 sodus MCP，所以 r
 
 ### 3.1 原则
 
-不新增第五套状态（ADR-018）。`nodus/lifecycle.py` 增加两个**派生函数**，不增加新的可写状态表：
+不新增第五套状态（ADR-018）。`sodus/lifecycle.py` 增加两个**派生函数**，不增加新的可写状态表：
 
 - `task_state(facts) -> str`：输入是该 task 的 run 状态、最后一次 verify verdict、review verdict（`review.py` 的 accept / revise / reject / unparsed / unknown）、人工确认；
 - `ask_state(facts) -> str`：输入是 ask 的 run 状态、`promoted_task_id`、`expires_at`、`now`。
@@ -183,7 +183,7 @@ verify verdict（与 §4.2 episode 共用一套词）：`pass`=`verify.green`；
 | L0 原料 | run 目录（handoff.md、verify-*.txt、events）、DSH/Claude/Codex 会话日志、observation | 文件系统 + 已有表 | 是（它们自己的事实） | — |
 | L1 episode | 每个**结束**的 run 一条：verdict、改动文件 hash、摘要、L0 引用 | SQLite `episode` | 否 | L0 + run/event 表 |
 | L2 候选 | 从 episode 抽出的 lesson / 从 harness 文件 harvest 的事实，带 provenance 与证据 | SQLite `candidate` + `candidate_evidence` | 否 | L1 + 已存的 dream 输出 |
-| L3 采纳事实 | 项目 `AGENTS.md`（全局的进 `~/.nodus/AGENTS.md`）「已验证事实」marker 区块 | 文件 | **唯一真源** | — |
+| L3 采纳事实 | 项目 `AGENTS.md`（全局的进 `~/.sodus/AGENTS.md`）「已验证事实」marker 区块 | 文件 | **唯一真源** | — |
 
 另有横切的 `memory_exposure`（§6）、`dream_batch`（§5）和 FTS 索引。
 
@@ -395,7 +395,7 @@ L3 写入（dream apply、看板采纳、退役、回滚）**全部走这一条�
 1. 拿写锁：`db.lock_path(<AGENTS.md 所在项目根>, owner=batch_id)`（ADR-012 的同一张表）。拿不到 = 有 run 或另一个
    写者在这棵树上，本批次保持 `staged` 下次再试，不等待。
 2. 漂移检查（§4.5），不一致 → `blocked_drift`，释放锁，结束。
-3. 写 journal `~/.nodus/memory/journal/<batch_id>.json`：`{batch_id, target, hash_before, hash_after, staging,
+3. 写 journal `~/.sodus/memory/journal/<batch_id>.json`：`{batch_id, target, hash_before, hash_after, staging,
    ops, memory_version}`，fsync。
 4. 写 staging 文件 `<target>.sodus-staging`（同目录，保证同卷），fsync；`os.replace(staging, target)`。
 5. DB 事务：`meta.memory_version += 1`，写 `l3_hash`，candidate 状态，batch 置 `applied` 并记 `ops_json`、`memory_version`。
@@ -451,14 +451,14 @@ opus-review 第 8 条的问题——会读文件的 harness 不走注入，hits 
 ## 7. 材料组织
 
 ```
-~/.nodus/
-  nodus.db                      # 暂存与索引（本文 §4.4），可删可重建（exposure 除外）
+~/.sodus/
+  sodus.db                      # 暂存与索引（本文 §4.4），可删可重建（exposure 除外）
   memory/
     journal/<batch_id>.json     # §5.4 recovery journal，正常结束即删除
     batches/<batch_id>.json     # dream 输出备份（与 output_json 同内容，便于人读）
   runs/<run_id>/                # L0：handoff.md、verify-*.txt、context.md（已有）
 <project>/AGENTS.md             # L3 真源（项目事实）
-~/.nodus/AGENTS.md              # L3 真源（全局事实，memory.adopt 已如此）
+~/.sodus/AGENTS.md              # L3 真源（全局事实，memory.adopt 已如此）
 ```
 
 - 设计文档：本文；ADR 在 `docs/architecture.md`；进度在 `docs/routing-memory-lineage.md` 第五节。
@@ -505,8 +505,8 @@ opus-review 第 8 条的问题——会读文件的 harness 不走注入，hits 
 6. 隔离：两个 workspace_id 的 ask/episode/candidate 互不可见。
 7. 防递归：worker 环境下 `sodus_ask` 拒绝；`X-Sodus-Depth: 1` → 403。
 8. CJK 检索测试（§4.6）。
-9. 干净 venv 脚本化 e2e：`scripts/e2e_clean_venv.ps1` —— 新建 venv → `pip install -q .` → `nodus up` →
-   `POST /ask` → 断开后用同一 id 轮询 → promote → `sodus status` → `nodus down`；退出码即结论。
+9. 干净 venv 脚本化 e2e：`scripts/e2e_clean_venv.ps1` —— 新建 venv → `pip install -q .` → `sodus up` →
+   `POST /ask` → 断开后用同一 id 轮询 → promote → `sodus status` → `sodus down`；退出码即结论。
 10. dream 成本：一次 dream 后 ledger 里有 `kind='dream'` 的行，日额度到顶时不起新批。
 11. 文档：README / architecture / routing-memory-lineage 与实现一致（本次 W0 已先校准 architecture 与 lineage 文档）。
 
@@ -516,7 +516,7 @@ opus-review 第 8 条的问题——会读文件的 harness 不走注入，hits 
 |---|---|---|
 | W0 | 本设计 + ADR-019/020 + 文档校准（只写文档） | 本文件 SUMMARY；无 .py 改动 |
 | W1 | 版本化迁移框架、schema v2、`lifecycle.task_state/ask_state` + 对照测试、tdd/fix 迁到派生函数；A/B 功效计算 | 门槛 1、2、功效报告 |
-| W2 | `POST/GET /ask`、promote、MCP `sodus_ask`(+`nodus_ask` 别名)、幂等/409/TTL、防递归、`sodus status` 列 ask | 门槛 5（ask 部分）、6、7 |
+| W2 | `POST/GET /ask`、promote、MCP `sodus_ask`(+`sodus_ask` 别名)、幂等/409/TTL、防递归、`sodus status` 列 ask | 门槛 5（ask 部分）、6、7 |
 | W3 | episode 写入（runner 收尾）、exposure 记录、FTS trigram 检索 | 门槛 8 |
 | W4 | dream 批次/游标/抽取/计数、marker 区块、§5.4 apply 协议（含 `memory.adopt` 迁移、写锁）、恢复、漂移、回滚、看板 CAS | 门槛 3、4、5（dream 部分）、10 |
 | W5 | rot/效用指标、A/B 实跑、干净 venv e2e、README 校准 | 门槛 9、11，全部门槛复核 |
@@ -531,7 +531,7 @@ opus-review 第 8 条的问题——会读文件的 harness 不走注入，hits 
 | 004 | 已被 016 取代 | 不涉及 |
 | 005 会话桥只读 | 一致，并加强 | §2.6 不写活跃会话、不推送 |
 | 006/009 一个 CLI 一个 spec | 一致 | ask/dream 只选 route，不出现 CLI 名 |
-| 007/011 配置不含 env | 一致 | `NODUS_ROLE/NODUS_DEPTH` 只进进程环境 |
+| 007/011 配置不含 env | 一致 | `SODUS_ROLE/SODUS_DEPTH` 只进进程环境 |
 | 008/017 成本读表 | 一致 | ask/dream 是 run，成本经 ledger |
 | 010 回退 | 一致 | ask/dream run 走同一回退规则 |
 | 012 写锁 | **扩展** | L3 写入经 `db.lock_path`；`memory.adopt` 迁入（ADR-019 记录） |

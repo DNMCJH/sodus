@@ -1,4 +1,4 @@
-> 产品名 Sodus，实现名 nodus。
+> 产品名 Sodus。
 
 # 三层：能力路由、记忆、会话血缘
 
@@ -21,7 +21,7 @@
 - 推荐必须带依据：有实测数据的路由引用数据，没数据的一律标 `unknown`，不许编
 - 判断写进 run 的事件流，事后能回答"当时为什么派给它"
 
-这一块的真正闭环在评测集：`nodus bench` 跑出每类任务的 solve 率、耗时、成本，喂给 `recommend`。**没有评测数据的路由推荐就是猜。**
+这一块的真正闭环在评测集：`sodus bench` 跑出每类任务的 solve 率、耗时、成本，喂给 `recommend`。**没有评测数据的路由推荐就是猜。**
 
 ## 二、记忆：三档作用域
 
@@ -59,10 +59,10 @@ session ──resume──> session ──branch──> session
 - 这个提案是哪个会话、哪个 run 产出的
 - 同一个问题换路由重试过几次（这才是"该给谁"的真实依据）
 
-实现上不新建体系：`session` 表加 `parent_session_id` / `origin_run_id`，run 已有 `parent_run_id`，proposal 已有 `run_id`。查询层给一个 `nodus lineage <session|run>` 就够了。
+实现上不新建体系：`session` 表加 `parent_session_id` / `origin_run_id`，run 已有 `parent_run_id`，proposal 已有 `run_id`。查询层给一个 `sodus lineage <session|run>` 就够了。
 
 > 2026-11-08 校准：已按此实现——`session` 表有 `parent_session_id` / `origin_run_id` / `relation`（resume/branch/fresh），
-> `nodus/lineage.py` 提供 session / run / task 三种视图，命令是 `sodus debug lineage <ref>`。
+> `sodus/lineage.py` 提供 session / run / task 三种视图，命令是 `sodus debug lineage <ref>`。
 
 ## 四、三者怎么串起来
 
@@ -85,14 +85,14 @@ session ──resume──> session ──branch──> session
 | 块 | 状态 |
 |---|---|
 | 能力路由 | 已实现（`policy.assess` / `recommend` 接进 `runner --agent auto` 和 `sodus route-for`） |
-| 评测集 | 已实现（`eval/tasks` 12 个带隐藏测试的任务 + `nodus bench`） |
+| 评测集 | 已实现（`eval/tasks` 12 个带隐藏测试的任务 + `sodus bench`） |
 | 记忆汇总 | 已实现（`memory.py`：sources / harvest / conflicts / adopt + 看板审核） |
 | 会话血缘 | 已实现（`lineage.py` + `sodus debug lineage`；session 表的 `parent_session_id` / `origin_run_id` / `relation`） |
 | 自动蒸馏记忆 | 已定稿设计、未实现（0.6，`feat/sodus-0.6`）：episode → 候选 → 人采纳 → AGENTS.md，dream 只抽候选不采纳；见 `docs/sodus-0.6-design.md`、ADR-019/020 |
 | 单入口 `/ask` | 已定稿设计、未实现（0.6）：只回答，执行要 promote；轮询无推送；见设计文档 §2 |
 
 > 记忆不再有 SQLite 表。事实写在项目 `AGENTS.md` 的「已验证事实」里，带日期和来源；
-> 旧的三档（private/project/public）、`context_for` 注入和 `nodus memory add/recall`
+> 旧的三档（private/project/public）、`context_for` 注入和 `sodus memory add/recall`
 > 随这次改动删掉了。会读文件的 harness（claude/codex/dsh/opencode）不再需要注入，
 > 只有 `AgentSpec.reads_memory_files=False` 的路由才把这一节塞进 brief。
 >

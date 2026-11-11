@@ -1,18 +1,18 @@
 import http.client
 import sqlite3
 import pytest
-from nodus import config, db, daemon, recover, server, runner, verify
+from sodus import config, db, daemon, recover, server, runner, verify
 
 
 def test_recover_opt_in(monkeypatch):
-    monkeypatch.delenv('NODUS_AUTO_RECOVER', raising=False)
+    monkeypatch.delenv('SODUS_AUTO_RECOVER', raising=False)
     monkeypatch.setattr(config, 'load_config', lambda: {})
     assert not recover.enabled()
     monkeypatch.setattr(config, 'load_config', lambda: {'daemon': {'auto_recover': True}})
     assert recover.enabled()
-    monkeypatch.setenv('NODUS_AUTO_RECOVER', '0')
+    monkeypatch.setenv('SODUS_AUTO_RECOVER', '0')
     assert not recover.enabled()
-    monkeypatch.setenv('NODUS_AUTO_RECOVER', '1')
+    monkeypatch.setenv('SODUS_AUTO_RECOVER', '1')
     assert recover.enabled()
 
 
@@ -52,7 +52,7 @@ def test_verify_infra_retries(monkeypatch, tmp_path):
 
 
 def test_cli_reconcile_uses_http(monkeypatch):
-    from nodus.cli.commands import system
+    from sodus.cli.commands import system
     from types import SimpleNamespace
     calls = []
     monkeypatch.setattr(system, 'call', lambda *args: calls.append(args) or [])

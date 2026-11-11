@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "route": "opus-high",
+  "repeat": 1,
+  "started_at": "2026-11-10T15:32:20",
+  "ended_at": "2026-11-10T15:34:55",
+  "base_dir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-153220",
+  "totals": {
+    "attempts": 2,
+    "solved": 2,
+    "rate": 1.0,
+    "seconds": 146.9,
+    "mean_s": 73.4,
+    "costs": {
+      "USD": 0.336426
+    },
+    "cost_cny": 0.0,
+    "unlabeled": []
+  },
+  "attempts": [
+    {
+      "task": "fix-range-parser",
+      "title": "修复 ranges.parse_ranges 的差一错误",
+      "verdict": "solve",
+      "run_id": "run-430325a481b9",
+      "run_status": "completed",
+      "provider": "relay",
+      "error": "",
+      "duration_s": 70.8,
+      "cost": 0.1316128,
+      "currency": "USD",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "...........                                                              [100%]\n11 passed in 0.03s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-153220\\work\\fix-range-parser-1",
+      "attempt": 1
+    },
+    {
+      "task": "pricing-discount",
+      "title": "从含糊的折扣需求里补全接口并接进报价",
+      "verdict": "solve",
+      "run_id": "run-c543651be589",
+      "run_status": "completed",
+      "provider": "relay",
+      "error": "",
+      "duration_s": 76.1,
+      "cost": 0.2048128,
+      "currency": "USD",
+      "changed": true,
+      "tests_ok": true,
+      "pytest_exit": 0,
+      "pytest_tail": "....................                                                     [100%]\n20 passed in 0.07s\n",
+      "workdir": "C:\\Users\\35336\\AppData\\Local\\Temp\\nodus-bench\\20261110-153220\\work\\pricing-discount-1",
+      "attempt": 1
+    }
+  ],
+  "report": "task              verdict  time   cost       detail\n----------------  -------  -----  ---------  ------\nfix-range-parser  solve    70.8s  USD 0.132\npricing-discount  solve    76.1s  USD 0.205\n\nsolve 2/2 (100%) · 平均 73s · USD 0.34"
+}

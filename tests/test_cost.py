@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from nodus import agents, config, db, meter, providers, runner
-from nodus.cli.commands import system
+from sodus import agents, config, db, meter, providers, runner
+from sodus.cli.commands import system
 
 
 def test_the_measured_model_reproduces_a_real_run():

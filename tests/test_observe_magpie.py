@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nodus import observe_magpie
+from sodus import observe_magpie
 
 ROWS = [
     {"t": "2026-10-26T11:17:31.2704483+08:00", "agent": "claude", "provider": "9527",

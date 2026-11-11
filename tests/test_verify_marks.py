@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nodus import config, db, runner
+from sodus import config, db, runner
 
 
 def _event(rid: str, etype: str) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import textwrap
 
-from nodus import agents, config, db, providers, routes, runner, verify
+from sodus import agents, config, db, providers, routes, runner, verify
 
 WRITER = textwrap.dedent(
     """

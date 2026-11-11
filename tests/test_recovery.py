@@ -6,7 +6,7 @@ import time
 import json
 from pathlib import Path
 
-from nodus import config, db, runner, memory
+from sodus import config, db, runner, memory
 
 
 def _journal(tmp_path, batch_id, target, current, before, after):

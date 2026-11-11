@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nodus import agents, config, routes
+from sodus import agents, config, routes
 
 
 def test_builtin_routes_pair_an_agent_with_an_ordered_chain():
@@ -49,7 +49,7 @@ def test_opencode_readiness_is_the_relay_key(tmp_path, monkeypatch, installed):
 
 
 def test_an_opencode_route_still_builds_a_runnable_argv():
-    from nodus import providers
+    from sodus import providers
 
     route = routes.load()["opencode-glm"]
     spec = agents.SPECS[route.agent]
@@ -140,7 +140,7 @@ def test_a_chain_is_ready_on_its_fallback_alone(tmp_path, monkeypatch, installed
 
 
 def test_the_reviewer_picker_still_works_after_the_split(tmp_path, monkeypatch, installed):
-    from nodus import review
+    from sodus import review
 
     monkeypatch.setattr(config, "HOME", tmp_path)
     monkeypatch.setattr(
@@ -157,7 +157,7 @@ def test_a_legacy_run_name_resolves_to_the_cli_that_wrote_it(tmp_path, monkeypat
     Comparing that against CLI names would let Claude review its own work on
     every old MiniMax run, which is the one thing a reviewer must not do.
     """
-    from nodus import review
+    from sodus import review
 
     monkeypatch.setattr(config, "HOME", tmp_path)
     assert review.implementer_of({"agent": "minimax", "route": None}) == "claude"

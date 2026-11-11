@@ -14,7 +14,7 @@ import sqlite3
 
 import pytest
 
-from nodus import config, db
+from sodus import config, db
 
 #: The run table as it stood before `kind`. The live database is on the left
 #: side of this migration, so the test builds that shape instead of assuming
@@ -44,14 +44,14 @@ WORKSPACE = "ws-run-kind"
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", WORKSPACE)
+    monkeypatch.setenv("SODUS_WORKSPACE", WORKSPACE)
     (tmp_path / "home").mkdir()
     return tmp_path / "home"
 
 
 def _old_database(home, rows: list[tuple[str, str | None, str | None]]) -> None:
     """A pre-kind database with (id, note, usage_json) rows."""
-    conn = sqlite3.connect(home / "nodus.sqlite3")
+    conn = sqlite3.connect(home / "sodus.sqlite3")
     conn.execute(OLD_RUN_SCHEMA)
     conn.executemany(
         "INSERT INTO run(id, workspace_id, agent, status, note, usage_json, started_at)"

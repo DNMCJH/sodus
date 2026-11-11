@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from nodus import ledger
+from sodus import ledger
 
 
 def _run(started_at: float = 1.0, usage=None, **fields) -> dict:

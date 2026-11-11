@@ -4,8 +4,8 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 import pytest
-from nodus import config, handoff, mcp, db
-from nodus.cli import build_parser
+from sodus import config, handoff, mcp, db
+from sodus.cli import build_parser
 
 
 @pytest.fixture
@@ -97,7 +97,7 @@ def test_cli(project, argv, capsys):
 
 
 def test_http_mcp_readonly_auth_and_boundary(project, mcp_http):
-    from nodus.cli import client
+    from sodus.cli import client
     handoff.init()
     handoff.sync()
     path = project / 'HANDOFF.md'
@@ -124,12 +124,12 @@ def test_http_mcp_readonly_auth_and_boundary(project, mcp_http):
         request('/handoff', method='POST')
     names = {t['name'] for t in mcp.TOOLS}
     for action in ('show', 'list', 'check'):
-        name = 'nodus_handoff_' + action
+        name = 'sodus_handoff_' + action
         assert name in names
         result = mcp.call_tool(name, {})
         assert not result['isError']
         assert mcp.call_tool(name, {'write': True})['isError']
-    assert mcp.call_tool('nodus_handoff_show', {'cwd': str(outside)})['isError']
+    assert mcp.call_tool('sodus_handoff_show', {'cwd': str(outside)})['isError']
     assert path.read_bytes() == before
 
 
@@ -183,7 +183,7 @@ def test_mcp_auth_failure_uses_only_get(project, monkeypatch):
         raise RuntimeError('HTTP 401: unauthorized')
     monkeypatch.setattr(mcp.client, 'call', denied)
     for action in ('show', 'list', 'check'):
-        result = mcp.call_tool('nodus_handoff_' + action, {})
+        result = mcp.call_tool('sodus_handoff_' + action, {})
         assert result['isError']
         assert '401' in result['content'][0]['text']
     assert all(method == 'GET' for method, _ in calls)

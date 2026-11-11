@@ -7,7 +7,7 @@ import tomllib
 
 import pytest
 
-from nodus import agents, config, profiles, providers
+from sodus import agents, config, profiles, providers
 
 
 def _relay() -> providers.Provider:

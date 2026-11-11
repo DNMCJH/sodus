@@ -7,13 +7,13 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from nodus import ask, agents, config, db, propose, runner, server
+from sodus import ask, agents, config, db, propose, runner, server
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, 'HOME', tmp_path / 'state')
-    monkeypatch.setenv('NODUS_WORKSPACE', 'ask-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'ask-test')
     monkeypatch.setattr(ask, 'execute', lambda aid: None)
 
 
@@ -23,10 +23,10 @@ def test_idempotency_conflict_expiry_and_workspace(monkeypatch):
     assert ask.submit(dict(request_id='r', text='问题'))[0] == 200
     assert ask.submit(dict(request_id='r', text='changed'))[0] == 409
     assert ask.get(row['id'])[0] == 200
-    monkeypatch.setenv('NODUS_WORKSPACE', 'other')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'other')
     assert ask.get(row['id'])[0] == 404
     assert ask.submit(dict(request_id='r', text='问题'))[0] == 202
-    monkeypatch.setenv('NODUS_WORKSPACE', 'ask-test')
+    monkeypatch.setenv('SODUS_WORKSPACE', 'ask-test')
     db.ask_update(row['id'], expires_at=1)
     assert ask.get(row['id'])[0] == 410
     assert db.ask_sweep() == 1
@@ -89,11 +89,11 @@ def test_http_auth_and_contract(monkeypatch):
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     base = f'http://127.0.0.1:{httpd.server_port}'
-    from nodus import mcp
-    from nodus.cli import client
+    from sodus import mcp
+    from sodus.cli import client
     monkeypatch.setattr(client, 'BASE', base)
-    monkeypatch.delenv('NODUS_ROLE', raising=False)
-    monkeypatch.setenv('NODUS_DEPTH', '0')
+    monkeypatch.delenv('SODUS_ROLE', raising=False)
+    monkeypatch.setenv('SODUS_DEPTH', '0')
     def request(path, body=None, auth=True, depth='0'):
         headers = {'Content-Type': 'application/json', 'X-Sodus-Depth': depth}
         if auth:
@@ -198,16 +198,16 @@ def test_background(tmp_path, monkeypatch, git, fail):
 
 
 def test_worker_environment(monkeypatch):
-    from nodus import providers
+    from sodus import providers
     spec = next(iter(agents.registry().values()))
     provider = next(iter(providers.load().values()))
-    monkeypatch.setenv('NODUS_DEPTH', '2')
+    monkeypatch.setenv('SODUS_DEPTH', '2')
     env = agents.build_env(spec, provider, {})
-    assert env['NODUS_ROLE'] == 'worker' and env['NODUS_DEPTH'] == '3'
+    assert env['SODUS_ROLE'] == 'worker' and env['SODUS_DEPTH'] == '3'
 
 
 def test_status_asks_line(monkeypatch, capsys):
-    from nodus.cli.commands import system
+    from sodus.cli.commands import system
     from urllib.parse import parse_qs, urlparse
     def request(method, path):
         assert method == 'GET'

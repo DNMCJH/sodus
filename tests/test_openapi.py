@@ -1,6 +1,6 @@
 """The OpenAPI contract must stay honest about what `server.py` serves.
 
-PyYAML is not a runtime dependency of Nodus. It is present in the development
+PyYAML is not a runtime dependency of Sodus. It is present in the development
 environment, so these checks run there; where it is absent the module skips
 instead of failing an environment that cannot read the file at all.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from nodus import server
+from sodus import server
 
 yaml = pytest.importorskip("yaml", reason="PyYAML is needed to read openapi.yaml")
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from nodus import config, db, runner
+from sodus import config, db, runner
 
 
 def test_stale_runs_flags_silent_running_run(tmp_path, monkeypatch):

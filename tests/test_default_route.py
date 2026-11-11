@@ -1,10 +1,10 @@
-"""A bare `nodus run` uses the configured default route."""
+"""A bare `sodus run` uses the configured default route."""
 
 from __future__ import annotations
 
 import json
 
-from nodus import config
+from sodus import config
 
 
 def test_default_route_falls_back_to_claude(tmp_path, monkeypatch):

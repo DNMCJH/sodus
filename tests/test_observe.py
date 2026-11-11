@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from nodus import config, db, observe, usage
+from sodus import config, db, observe, usage
 
 BJ = timezone(timedelta(hours=8))
 
@@ -60,7 +60,7 @@ def _write_session(root: Path, *, session: str = "session-abc", project: str = "
 def dsh_root(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
     (tmp_path / "home").mkdir()
-    monkeypatch.setenv("NODUS_DSH_HOME", str(tmp_path / "dsh"))
+    monkeypatch.setenv("SODUS_DSH_HOME", str(tmp_path / "dsh"))
     return tmp_path / "dsh"
 
 

@@ -6,8 +6,8 @@ import pytest
 
 @pytest.fixture
 def mcp_http(monkeypatch):
-    from nodus import server
-    from nodus.cli import client
+    from sodus import server
+    from sodus.cli import client
     httpd = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
     httpd.daemon_threads = True
     monkeypatch.setattr(client, 'BASE', f'http://127.0.0.1:{httpd.server_port}')

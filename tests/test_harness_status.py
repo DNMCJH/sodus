@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from nodus import config, db, harness_status, server
+from sodus import config, db, harness_status, server
 
 WS = "ws-terminals"
 
@@ -32,7 +32,7 @@ YESTERDAY = _local(10, 24, 9)
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", WS)
+    monkeypatch.setenv("SODUS_WORKSPACE", WS)
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -144,7 +144,7 @@ def test_a_missing_log_directory_is_an_answer_not_an_error(tmp_path):
 
 
 def test_default_roots_are_the_documented_locations(tmp_path, monkeypatch):
-    monkeypatch.delenv("NODUS_DSH_HOME", raising=False)
+    monkeypatch.delenv("SODUS_DSH_HOME", raising=False)
     roots = harness_status.roots(tmp_path)
     assert roots["claude"] == tmp_path / ".claude"
     assert roots["codex"] == tmp_path / ".codex"

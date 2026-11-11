@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from nodus import config, db, recover, runner
+from sodus import config, db, recover, runner
 
 ORPHAN = "orphaned: the process that owned this run is gone"
 TIMEOUT_CMD = "Command timed out after 60s"
@@ -22,9 +22,9 @@ TIMEOUT_CMD = "Command timed out after 60s"
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-recover-test")
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-recover-test")
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
     monkeypatch.setattr(recover, "RETRY_LIMIT", 3)
     monkeypatch.setattr(recover, "COST_CAP", 0.5)
     (tmp_path / "home").mkdir()
@@ -337,7 +337,7 @@ def test_the_daily_budget_can_refuse_the_next_retry(home, work, monkeypatch):
     run = make_run(work, ORPHAN, task=task, ended=time.time() - 1)
     db.update_run(run["id"], usage_json=json.dumps({"cost": 0.4, "currency": "CNY"}))
     run = db.get_run(run["id"])
-    monkeypatch.setenv("NODUS_DAILY_BUDGET", "1.0")  # 0.9 spent -> 0.1 left
+    monkeypatch.setenv("SODUS_DAILY_BUDGET", "1.0")  # 0.9 spent -> 0.1 left
 
     plan = recover.retry_plan(run)
     assert plan["estimate"] == pytest.approx(0.5)
@@ -715,7 +715,7 @@ def test_recovering_does_not_list_a_refused_failure(home, work):
 
 def test_recovering_disappears_when_switched_off(home, work, monkeypatch):
     make_run(work, "ECONNRESET", ended=time.time())
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "0")
     assert recover.enabled() is False
     assert recover.recovering() == []
 

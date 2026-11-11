@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from nodus import config, db, fix
+from sodus import config, db, fix
 
 
 FINDINGS = [

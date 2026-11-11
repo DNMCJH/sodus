@@ -1,8 +1,8 @@
 """Cost has one reader: `ledger`. These tests compare the old readers to it.
 
-`telemetry.usage_summary` (the legacy `nodus usage --days` path) used to parse
+`telemetry.usage_summary` (the legacy `sodus usage --days` path) used to parse
 `usage_json` itself and invented `USD` when the currency was missing, while the
-board and `nodus stats` put the same money under `"-"`. Now all of them call
+board and `sodus stats` put the same money under `"-"`. Now all of them call
 `ledger`; the numbers must be identical, and an unnamed currency must stay
 unnamed.
 """
@@ -13,8 +13,8 @@ import argparse
 import json
 import time
 
-from nodus import config, db, ledger, server, telemetry, usage
-from nodus.cli.commands import system
+from sodus import config, db, ledger, server, telemetry, usage
+from sodus.cli.commands import system
 
 
 def _seed(route: str, usage_json, *, status: str = "completed", started: float) -> dict:
@@ -38,7 +38,7 @@ def _cost_by_route(rows: list[dict]) -> dict[str, dict[str, float]]:
 
 def test_legacy_telemetry_and_the_cli_report_the_same_money(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cost-paths")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-cost-paths")
     now = time.time()
     _seed("claude", {"cost": 2.0, "currency": "CNY", "input_tokens": 100, "output_tokens": 10}, started=now)
     _seed("claude", {"cost": 1.5, "input_tokens": 50}, started=now)
@@ -65,7 +65,7 @@ def test_legacy_telemetry_and_the_cli_report_the_same_money(tmp_path, monkeypatc
 
 def test_a_missing_currency_is_unknown_everywhere(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cost-unknown")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-cost-unknown")
     now = time.time()
     _seed("claude", {"cost": 1.5}, started=now)
 
@@ -89,7 +89,7 @@ def test_telemetry_keeps_a_real_usd_run_apart_from_an_unnamed_one(tmp_path, monk
     # The old bug was not "USD exists": it was "a missing currency becomes
     # USD". A run that really recorded USD must still be its own bucket.
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cost-usd")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-cost-usd")
     now = time.time()
     _seed("claude", {"cost": 1.5}, started=now)
     _seed("claude", {"cost": 2.0, "currency": "USD"}, started=now)
@@ -104,7 +104,7 @@ def test_the_legacy_cli_prints_one_word_for_a_missing_basis(tmp_path, monkeypatc
     word means the CLI's own price book) and then print the raw key `none`.
     One label now says what the row is: 未标注."""
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-cost-basis")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-cost-basis")
     now = time.time()
     _seed("claude", {"cost": 1.0, "currency": "CNY", "cost_basis": "metered"}, started=now)
     _seed("claude", {"cost": 1.0, "currency": "CNY", "cost_basis": "reported"}, started=now)

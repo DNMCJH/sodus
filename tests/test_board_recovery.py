@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from nodus import budget, config, db, diagnosis, lineage, server, statuslight, ui
+from sodus import budget, config, db, diagnosis, lineage, server, statuslight, ui
 
 ORPHAN = "orphaned: the process that owned this run is gone"
 
@@ -47,9 +47,9 @@ FAILED tests/test_auth.py::test_token_refresh - assert 401 == 200
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-board-recovery")
-    monkeypatch.delenv("NODUS_DAILY_BUDGET", raising=False)
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "1")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-board-recovery")
+    monkeypatch.delenv("SODUS_DAILY_BUDGET", raising=False)
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "1")
     (tmp_path / "home").mkdir()
     return tmp_path
 
@@ -218,7 +218,7 @@ def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
     )
     _, run = seed(home, error=ORPHAN, task=task, title="导出", ended=base + 1, started=base - 39)
     db.update_run(run["id"], usage_json=json.dumps({"cost": 0.4, "currency": "CNY"}))
-    monkeypatch.setenv("NODUS_DAILY_BUDGET", "1.0")
+    monkeypatch.setenv("SODUS_DAILY_BUDGET", "1.0")
 
     board = server.board_state()
     entry = find(board, "needs_you", run["id"])
@@ -231,7 +231,7 @@ def test_a_budget_it_cannot_afford_is_a_question(home, monkeypatch):
     assert "¥" in entry["question"]
     assert "剩余额度不够" in entry["basis"]
     assert "¥0.10" in entry["basis"]
-    assert "NODUS_DAILY_BUDGET" in entry["suggestion"]
+    assert "SODUS_DAILY_BUDGET" in entry["suggestion"]
     # A spend decision carries no failure framing: those fields stay empty so
     # no row on the first screen reads as "this failed, you deal with it".
     assert entry["failure_kind"] == ""
@@ -371,8 +371,8 @@ def test_a_run_that_recorded_no_evidence_says_so(home, monkeypatch):
     "什么样的失败" when the record cannot answer it, and it has to be the
     sentence on the card, not a footnote.
     """
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
-    task, run = seed(home, error=ORPHAN, title="opencode smoke", folder="nodus-oc-smoke")
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "0")
+    task, run = seed(home, error=ORPHAN, title="opencode smoke", folder="sodus-oc-smoke")
     # A lifecycle event is not evidence: it says the run ended, not what it did.
     add_event(run, "run.failed", {"error": ORPHAN})
 
@@ -420,7 +420,7 @@ def test_every_cause_has_a_noun_phrase_for_the_stopped_row():
     ("error", "label"),
     [
         # The 13 causes, one real-looking line each. The first three are
-        # verbatim from `~/.nodus` history; the rest are the shapes the old
+        # verbatim from `~/.sodus` history; the rest are the shapes the old
         # `recover`/`_CAUSE_RULES` tests used.
         ("orphaned: the process that owned this run is gone", "进程被外部杀掉"),
         ("exit code 1", "进程自己退出"),
@@ -484,7 +484,7 @@ def test_over_budget_is_a_spend_question_not_a_retry(home):
 
 
 def test_switching_recovery_off_stops_instead_of_asking(home, monkeypatch):
-    monkeypatch.setenv("NODUS_AUTO_RECOVER", "0")
+    monkeypatch.setenv("SODUS_AUTO_RECOVER", "0")
     _, run = seed(home, error=ORPHAN)
 
     board = server.board_state()
@@ -525,7 +525,7 @@ def test_a_proposal_carries_the_repo_and_the_stat(home):
         run_id=run["id"],
         task_id=task["id"],
         repo=str(home / "work" / "shop"),
-        branch="nodus/fix-login",
+        branch="sodus/fix-login",
         worktree=str(home / "worktrees" / "fix-login"),
         base="abc123",
         patch_path=str(home / "change.patch"),
@@ -538,12 +538,12 @@ def test_a_proposal_carries_the_repo_and_the_stat(home):
     assert entry["kind"] == "proposal"
     assert entry["decision"] == "merge"
     assert "要不要合进主工作区" in entry["question"]
-    assert "nodus/fix-login" in entry["basis"]
+    assert "sodus/fix-login" in entry["basis"]
     assert entry["project"] == "shop"
     assert entry["task_title"] == "修复登录"
     assert entry["change"].startswith("1 file changed")
     assert "合并" in entry["suggestion"]
-    assert "nodus/fix-login" in entry["headline"]
+    assert "sodus/fix-login" in entry["headline"]
 
 
 def test_unverified_runs_are_information_not_a_question(home):
@@ -652,7 +652,7 @@ def test_no_failure_lands_in_needs_you(home):
 
 
 def test_a_retry_in_flight_says_what_i_am_doing(home):
-    _, run = seed(home, error="exit code 1", folder="nodus-review", title="创新点对抗评审")
+    _, run = seed(home, error="exit code 1", folder="sodus-review", title="创新点对抗评审")
 
     board = server.board_state()
     entry = find(board, "handling", run["id"])
@@ -660,7 +660,7 @@ def test_a_retry_in_flight_says_what_i_am_doing(home):
     assert entry["kind"] == "handling"
     assert entry["attempt"] == 1
     assert entry["limit"] == 3
-    assert entry["project"] == "nodus-review"
+    assert entry["project"] == "sodus-review"
     assert entry["statement"] == "第 1/3 次重试"
     assert entry["history"] == []
     assert entry["retry_line"] == "还没重试过：这是第 1 次"

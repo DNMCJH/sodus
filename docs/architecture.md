@@ -1,16 +1,16 @@
-# Nodus 架构
+# Sodus 架构
 
-> 版本 0.8.1（主干）· 2026-11-10 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
+> 版本 0.9.0（主干）· 2026-11-10 · 这份文档解释「为什么代码长这样」，README 解释「怎么用」。
 > 2026-11-03 校准：补齐 0.4.0 之后进主干的模块（observe / ledger / usage / telemetry / budget / policy /
 > recover / memory / lineage / bench / llm / jobs / harness_status / lifecycle），把已实现的 ADR 标出来，
-> 第 7 节改成真实现状。同一天新增 `nodus/lifecycle.py`（状态机，只定义不迁移调用方）和
+> 第 7 节改成真实现状。同一天新增 `sodus/lifecycle.py`（状态机，只定义不迁移调用方）和
 > `docs/overlap-audit.md`（谁在重复算同一件事）。
 > 2026-11-08 校准（`feat/sodus-0.6` 分支，W0 只改文档）：新增 ADR-019 / ADR-020，ADR 状态行改为逐条现状；
 > 第 2 节补上未列出的模块；第 7 节的 `DSH_HOME` 条目按 README 实测结论改写；0.6 设计见 `docs/sodus-0.6-design.md`。
 
 ## 1. 需求（先定边界）
 
-Nodus 是**任务验收层**：它不训练模型、不代理请求、不写 agent runtime，只回答一个问题——这个任务算不算完成。
+Sodus 是**任务验收层**：它不训练模型、不代理请求、不写 agent runtime，只回答一个问题——这个任务算不算完成。
 
 | 角色 | 动作 | 系统里的落点 |
 |---|---|---|
@@ -29,53 +29,53 @@ Nodus 是**任务验收层**：它不训练模型、不代理请求、不写 age
 ## 2. 分层
 
 ```
-nodus/cli/            argparse + 每个命令一个 handler（不碰业务）
+sodus/cli/            argparse + 每个命令一个 handler（不碰业务）
   client.py        HTTP 客户端：唯一知道 daemon 地址的地方
-nodus/server.py       HTTP + SSE，状态所有者；看板把行分成 needs_you / handling / stopped
+sodus/server.py       HTTP + SSE，状态所有者；看板把行分成 needs_you / handling / stopped
                       （watchdog 标的 stalled 在 stopped）
-nodus/daemon.py       daemon 自身：`nodus up/down`，分离进程的生命周期
-nodus/jobs.py         daemon 作业：tdd/review/fix 的线程与持久化状态（pipeline 表）
-nodus/tdd.py          流水线：红→绿→（可选）审查
-nodus/review.py       跨 agent 审查：证据收集 + 结构化 findings
-nodus/fix.py          修复回路：审查→修→验→复审
-nodus/report.py       任务报告（只读聚合）
-nodus/runner.py       进程生命周期：尝试循环、spawn、读流、落事件、交接单
-nodus/propose.py      提案：worktree 分支 → patch → proposal 行；merge / reject
-nodus/routes.py       路由组：一个 CLI + 有序 provider 链 + 校验
-nodus/profiles.py     配置快照：按 profile × agent × provider 物化配置目录
-nodus/agents.py       CLI 注册表：可执行、参数方言、流格式、能说哪种协议
-nodus/providers.py    端点注册表：地址、凭据名、协议、单价、计量口径
-nodus/adapters.py     各家 JSONL → 统一事件（纯函数）
-nodus/verify.py       测试检测与执行（纯函数 + 落盘）
-nodus/sessions/       会话层：三家存储统一读取 + 接续/分支（DSH/Claude/Codex 各一个适配器）
-nodus/lineage.py      会话血缘：一次任务的所有 sitting / run / 成功与未验证（ok/unverified）
-nodus/meter.py        计费表：run 前后读端点的账
-nodus/pricing.py      标定单价：token → 钱（basis=list_price，峰值/空闲两档）
-nodus/ledger.py       usage_json 的唯一读法：解析、求和（含跑着的行的事件流）、分币种、缓存命中率
-nodus/harness.py      harness 指纹与只读证据：brief 模板哈希、按 (组件, cause) 聚合跑过没有（`nodus debug harness-stats`）
-nodus/usage.py        `nodus stats usage` 的薄壳：选行 + JSON 信封，算术在 ledger
-nodus/diagnosis.py    失败分类的唯一词表：13 cause / 4 class / 13 kind，以及每个 cause 的
+sodus/daemon.py       daemon 自身：`sodus up/down`，分离进程的生命周期
+sodus/jobs.py         daemon 作业：tdd/review/fix 的线程与持久化状态（pipeline 表）
+sodus/tdd.py          流水线：红→绿→（可选）审查
+sodus/review.py       跨 agent 审查：证据收集 + 结构化 findings
+sodus/fix.py          修复回路：审查→修→验→复审
+sodus/report.py       任务报告（只读聚合）
+sodus/runner.py       进程生命周期：尝试循环、spawn、读流、落事件、交接单
+sodus/propose.py      提案：worktree 分支 → patch → proposal 行；merge / reject
+sodus/routes.py       路由组：一个 CLI + 有序 provider 链 + 校验
+sodus/profiles.py     配置快照：按 profile × agent × provider 物化配置目录
+sodus/agents.py       CLI 注册表：可执行、参数方言、流格式、能说哪种协议
+sodus/providers.py    端点注册表：地址、凭据名、协议、单价、计量口径
+sodus/adapters.py     各家 JSONL → 统一事件（纯函数）
+sodus/verify.py       测试检测与执行（纯函数 + 落盘）
+sodus/sessions/       会话层：三家存储统一读取 + 接续/分支（DSH/Claude/Codex 各一个适配器）
+sodus/lineage.py      会话血缘：一次任务的所有 sitting / run / 成功与未验证（ok/unverified）
+sodus/meter.py        计费表：run 前后读端点的账
+sodus/pricing.py      标定单价：token → 钱（basis=list_price，峰值/空闲两档）
+sodus/ledger.py       usage_json 的唯一读法：解析、求和（含跑着的行的事件流）、分币种、缓存命中率
+sodus/harness.py      harness 指纹与只读证据：brief 模板哈希、按 (组件, cause) 聚合跑过没有（`sodus debug harness-stats`）
+sodus/usage.py        `sodus stats usage` 的薄壳：选行 + JSON 信封，算术在 ledger
+sodus/diagnosis.py    失败分类的唯一词表：13 cause / 4 class / 13 kind，以及每个 cause 的
                       problem / suggestion / advice / fix（建议句和停下的行的名词短语都从这里取）
-nodus/telemetry.py    端点探活 + 旧的 per-route 汇总（token/金额已交 ledger，形状未变）
-nodus/budget.py       机器级日额度：CNY 上限、拒绝新 run、不杀在跑的
-nodus/lifecycle.py    run/proposal 状态机 + needs_attention，纯函数，不碰 db/网络
-nodus/watchdog.py     卡住检测：running 但 N 分钟没有实质事件 → stalled（这条边的第一个 writer）
-nodus/recover.py      自动恢复：gate 决定重试/退避/停下，按价值而不是次数
-nodus/policy.py       派活前判断：难度、类型、所需能力 → 推荐路由（规则优先，Jev 复核）
-nodus/observe.py      DSH 会话观察：读 session 日志、定价、写 observation
-nodus/observe_sync.py 观察的定时同步（daemon 里扫，不用人手动 --import）
-nodus/observe_magpie.py / observe_ccswitch.py  第三方用量日志的只读覆盖探针（不写 observation）
-nodus/harness_status.py 五个终端：装没装、在不在跑、今天多少（只读，不启动任何东西）
-nodus/memory.py       记忆摘要：读各 harness 已有的 AGENTS/CLAUDE 文件，等人采纳
-nodus/bench.py        任务级评测：hidden_tests 打分，不看 agent 自述
-nodus/llm.py          宠物的一句话聊天：按 agent 走路由，限 400 token / 10 次每分钟
-nodus/mcp.py          MCP stdio 服务：nodus_task_create / run / run_status / proposals / cost_today /
+sodus/telemetry.py    端点探活 + 旧的 per-route 汇总（token/金额已交 ledger，形状未变）
+sodus/budget.py       机器级日额度：CNY 上限、拒绝新 run、不杀在跑的
+sodus/lifecycle.py    run/proposal 状态机 + needs_attention，纯函数，不碰 db/网络
+sodus/watchdog.py     卡住检测：running 但 N 分钟没有实质事件 → stalled（这条边的第一个 writer）
+sodus/recover.py      自动恢复：gate 决定重试/退避/停下，按价值而不是次数
+sodus/policy.py       派活前判断：难度、类型、所需能力 → 推荐路由（规则优先，Jev 复核）
+sodus/observe.py      DSH 会话观察：读 session 日志、定价、写 observation
+sodus/observe_sync.py 观察的定时同步（daemon 里扫，不用人手动 --import）
+sodus/observe_magpie.py / observe_ccswitch.py  第三方用量日志的只读覆盖探针（不写 observation）
+sodus/harness_status.py 五个终端：装没装、在不在跑、今天多少（只读，不启动任何东西）
+sodus/memory.py       记忆摘要：读各 harness 已有的 AGENTS/CLAUDE 文件，等人采纳
+sodus/bench.py        任务级评测：hidden_tests 打分，不看 agent 自述
+sodus/llm.py          宠物的一句话聊天：按 agent 走路由，限 400 token / 10 次每分钟
+sodus/mcp.py          MCP stdio 服务：sodus_task_create / run / run_status / proposals / cost_today /
                       memory_remember / memory_candidates（2026-11-08 校准时补列）
-nodus/ui.py / desk.py / decision.py / pet.py / mood.py / statuslight.py  看板与桌面层：只读 server 的
+sodus/ui.py / desk.py / decision.py / pet.py / mood.py / statuslight.py  看板与桌面层：只读 server 的
                       board_state / attention，不自己判状态（2026-11-08 校准时补列）
-nodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁；`runs_in_window`
+sodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁；`runs_in_window`
                       是「今天取哪些行」的唯一 SQL（看板、stats、预算闸、终端面板共用）
-nodus/config.py       路径、token、secrets、用户配置、当前 profile
+sodus/config.py       路径、token、secrets、用户配置、当前 profile
 ```
 
 依赖方向是单向的：
@@ -106,7 +106,7 @@ run 表，`recover`/`policy`/`budget` 只读 run/task/event。唯一的例外是
 ### watchdog：没失败，但没在动
 
 `recover` 回答"失败了要不要再试"；watchdog 回答另一件事：状态还是 `running`，但最近 N 分钟没有新的
-实质事件（tool_call / artifact / 状态变化）。N 由 `NODUS_STALL_SECONDS` 给，默认 600 秒，比
+实质事件（tool_call / artifact / 状态变化）。N 由 `SODUS_STALL_SECONDS` 给，默认 600 秒，比
 `runner.IDLE_TIMEOUT` 的 900 秒早：十分钟先让看板说"没在动"，不是等它被记成一条超时失败。
 
 判据不新写一遍：它把最后一条实质事件的 ts 交给 `lifecycle.needs_attention`，只有答案是 `stalled`
@@ -115,7 +115,7 @@ run 表，`recover`/`policy`/`budget` 只读 run/task/event。唯一的例外是
 完成/失败只记日志、不改），最后追加一条 `run.stalled` 事件，写明最后事件和 idle 时长。
 
 同一条 run 只标一次：sweep 只看 `running`，已经是 `stalled` 的行（包括上一个 daemon 留下的）不会再处理，
-所以重启不重复。daemon 里隔 60 秒扫一次（`NODUS_WATCHDOG=0` 关掉），只查 live 行。
+所以重启不重复。daemon 里隔 60 秒扫一次（`SODUS_WATCHDOG=0` 关掉），只查 live 行。
 
 worker 分三种处理：本 daemon 拥有且已经有过 tool_call 的进程树会被 kill；没有 tool_call 的不杀，交给
 runner 自己的 900 秒 idle kill；别的进程拥有的不碰。后两种如实写进事件的 `worker` 字段，不假装已经停掉。
@@ -138,11 +138,11 @@ runner 自己的 900 秒 idle kill；别的进程拥有的不碰。后两种如�
 
 ### 为什么 CLI 不直接 import 业务
 
-`nodus run` 走 HTTP；`nodus tdd/review/fix` 走 `POST /pipelines`，由 daemon 起线程跑（ADR-016，取代
-ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` 落状态，所以 `nodus watch` 从另一个进程也能看到。
+`sodus run` 走 HTTP；`sodus tdd/review/fix` 走 `POST /pipelines`，由 daemon 起线程跑（ADR-016，取代
+ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` 落状态，所以 `sodus watch` 从另一个进程也能看到。
 代价写在 ADR 里，不藏。
 
-例外是 `nodus providers/routes/profiles`：它们是纯文件操作，故意不走 daemon——
+例外是 `sodus providers/routes/profiles`：它们是纯文件操作，故意不走 daemon——
 端点坏掉正是你需要敲这些命令的时候。
 
 ## 3. 扩展点
@@ -150,10 +150,10 @@ ADR-004 的"流水线在 CLI 进程里跑"）。两种路径都只通过 `db` �
 | 想加什么 | 改哪里 | 不用改 |
 |---|---|---|
 | 新 CLI（Gemini CLI 等） | `agents.py` 加一个 `AgentSpec`；`adapters.py` 加一个 parser | runner、CLI、db |
-| 新端点（同一 CLI 换 provider） | `providers.json` 加一条；或 `nodus providers add` | 任何 .py |
-| 新回退链 | `routes.json` 加一条；或 `nodus routes set` | 任何 .py |
-| 新配置快照 | `nodus profiles new` | 任何 .py |
-| 新命令 | `nodus/cli/commands/<module>.py` 里 `add(sub)` + 一个 handler | 其他命令 |
+| 新端点（同一 CLI 换 provider） | `providers.json` 加一条；或 `sodus providers add` | 任何 .py |
+| 新回退链 | `routes.json` 加一条；或 `sodus routes set` | 任何 .py |
+| 新配置快照 | `sodus profiles new` | 任何 .py |
+| 新命令 | `sodus/cli/commands/<module>.py` 里 `add(sub)` + 一个 handler | 其他命令 |
 | 新事件类型 | `adapters.py` 返回新的 `type`；消费方按前缀过滤 | schema（event 是 JSON） |
 | 新存储后端 | 按 `db.py` 的函数面重写；调用方只认函数名 | 业务层 |
 | 新状态 / 新"要不要人管"的判断 | `lifecycle.py` 加状态和边；调用方传 facts | 四个各自判状态的模块 |
@@ -167,10 +167,10 @@ Plan approval requires interactive local CLI; worker/run processes are rejected 
 
 | 面 | 措施 | 位置 |
 |---|---|---|
-| 网络 | 只绑 127.0.0.1；非环回要 `NODUS_ALLOW_REMOTE=1` | `server.serve` |
+| 网络 | 只绑 127.0.0.1；非环回要 `SODUS_ALLOW_REMOTE=1` | `server.serve` |
 | 认证 | Bearer token，`hmac.compare_digest` 常量时间比较 | `server.authorized` |
 | 请求体 | 上限 1 MB，超了 413 | `server.body_allowed` |
-| 密钥 | `~/.nodus/secrets.json`，per-workspace 覆盖；ACL 去掉继承（仅当前用户 + SYSTEM）；只进入子进程环境，不打印 | `config.load_secrets` |
+| 密钥 | `~/.sodus/secrets.json`，per-workspace 覆盖；ACL 去掉继承（仅当前用户 + SYSTEM）；只进入子进程环境，不打印 | `config.load_secrets` |
 | 凭据注入 | `Provider.key_secret` 声明 secret 名，`providers.env()` 物化成该协议的环境变量；生成的 CLI 配置里**不允许出现 `env` 块** | `providers.env` / `profiles.materialize` |
 | 最小权限 | 只注入端点自己的 key + agent 显式声明的额外 secret，不再把 secrets.json 全量灌进每个 worker | `agents.build_env` |
 | 数据隔离 | 每张表带 `workspace_id`，所有读操作过滤 | `db.py` |
@@ -187,7 +187,7 @@ Plan approval requires interactive local CLI; worker/run processes are rejected 
 
 - Windows 上 token 文件没有 ACL 加固，`chmod` 是 no-op。
 - 没有文件读取审计；review 读哪些文件只记录在 `context.md`。
-- 会话锁是建议性的：绕过 Nodus 直接跑 `dsh --session-id` 不会看这把锁。
+- 会话锁是建议性的：绕过 Sodus 直接跑 `dsh --session-id` 不会看这把锁。
 - agent 能执行任意命令，这是产品定位决定的，不是遗漏。
 - codex 的 `experimental_bearer_token` 写在它自己的 config.toml 里（codex 只能从配置读），
   那是用户私有目录，和 0.3.0 一样，没有变好也没有变坏。
@@ -212,7 +212,7 @@ Plan approval requires interactive local CLI; worker/run processes are rejected 
 
 **ADR-003 审查是建议，不是判决。已实现。** review 的 verdict 只影响任务状态降级和是否触发 fix；它不能替代测试。理由：LLM 审查会误报，也会漏报，门禁必须可执行。
 
-**ADR-004 流水线在 CLI 进程执行。已被 ADR-016 取代，不再成立。** `nodus tdd/review/fix` 直接在命令行进程里起 agent，不经过 daemon 队列。好处是终端能实时流、Ctrl-C 即停；坏处是关终端会中断流水线，且 `nodus stop` 管不到别的进程里的 run。这条代价就是 ADR-016 要修的问题，已经修完。
+**ADR-004 流水线在 CLI 进程执行。已被 ADR-016 取代，不再成立。** `sodus tdd/review/fix` 直接在命令行进程里起 agent，不经过 daemon 队列。好处是终端能实时流、Ctrl-C 即停；坏处是关终端会中断流水线，且 `sodus stop` 管不到别的进程里的 run。这条代价就是 ADR-016 要修的问题，已经修完。
 
 **ADR-005 会话桥只读 + 显式续写。已实现。** DSH 没有会话间消息通道；往 append-only 存储里注入会破坏 GUI 的 live state。所以读走文件、写走 `--session-id` 新 turn，并要求同 cwd + 单写者。
 
@@ -264,12 +264,12 @@ base URL、凭据和价目。0.4.0 把这个"差别"从 `AgentSpec` 的一个副
 **ADR-012 一个目录一个写者，锁跟着 run 走。已实现。** 两个 run 同时写一棵树，后一个的编辑会盖在前一个的半成品上，
 两份交接单描述的状态都不存在。约束落在数据库里：`write_lock` 表 + `WHERE released_at IS NULL` 的部分唯一索引，
 第二个 INSERT 失败而不是两个 worker 悄悄覆盖。行和锁同一事务插入，避免"有锁没有 run"的窗口被误判成持有者已死。
-释放先于状态写入，所以 `wait()` 返回"完成"就保证目录可再用——`nodus tdd` 紧接着就起下一个 run。
+释放先于状态写入，所以 `wait()` 返回"完成"就保证目录可再用——`sodus tdd` 紧接着就起下一个 run。
 代价：`review`/`fix` 会借走目标目录，目标 run 还在跑时会被拒；这是对的（审查一份正在变的树本来就没有意义），
-但报错信息必须点名持有者，否则用户会以为是 Nodus 坏了。
+但报错信息必须点名持有者，否则用户会以为是 Sodus 坏了。
 
 **ADR-013 会话是能力，不是 DSH 的附属。已实现。** 查询、读取、接续、分支四个动作对三家都成立，
-差别只在 CLI 的语法和存储格式，所以有 `nodus/sessions/` 一层，每个厂商一个适配器，上层只认 `Session`。
+差别只在 CLI 的语法和存储格式，所以有 `sodus/sessions/` 一层，每个厂商一个适配器，上层只认 `Session`。
 接续必须回到**写这个会话的那个端点**：`--resume` 在 endpoint 自己的配置目录里查 id，换 home 就变成
 "No conversation found"（0.4.0 实测踩到过一次，报错原文就是这句）。所以会话对象带 `profile` + `provider`，
 由路径反推；不在我们 profiles 里的会话（用户自己的 `~/.claude`）只能读，接续会明确拒绝。
@@ -282,21 +282,21 @@ base URL、凭据和价目。0.4.0 把这个"差别"从 `AgentSpec` 的一个副
 和 tdd 共用一套证据。三条边界：没改文件不跑、检测不到已知命令不跑（**不猜**，在没人看过的仓库里跑未知测试
 是少数能真正破坏工作的行为）、`--no-verify` 单次关掉。
 代价：run 多花一次测试的时间（实测 3.8 秒），这段时间它仍算 `running`、写锁仍握着；测试挂住由
-`NODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。验收从"事后可选"变成"默认发生"，这是这次改动唯一不可逆的地方。
+`SODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。验收从"事后可选"变成"默认发生"，这是这次改动唯一不可逆的地方。
 
 **ADR-015 提案把"不能并行"这半个问题补上。已实现。** 写锁只解决互相覆盖，代价是同一棵树只能有一个写者；
 而"协作"的另一半是同时干。解法是复用 git 已有的机制，而不是发明一套：每个 run 在 `git worktree` 里跑，
-分支 `nodus/<run-id>`，结束时提交并落一份 patch + `proposal` 行，合并时在主树的写锁下 `git merge`。
+分支 `sodus/<run-id>`，结束时提交并落一份 patch + `proposal` 行，合并时在主树的写锁下 `git merge`。
 这样做能成立的原因很具体：**worktree 路径就是另一个 cwd**，现有写锁立刻从"保护主树"变成"保护这条分支"，
 并行不需要放宽任何规则，而"拿主树的锁"本身就成了 merge 的语义。这就是 ADR-012 里说的"写锁是地基不是终点"。
 代价：提案必须有 git（没有 git 就明确拒绝，而不是偷偷退回串行）；冲突不自动解决，merge 失败就 abort、
 提案留 open、主树不动；空提案不进列表，worktree 直接删——否则列表会被噪音训练成没人看。
 
-**ADR-016 流水线归 daemon，不归终端。已实现。** ADR-004 承认的代价是"关终端会中断流水线、`nodus stop` 管不到"。
-daemon 既然已经拥有 run，就该拥有 run 的序列：`nodus tdd/review/fix` 改成 `POST /pipelines`，
+**ADR-016 流水线归 daemon，不归终端。已实现。** ADR-004 承认的代价是"关终端会中断流水线、`sodus stop` 管不到"。
+daemon 既然已经拥有 run，就该拥有 run 的序列：`sodus tdd/review/fix` 改成 `POST /pipelines`，
 daemon 起线程跑同一批函数，CLI 只跟随（`pipeline.child` 事件告诉它该去看哪个 run 的流）。
 行是持久的、线程不是——所以 daemon 重启会把 `running` 的流水线标失败，和孤儿 run 一个道理，不复活。
-`nodus stop` 现在同时认 run id 和 pipe id。代价：多一张 `pipeline` 表和一跳 HTTP；
+`sodus stop` 现在同时认 run id 和 pipe id。代价：多一张 `pipeline` 表和一跳 HTTP；
 CLI 的进度靠轮询（0.5s），不是 SSE。
 
 **ADR-017 成本用标定的 token 单价，不用账户余额差。已实现。** ADR-008 的 `metered` 档有个默认的洞：
@@ -305,7 +305,7 @@ CLI 的进度靠轮询（0.5s），不是 SSE。
 opus 拟合残差 0.1%，留出验证 0.3%，多调用大 cache 的干净核对 0.8%，所以在成本阶梯里排在 `metered` 之上。
 依据是**实验**而不是 relay 的价目表：同一张表套进经典比例公式联立，缓存写系数解出负数——
 表是真的，公式不是。sonnet 用同样方法得到 13.7% 残差和负截距，因此**不发布**，继续走余额差。
-代价：系数来自本账户本时刻，relay 调价就漂；所以每个 run 同时存 `meter_observed`，`nodus cost` 能看出漂移。
+代价：系数来自本账户本时刻，relay 调价就漂；所以每个 run 同时存 `meter_observed`，`sodus cost` 能看出漂移。
 重新标定是 `scripts/calibrate_relay.py`，系数不合格时脚本拒绝输出。
 
 **ADR-018 状态和"要不要人管"只有一个定义。已实现（仅定义，未迁移调用方）。**
@@ -313,7 +313,7 @@ opus 拟合残差 0.1%，留出验证 0.3%，多调用大 cache 的干净核对 
 可重试性并给出 gate，`server` 把同一批失败分成 needs_you / handling / stopped，`lineage` 又按
 "completed + verify" 判 ok/unverified。四份都能跑，但"这条 run 到底算不算结束""要不要叫人"没有单一答案。
 解法不是再写一个第五份，而是把合法状态、合法转移和四种注意力答案写死在一个纯函数模块里
-（`nodus/lifecycle.py`）：run 的 `queued → running → {completed, failed, stalled}`（`stalled → running | failed`），
+（`sodus/lifecycle.py`）：run 的 `queued → running → {completed, failed, stalled}`（`stalled → running | failed`），
 proposal 的 `open → {merged, rejected}`；`needs_attention` 只读调用方传进来的 facts，不查库。
 理由：纯函数可以在测试里把 recover 的 gate、lineage 的 ok/unverified、看板的三组行都抄出来对照，
 四个模块互相矛盾时测试会红；而如果把判断做成服务或在各模块里继续加 if，矛盾只会更深。
@@ -347,7 +347,7 @@ ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个*
 人工确认只记 `task.accepted_by='human'`，不把 `unverified` 变成 `done`——人工拍板不是验收通过（ADR-014）。
 入口边界同在这条 ADR：`/ask` 只产生回答，执行要显式 promote 成 task（必须带验收标准）；`request_id` + payload hash
 幂等，同 id 异 payload 返回 409，TTL 24 小时；没有推送，结果靠 `GET /ask/{id}` 与 `sodus status` 轮询，SSE 只服务
-看板，不写任何活跃 DSH 会话（ADR-005 不变）；worker 环境带 `NODUS_ROLE=worker` / `NODUS_DEPTH`，HTTP 带
+看板，不写任何活跃 DSH 会话（ADR-005 不变）；worker 环境带 `SODUS_ROLE=worker` / `SODUS_DEPTH`，HTTP 带
 `X-Sodus-Depth`，worker 内禁用 ask 与派活，嵌套最多 1 层。ask 与 dream 都是 run（`kind='ask'` / `kind='dream'`），
 成本、预算闸、watchdog、回退全部复用。
 代价：`tdd`/`fix` 直接写 `task.status` 的地方要迁到派生函数，迁移前后要有对照测试；轮询意味着 DSH 用户要主动问
@@ -367,12 +367,12 @@ ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个*
 
 已经做完、从待办里移出的（2026-11-03 校准）：
 
-- daemon 作业队列 —— ADR-016 已实现：`jobs.py` + `pipeline` 表，`nodus tdd/review/fix` 走 `POST /pipelines`。
+- daemon 作业队列 —— ADR-016 已实现：`jobs.py` + `pipeline` 表，`sodus tdd/review/fix` 走 `POST /pipelines`。
 - UI / SSE —— 已实现：`server._sse`（`text/event-stream`）+ `ui.py` 的看板；CLI 侧 `pipeline.py` 仍轮询（0.5s），
   这是客户端选择，不是缺 SSE。
 - 多写者 propose/merge —— ADR-015 已实现：`propose.py` + `proposal` 表 + `git worktree` 分支，merge 在主树写锁下做。
 - 卡住检测 —— `watchdog.py` 已实现：`running` 且 N 分钟没有实质事件 → `stalled`，看板进"已停止"；
-  默认 600 秒，`NODUS_WATCHDOG=0` 关闭。
+  默认 600 秒，`SODUS_WATCHDOG=0` 关闭。
 
 还没做：
 
@@ -383,7 +383,7 @@ ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个*
   本来就不加载全局配置，隔离无收益，所以不做。保留删除线作为历史。
 - 把现有调用方迁到 `lifecycle`：`recover` / `server` / `lineage` 仍在各自判状态，清单见 `docs/overlap-audit.md`。
   已收口的是「谁写状态」（watchdog）和「失败是多少」（board 唯一计数），读方的迁移还没做。
-- `sodus` 包接管各模块（现在只是入口面，模块仍在 `nodus/`）；仓库目录改名是阶段 D，单独立项。
+- `sodus` 包接管各模块（现在只是入口面，模块仍在 `sodus/`）；仓库目录改名是阶段 D，单独立项。
 - 0.6（`feat/sodus-0.6`，未合并）：单入口 `/ask`、任务状态派生、记忆暂存层与 dream。设计与分周计划见
   `docs/sodus-0.6-design.md`，对应 ADR-019 / ADR-020。
 
@@ -391,11 +391,11 @@ ADR-018 要消灭的"第五份定义"。决定：`lifecycle.py` 只增加两个*
 ### Lightweight state and board presentation (0.7.0-b)
 
 `GET /state` is a token-authenticated, read-only snapshot for panels and pets.
-`nodus/state.py` queries live queued/running/stalled runs (newest 20), uncapped
+`sodus/state.py` queries live queued/running/stalled runs (newest 20), uncapped
 running/queued counts and retained asks on each request. `asks.open` means queued,
 `asks.done` means answered; it does not expire or mutate records. Today includes
 workspace runs of every kind plus observed sessions, on the same local-day ledger
-basis as `/cost/today` and MCP `nodus_cost_today`; `CNY` has no FX conversion and
+basis as `/cost/today` and MCP `sodus_cost_today`; `CNY` has no FX conversion and
 `unpriced` counts missing prices. No per-agent expansion is built.
 Today, open proposal count and pending database memory candidate count are cached
 for 1.5 seconds, keyed by database home, workspace, local day and saved project.
@@ -404,15 +404,15 @@ filesystem harvest. `needs_you` follows board's 50-work-run window and capped op
 proposal list; `unverifiable` is the board section count (0 or 1), not run count.
 It never calls full `board_state`, git, evidence rendering or harness probes.
 
-`nodus/board.py` owns board projections, evidence, wording and the HTML serialization
-entry; `nodus/ui.py` retains the unchanged page template. `/board` and Python
+`sodus/board.py` owns board projections, evidence, wording and the HTML serialization
+entry; `sodus/ui.py` retains the unchanged page template. `/board` and Python
 `server.board_state` keep their existing response keys, and existing pet/statuslight
 readers keep their behavior. HTTP routing, authentication and SSE stay in server.
 
 
 ### 项目 handoff 控制台迁移与检查
 
-`nodus.handoff` 只通过显式本地命令写入项目控制台。已有人工 HANDOFF.md
+`sodus.handoff` 只通过显式本地命令写入项目控制台。已有人工 HANDOFF.md
 首次执行 `sodus handoff sync` 时，若完全没有 auto 标记，先建立同目录 `.bak-*`
 原始备份，再在 `## 实时状态` 后插入机器段；缺节时在文件末尾追加并向 stderr 提示。
 单边、逆序、重复标记一律拒绝。临时文件 fsync + replace 保证写入失败不破坏原文件，

@@ -1,4 +1,4 @@
-> 产品名 Sodus，实现名 nodus。
+> 产品名 Sodus。
 
 # MCP over stdio
 
@@ -10,7 +10,7 @@ embedded newlines."*（[Transports](https://modelcontextprotocol.io/specificatio
 入口：
 
 ```powershell
-python -m nodus mcp        # 或装好之后：nodus mcp
+python -m sodus mcp        # 或装好之后：sodus mcp
 ```
 
 进程只从 stdin 读协议消息、往 stdout 写协议消息；日志一律走 stderr。所有工具都通过 daemon HTTP 转发；请先运行 `sodus up`。daemon 是唯一的任务和存储所有者，MCP 进程退出后 run 仍可轮询。
@@ -19,18 +19,18 @@ python -m nodus mcp        # 或装好之后：nodus mcp
 
 | 工具 | 参数 | 返回 |
 |---|---|---|
-| `sodus_ask`（别名 `nodus_ask`） | `request_id`、`text`（必填），`cwd`、`route`、`follow_up_of`（可选） | `POST /ask` 的 JSON（新建 202，幂等重试 200） |
-| `sodus_ask_status`（别名 `nodus_ask_status`） | `id` | `GET /ask/{id}` 的 JSON；过期 410 错误原文 |
-| `nodus_task_create` | `title`、`description`、`acceptance`（可选） | `task_id` + 任务记录 |
-| `nodus_run` | `task_id`、`route`（默认 claude）、`cwd`（默认进程 cwd）、`wait`（默认 false） | `run_id`、状态；`wait=true` 阻塞到结束 |
-| `nodus_run_status` | `run_id` | 状态、成本/币种/计价依据、`verify`（ok/red/none） |
-| `nodus_proposals` | 无 | 未处理的提案（分支、stat、文件） |
-| `nodus_cost_today` | 无 | 今日（本地 0 点起）按 agent 分组的成本 |
-| `nodus_memory_remember` | `text`、`source`（可选） | daemon 写入项目 AGENTS.md 的事实，重复不追加 |
-| `nodus_memory_candidates` | `project`、`limit`（1–500）、`conflicts_only`（均可选） | 只读候选事实、来源与冲突；采纳仍由人决定 |
-| `nodus_handoff_show` | `cwd`（可选） | 只读项目控制台：path/project_root/exists/snapshot_at/head/content |
-| `nodus_handoff_list` | 无 | 只读已知项目元数据，无正文 |
-| `nodus_handoff_check` | `cwd`（可选） | 只读校验：ok/errors 与元数据 |
+| `sodus_ask`（别名 `sodus_ask`） | `request_id`、`text`（必填），`cwd`、`route`、`follow_up_of`（可选） | `POST /ask` 的 JSON（新建 202，幂等重试 200） |
+| `sodus_ask_status`（别名 `sodus_ask_status`） | `id` | `GET /ask/{id}` 的 JSON；过期 410 错误原文 |
+| `sodus_task_create` | `title`、`description`、`acceptance`（可选） | `task_id` + 任务记录 |
+| `sodus_run` | `task_id`、`route`（默认 claude）、`cwd`（默认进程 cwd）、`wait`（默认 false） | `run_id`、状态；`wait=true` 阻塞到结束 |
+| `sodus_run_status` | `run_id` | 状态、成本/币种/计价依据、`verify`（ok/red/none） |
+| `sodus_proposals` | 无 | 未处理的提案（分支、stat、文件） |
+| `sodus_cost_today` | 无 | 今日（本地 0 点起）按 agent 分组的成本 |
+| `sodus_memory_remember` | `text`、`source`（可选） | daemon 写入项目 AGENTS.md 的事实，重复不追加 |
+| `sodus_memory_candidates` | `project`、`limit`（1–500）、`conflicts_only`（均可选） | 只读候选事实、来源与冲突；采纳仍由人决定 |
+| `sodus_handoff_show` | `cwd`（可选） | 只读项目控制台：path/project_root/exists/snapshot_at/head/content |
+| `sodus_handoff_list` | 无 | 只读已知项目元数据，无正文 |
+| `sodus_handoff_check` | `cwd`（可选） | 只读校验：ok/errors 与元数据 |
 
 当前共 14 个工具名（含 ask 别名）。handoff 工具仅通过带 token 的 daemon HTTP GET
 读取当前项目或 task/run 已知项目，不提供 init/append/sync 写工具；更新由人显式运行
@@ -39,7 +39,7 @@ python -m nodus mcp        # 或装好之后：nodus mcp
 所有工具失败都返回 `isError: true` + 人类可读消息，不会让进程退出。协议层错误
 （坏 JSON、未知 method）仍然是 JSON-RPC error。
 
-`wait=true` 最多等 `NODUS_MCP_WAIT` 秒（默认 600），超时返回当前状态并带
+`wait=true` 最多等 `SODUS_MCP_WAIT` 秒（默认 600），超时返回当前状态并带
 `wait_timed_out: true` —— 别把"等到了超时"读成"跑完了"。
 
 ## 一条命令安装宿主配置
@@ -61,19 +61,19 @@ sodus mcp install --uninstall --host claude
 ```json
 {
   "mcpServers": {
-    "nodus": {
+    "sodus": {
       "type": "stdio",
       "command": "A:\\Anaconda\\python.exe",
-      "args": ["-m", "nodus", "mcp"],
+      "args": ["-m", "sodus", "mcp"],
       "env": {
-        "PYTHONPATH": "A:\\VScode\\Code\\Projects\\nodus"
+        "PYTHONPATH": "A:\\VScode\\Code\\Projects\\sodus"
       }
     }
   }
 }
 ```
 
-用 `pip install -e .` 装过的话，`command` 可以直接写 `nodus`、`args` 写 `["mcp"]`，
+用 `pip install -e .` 装过的话，`command` 可以直接写 `sodus`、`args` 写 `["mcp"]`，
 `PYTHONPATH` 也可以省掉。GUI 客户端的 PATH 往往和终端不同，文档里用绝对路径更稳。
 
 ## 接进 DSH
@@ -85,16 +85,16 @@ sodus mcp install --uninstall --host claude
 - insert:
     - name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: nodus
+        serverName: sodus
         transport: stdio
         command: 'A:\Anaconda\python.exe'
-        args: ['-m', 'nodus', 'mcp']
+        args: ['-m', 'sodus', 'mcp']
         env:
-          PYTHONPATH: 'A:\VScode\Code\Projects\nodus'
+          PYTHONPATH: 'A:\VScode\Code\Projects\sodus'
         toolCallTimeoutMs: 600000
 ```
 
-重启 DSH 后工具会以 `mcp__nodus__nodus_task_create` 这样的名字出现。
+重启 DSH 后工具会以 `mcp__sodus__sodus_task_create` 这样的名字出现。
 `toolCallTimeoutMs` 要覆盖 `wait=true` 的等待时间；DSH 启动子进程时会清掉
 `*_KEY` / `*_TOKEN` / `*_SECRET` 环境变量，但 Sodus 不需要任何密钥。
 
@@ -105,27 +105,27 @@ sodus mcp install --uninstall --host claude
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"nodus_cost_today","arguments":{}}}
-'@ | python -m nodus mcp
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sodus_cost_today","arguments":{}}}
+'@ | python -m sodus mcp
 ```
 
-stdout 会是三行 JSON（通知没有回复）；stderr 会有 `nodus mcp: ready ...`。
+stdout 会是三行 JSON（通知没有回复）；stderr 会有 `sodus mcp: ready ...`。
 
 ## 边界
 
 - 0.7 已修复旧版双所有者问题：所有工具依赖 daemon（`sodus up`），MCP 退出不会中断 daemon 拥有的 run。
 - stdio 是本地子进程协议，没有鉴权；不要把它包成网络端口暴露出去。
 - `cwd` 必须是已存在的目录，不会替你创建。
-- 工具提供查询、问答和建任务/起 run；**合入/丢弃提案仍然只在 CLI**（`nodus merge` /
-  `nodus reject`），避免让模型自己批准自己的改动。
+- 工具提供查询、问答和建任务/起 run；**合入/丢弃提案仍然只在 CLI**（`sodus merge` /
+  `sodus reject`），避免让模型自己批准自己的改动。
 
 
 ## Ask 与递归保护
 
-`sodus_ask` 设置 `origin=mcp`，将进程 `NODUS_DEPTH`（默认 0）作为
+`sodus_ask` 设置 `origin=mcp`，将进程 `SODUS_DEPTH`（默认 0）作为
 `X-Sodus-Depth` 转发；使用 CLI 同一 localhost 地址与 Bearer token。
-`NODUS_ROLE=worker` 或 `NODUS_DEPTH>=1` 时，`sodus_ask`、`nodus_ask`、
-`nodus_run`、`nodus_task_create` 在进程内返回 `isError=true`、`recursion_denied`，
+`SODUS_ROLE=worker` 或 `SODUS_DEPTH>=1` 时，`sodus_ask`、`sodus_ask`、
+`sodus_run`、`sodus_task_create` 在进程内返回 `isError=true`、`recursion_denied`，
 不会创建任务或发送 HTTP。状态查询仍可使用；不提供会话推送或写回。
 HTTP 仍兜底拒绝 depth>=1；直接 HTTP 故意省略深度头的 worker 是已知限制。
 

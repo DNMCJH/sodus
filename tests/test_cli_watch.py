@@ -6,7 +6,7 @@ the socket timeout used to abort the CLI while the run itself kept going.
 
 from __future__ import annotations
 
-from nodus.cli import client
+from sodus.cli import client
 
 
 def test_watch_survives_an_idle_event_connection(monkeypatch):

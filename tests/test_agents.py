@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nodus import agents, providers
+from sodus import agents, providers
 
 
 def _provider(**over) -> providers.Provider:
@@ -235,7 +235,7 @@ def test_opencode_borrows_the_relay_for_metering_not_for_routing():
     assert spec.secrets == ()  # no extra credential is injected
     env = agents.build_env(spec, _relay_openai(), {"RELAY_API_KEY": "sk"})
     assert env["OPENAI_API_KEY"] == "sk"
-    assert env["NODUS_RUN"] == "1"
+    assert env["SODUS_RUN"] == "1"
 
 
 def test_cmd_shim_flattens_a_multi_line_prompt(monkeypatch):
@@ -263,7 +263,7 @@ def test_worker_env_allowlist(monkeypatch):
         assert "ANTHROPIC_API_KEY" not in env
         assert env["ANTHROPIC_AUTH_TOKEN"] == "provider-key"
         assert env["PATH"] == "worker-path"
-        assert env["NODUS_ROLE"] == "worker"
+        assert env["SODUS_ROLE"] == "worker"
 
 
 def test_readonly_argv(monkeypatch):

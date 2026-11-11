@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from nodus import agents, config, db, propose, providers, routes, runner
+from sodus import agents, config, db, propose, providers, routes, runner
 
 WRITER = textwrap.dedent(
     """
@@ -55,8 +55,8 @@ def test_prepare_creates_a_worktree_on_its_own_branch(repo):
     ctx = propose.prepare(repo, "run-abc123")
     assert Path(ctx["worktree"]).is_dir()
     assert (Path(ctx["worktree"]) / "README.md").exists()
-    branches = _git(repo, "branch", "--list", "nodus/*")
-    assert "nodus/run-abc123" in branches
+    branches = _git(repo, "branch", "--list", "sodus/*")
+    assert "sodus/run-abc123" in branches
     assert ctx["base"] == _git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -110,7 +110,7 @@ def test_merge_brings_the_branch_into_the_main_tree(repo):
     assert (repo / "feature.txt").read_text(encoding="utf-8") == "from the proposal\n"
     assert db.get_proposal(record["id"])["status"] == "merged"
     assert not Path(ctx["worktree"]).exists()
-    assert "nodus/run-merge" not in _git(repo, "branch", "--list", "nodus/*")
+    assert "sodus/run-merge" not in _git(repo, "branch", "--list", "sodus/*")
 
 
 def test_merge_refuses_while_someone_owns_the_main_tree(repo):
@@ -199,7 +199,7 @@ def test_a_propose_run_leaves_the_main_tree_alone(repo, tmp_path, monkeypatch):
     assert "1 file(s)" in record["stat"]
     handoff = (config.HOME / "runs" / done["id"] / "handoff.md").read_text(encoding="utf-8")
     assert "主工作区没有被改动" in handoff
-    assert f"nodus merge {record['id']}" in handoff
+    assert f"sodus merge {record['id']}" in handoff
 
     assert propose.merge(record)["ok"] is True
     assert (repo / "out.txt").read_text(encoding="utf-8") == "proposal work"

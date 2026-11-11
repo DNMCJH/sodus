@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from nodus import agents, config, db, providers, routes, runner
+from sodus import agents, config, db, providers, routes, runner
 
 SLOW = textwrap.dedent(
     """

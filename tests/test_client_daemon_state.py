@@ -1,16 +1,16 @@
-"""A daemon started from the CLI client must be stoppable by `nodus down`.
+"""A daemon started from the CLI client must be stoppable by `sodus down`.
 
 `ensure_daemon` starts the daemon as a side effect of any command that needs
 it. That path used to skip the state file `daemon.start` writes, so
 `daemon.json` kept pointing at a dead pid while another process was serving:
-`nodus down` killed nothing, and `nodus up` reported a pid that no longer
+`sodus down` killed nothing, and `sodus up` reported a pid that no longer
 existed. The rule is one state file and one fact in it -- whoever spawns the
 daemon records the pid.
 """
 
 from __future__ import annotations
 
-from nodus.cli import client
+from sodus.cli import client
 
 
 class _FakeProc:

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from nodus import config, db, decision, policy
-from nodus.cli import build_parser, main
+from sodus import config, db, decision, policy
+from sodus.cli import build_parser, main
 
 
 # ---- fixtures ----------------------------------------------------------
@@ -17,7 +17,7 @@ from nodus.cli import build_parser, main
 def home(tmp_path, monkeypatch):
     """A state directory per test, so record() and decisions.jsonl stay local."""
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-policy-test")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-policy-test")
     (tmp_path / "home").mkdir()
     return tmp_path / "home"
 
@@ -51,7 +51,7 @@ def assess_rules(text: str, rules_only) -> dict:
         ("把 foo 重命名为 bar", 1, 2),
         ("把 README 里的安装步骤更新一下，补上 Windows 的说明", 2, 2),
         ("修一下 login.py 里 token 过期没刷新的 bug", 2, 3),
-        ("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", 4, 4),
+        ("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", 4, 4),
         ("设计一个跨模块的缓存层，处理并发和失效", 4, 5),
         ("部署到服务器并重启 daemon，确认 4199 端口能访问", 2, 3),
         ("分析最近 7 天的 run 成本，找出异常并给出结论", 3, 3),
@@ -70,7 +70,7 @@ def test_difficulty_bands(text, low, high, rules_only):
 def test_a_typo_and_a_refactor_are_four_steps_apart(rules_only):
     typo = assess_rules("给 README 改个错别字", rules_only)
     refactor = assess_rules(
-        "把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", rules_only
+        "把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", rules_only
     )
     assert typo["difficulty"] == 1
     assert refactor["difficulty"] == 4
@@ -85,7 +85,7 @@ def test_a_typo_and_a_refactor_are_four_steps_apart(rules_only):
         ("给 README 改个错别字", "writing"),
         ("把 README 里的安装步骤更新一下", "writing"),
         ("把 foo 重命名为 bar", "code"),
-        ("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", "code"),
+        ("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿", "code"),
         ("修一下 login.py 里 token 过期没刷新的 bug", "code"),
         ("把整个仓库的 pytest 全部跑一遍，把失败列出来", "code"),
         ("分析最近 7 天的 run 成本，找出异常并给出结论", "analysis"),
@@ -109,7 +109,7 @@ def test_vision_is_recognised_as_a_need(rules_only):
 
 
 def test_without_jev_the_basis_is_rules_only(rules_only):
-    result = assess_rules("把 nodus/db.py 里的连接管理重构成上下文管理器", rules_only)
+    result = assess_rules("把 sodus/db.py 里的连接管理重构成上下文管理器", rules_only)
     assert result["basis"] == "rules-only"
     assert result["jev"]["ok"] is False
     assert "TYPESAFE_API_KEY" in result["jev"]["unavailable"]
@@ -177,7 +177,7 @@ def test_a_failed_jev_call_falls_back_to_rules(home, monkeypatch):
         "decide",
         lambda state, questions: {"ok": False, "unavailable": "network: timed out"},
     )
-    result = policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器")
+    result = policy.assess("把 sodus/db.py 里的连接管理重构成上下文管理器")
     assert result["basis"] == "rules-only"
     assert result["jev"]["available"] is True
     assert result["jev"]["ok"] is False
@@ -195,7 +195,7 @@ def test_an_empty_task_is_rejected(rules_only):
 def test_every_recommendation_names_a_real_route(home, rules_only, reports):
     texts = [
         "给 README 改个错别字",
-        "把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿",
+        "把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿",
         "部署到服务器并重启 daemon",
         "看这张界面截图，找出登录按钮错在哪",
         "分析最近 7 天的 run 成本",
@@ -216,7 +216,7 @@ def test_routes_without_measurements_carry_unknown(home, rules_only, reports):
         assert policy.evidence_for(route)["status"] == "unknown"
 
     rec = policy.recommend(
-        policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
+        policy.assess("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     )
     assert rec["route"] in policy.present_routes()
     assert rec["route"] != "claude"
@@ -264,7 +264,7 @@ def test_a_bench_result_becomes_measured_evidence(home, reports):
 
 def test_the_same_task_family_gets_a_measured_alternative(home, rules_only, reports):
     rec = policy.recommend(
-        policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
+        policy.assess("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     )
     measured = [alt for alt in rec["alternatives"] if alt["evidence"]["status"] == "measured"]
     assert measured, rec
@@ -274,7 +274,7 @@ def test_the_same_task_family_gets_a_measured_alternative(home, rules_only, repo
 def test_trivial_and_hard_tasks_do_not_get_the_same_route(home, rules_only, reports):
     typo = policy.recommend(policy.assess("给 README 改个错别字"))
     hard = policy.recommend(
-        policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
+        policy.assess("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     )
     assert typo["route"] == "dsh"
     assert hard["route"] in policy.present_routes()
@@ -295,7 +295,7 @@ def test_vision_goes_to_the_route_the_ledger_assigned_and_stays_unknown(home, ru
 def test_record_writes_an_event_a_note_and_a_ledger_line(home, rules_only, reports):
     task = db.create_task(goal="refactor the connection manager", acceptance="pytest -q")
     run = db.create_run(task["id"], "claude", str(home), route="claude")
-    assessment = policy.assess("把 nodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
+    assessment = policy.assess("把 sodus/db.py 里的连接管理重构成上下文管理器，保证测试全绿")
     recommendation = policy.recommend(assessment)
 
     written = policy.record(run["id"], assessment, recommendation)
@@ -529,7 +529,7 @@ def test_history_separates_finished_from_verified(monkeypatch, tmp_path):
     the run finishes, and -- among runs that were actually checked -- how often
     it goes green.
     """
-    from nodus import db, policy
+    from sodus import db, policy
 
     ids = []
     task = db.create_task("history-shape")
@@ -848,7 +848,7 @@ def _write_routes(home, extra):
 
 
 def test_route_metadata_carries_capability_price_and_requirements():
-    from nodus import route_meta
+    from sodus import route_meta
 
     for name in ("opus", "fable", "sol", "terra"):
         profile = route_meta.public(name)
@@ -924,7 +924,7 @@ def test_decision_route_task_lists_live_routes_and_sends_capabilities(home, monk
     assert result["answers"]["route"]["choice"] == "opus"
 
 def test_carbon_promotion_prefers_it_over_argon(monkeypatch):
-    from nodus import route_meta
+    from sodus import route_meta
 
     def measure(route):
         return {

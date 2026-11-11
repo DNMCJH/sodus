@@ -16,13 +16,13 @@ from datetime import date
 
 import pytest
 
-from nodus import agents, config, db, memory, providers, routes, runner
+from sodus import agents, config, db, memory, providers, routes, runner
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path / "home")
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-resume")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-resume")
     (tmp_path / "home").mkdir()
     return tmp_path
 

@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "goal": "在 v0.8.0（98ab57df1d30c2762e4b73b26888535c6878f7b6，clean main）基础上重做 sodus 0.6.1 遗留的 M4–M6 计划，并吸收 plan-70cceecf7ca5 的 sol 评审给出的 3 条 finding。范围：(M4) 手改 AGENTS.md facts 区块导致的漂移可以恢复，不再抛 RuntimeError；(M5) 在 API、看板和 MCP 上展示漂移，approved 候选在 apply 或 retire 之前一直留在看板上（finding P2）；(EP) verify 事后转绿时刷新 episode，新 rowid 必须大于当前最大 rowid 和所有游标（finding P1-a），dream.plan 消费补偿队列，即使只有补偿项也会生成批次（finding P1-b）；(M6) 契约、文档与发布收尾。",
+  "non_goals": [
+    "不重构 board.py、server.py 中与 memory、dream 无关的部分",
+    "不修改 0.8.0 的 handoff、worker 隔离和 CLI 审批逻辑",
+    "不引入新的外部依赖",
+    "本计划只读：不改仓库，不执行 acceptance"
+  ],
+  "base_sha": "157654c8ba4ab66e8549da0b64d1000bdc82720e",
+  "recon": {
+    "files": [
+      "nodus/dream.py",
+      "nodus/db.py",
+      "nodus/episodes.py",
+      "nodus/verify.py",
+      "nodus/runner.py",
+      "nodus/memory.py",
+      "nodus/board.py",
+      "nodus/server.py",
+      "nodus/mcp.py",
+      "nodus/cli/commands/memory.py",
+      "nodus/cli/commands/dream.py",
+      "openapi.yaml",
+      "CHANGELOG.md",
+      "reports/plan-M4-M6-20261109.json",
+      "reports/HANDOFF-0.8.0.md",
+      ".github/workflows/ci.yml",
+      "tests/test_memory_staging.py",
+      "tests/test_memory.py",
+      "tests/test_board.py",
+      "tests/test_episodes_dream.py",
+      "tests/test_dream_engine.py",
+      "tests/test_verify_marks.py",
+      "tests/test_openapi.py",
+      "tests/test_mcp.py"
+    ],
+    "tests": [
+      "A:\\Anaconda\\python.exe -m pytest -q",
+      "A:\\Anaconda\\python.exe -m pytest -q tests/test_episodes_dream.py tests/test_dream_engine.py",
+      "A:\\Anaconda\\python.exe -m pytest -q tests/test_memory_staging.py tests/test_memory.py tests/test_board.py"
+    ],
+    "agents_md": null
+  },
+  "milestones": [
+    {
+      "id": "M4",
+      "title": "facts 区块漂移可恢复",
+      "exit_criteria": [
+        "memory.apply_ops 发现 marker 哈希漂移时返回 status='drift'，附带 target、expected、actual 和 'sodus memory reindex' 提示，不再 raise RuntimeError（nodus/memory.py:130）",
+        "memory.reindex 把手改后的 body 作为 replace 基线写入 dream_batch；之后执行 rollback 时手改内容仍然保留",
+        "tests/test_memory_staging.py 覆盖完整流程：手改 → adopt 得到 drift → reindex → adopt 成功 → rollback 后手改内容仍在"
+      ]
+    },
+    {
+      "id": "M5",
+      "title": "漂移面展示与 approved 看板可见",
+      "exit_criteria": [
+        "/memory/adopt 遇到漂移时返回结构化 409，不再返回 500；看板 memory 区块显示 reindex 提示，不抛异常",
+        "memory_candidate 增加 approved 中间态，只有落盘后才变成 adopted；busy 或 drift 时保持 approved，由 daily_once 兜底",
+        "board.py:1864 的候选查询包含 approved，approved 候选在 apply 或 retire 之前一直显示在看板上（sol P2）"
+      ]
+    },
+    {
+      "id": "EP",
+      "title": "episode 刷新与补偿队列（sol P1×2）",
+      "exit_criteria": [
+        "刷新 episode 时分配的 rowid 大于 MAX(memory_episode.rowid)、所有 dream_cursor:* 以及 dream_batch.cursor_to 中的最大值；测试证明刷新后的 episode 会被消费，旧游标不会重复消费，并发和重放都不丢",
+        "dream.plan 消费补偿队列：批次保存补偿项快照，成功后 ack，并按 episode_id 去重；即使没有新 rowid、只有补偿项，也会生成批次，不再返回 None"
+      ]
+    },
+    {
+      "id": "M6",
+      "title": "契约、文档与 release 收尾",
+      "exit_criteria": [
+        "openapi.yaml 写明 drift 409 和 approved 状态",
+        "CHANGELOG.md 记录 M4、M5、EP、M6 以及对 3 条 sol finding 的修复",
+        "全量 pytest 通过"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n1-drift-recoverable",
+      "milestone": "M4",
+      "title": "apply_ops 漂移返回结构化结果，reindex 写入基线",
+      "description": "nodus/memory.py：(1) apply_ops 中 saved 与 before 不一致时，释放锁并返回 {'status':'drift','target','expected','actual','hint':'sodus memory reindex'}，不再 raise；(2) 新增 MemoryDrift(RuntimeError)，携带上述字段，adopt、_append 等需要抛异常的调用方在拿到 drift 结果时抛出它（busy 路径保持原样）；(3) 新增 memory.reindex(target)：持锁执行 ensure_marker，写入一个只含 replace 当前 body 的 dream_batch，经 _finish_apply 递增 memory_version 并更新 l3_hash:<target>。nodus/cli/commands/memory.py 的 memory_reindex 改为调用 memory.reindex，不再直接改写 meta。tests/test_memory_staging.py 新增测试：手改后 adopt 得到 drift，reindex 后 adopt 成功，rollback 后手改内容仍在。",
+      "deps": [],
+      "file_scope": [
+        "nodus/memory.py",
+        "nodus/cli/commands/memory.py",
+        "tests/test_memory_staging.py",
+        "tests/test_memory.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_memory_staging.py tests/test_memory.py"
+      ],
+      "difficulty": 3,
+      "route_hint": "sol",
+      "budget_cny": 6
+    },
+    {
+      "id": "n2-drift-surface",
+      "milestone": "M5",
+      "title": "在 API、看板和 MCP 上展示漂移",
+      "description": "nodus/server.py 的 /memory/adopt 单独捕获 memory.MemoryDrift，返回 409，body 为 {'error':'drift','hint','path'}；nodus/board.py 的 memory candidates 区块在 harvest 或 staged 读取遇到漂移时，显示一行“AGENTS.md 已手改，运行 sodus memory reindex”，不抛异常；nodus/mcp.py 的 memory adopt 工具同样返回结构化 drift 结果。只改这些调用点。测试：tests/test_board.py 新增漂移提示渲染测试，tests/test_memory_staging.py 新增 /memory/adopt 返回 409 的测试，tests/test_mcp.py 新增 drift 返回值测试。 复核修正（sol R2/R3）：board 的 harvest/staged 查询必须只读比对 l3_hash:<AGENTS.md> 与当前 marker hash，发现漂移时渲染提示（不依赖异常路径），并测试手改 facts body 后 approved 行仍可见；MCP 侧不新增 adopt 工具，改为把 nodus_memory_remember / POST /memory/remember 写入路径的 drift 结构化透传，candidates 输出中带 drift 标记，补充现有 MCP 工具测试。 渲染层修正（sol UI finding）：nodus/ui.py 的 memory_candidates 渲染必须增加 approved→“待落盘”标签和 drift/hint 提示，不得只加后台字段；补充实际渲染层测试，覆盖漂移时 approved 行仍可见。",
+      "deps": [
+        "n1-drift-recoverable"
+      ],
+      "file_scope": [
+        "nodus/server.py",
+        "nodus/board.py",
+        "nodus/mcp.py",
+        "tests/test_board.py",
+        "tests/test_memory_staging.py",
+        "tests/test_mcp.py",
+        "nodus/ui.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_board.py tests/test_memory_staging.py tests/test_mcp.py",
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_board.py tests/test_mcp.py tests/test_memory_staging.py",
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_board.py tests/test_ui.py"
+      ],
+      "difficulty": 2,
+      "route_hint": "sol",
+      "budget_cny": 4
+    },
+    {
+      "id": "n3-approved-visible",
+      "milestone": "M5",
+      "title": "approved 中间态，apply 前在看板上可见（sol P2）",
+      "description": "nodus/server.py:729 的 adopt 动作改为写 status='approved'，随后同步调用 dream.apply_approved()，响应里附带 apply 结果（applied、staged 或 drift）。nodus/dream.py 的 apply_approved 改为查询 status IN ('approved','retire_proposed')，并兼容历史上状态为 'adopted' 但尚未落盘的行（文件里没有的视为待写）；apply 结果为 applied 时才由 nodus/memory.py 的 _finish_apply 改成 adopted，busy 或 drift 时保持 approved。nodus/board.py:1864 的查询改为 status IN ('proposed','approved','adopted','retire_proposed')，看板为 approved 行显示“待落盘”标签，直到 apply 后变成 adopted，或者 retire 后被移除。测试：(a) tests/test_board.py 回归测试：模拟 busy 锁让行停在 approved，断言看板仍显示它；释放锁后执行 apply_approved，断言状态变为 adopted 且看板标签更新；构造 drift 时断言 approved 行仍可见；(b) tests/test_dream_engine.py：调用批准 API 后，当天 AGENTS.md 里就有这条 fact。 收敛修正（sol review 2026-11-10）：如果候选对应的 fact 已在文件中，持锁且漂移检查通过后直接把 approved 收敛为 adopted（不产生 add 操作也要走 _finish_apply），并增加“文件已含 fact 时批准后变 adopted”的回归测试。 渲染层修正（sol UI finding）：nodus/ui.py 的 memory_candidates 渲染必须增加 approved→“待落盘”标签和 drift/hint 提示，不得只加后台字段；补充实际渲染层测试，覆盖漂移时 approved 行仍可见。",
+      "deps": [
+        "n1-drift-recoverable"
+      ],
+      "file_scope": [
+        "nodus/server.py",
+        "nodus/dream.py",
+        "nodus/memory.py",
+        "nodus/board.py",
+        "nodus/db.py",
+        "tests/test_board.py",
+        "tests/test_dream_engine.py",
+        "nodus/ui.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_board.py tests/test_dream_engine.py tests/test_memory_staging.py",
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_board.py tests/test_ui.py"
+      ],
+      "difficulty": 3,
+      "route_hint": "sol",
+      "budget_cny": 6
+    },
+    {
+      "id": "n4-episode-refresh-rowid",
+      "milestone": "EP",
+      "title": "刷新 episode 时分配单调 rowid（sol P1-a）",
+      "description": "memory_episode 的主键是 TEXT，rowid 是隐式的。如果先 DELETE 再 INSERT，SQLite 可能复用原来的 rowid；dream 游标已经越过这个 rowid 时，刷新后的 episode 永远不会被消费。nodus/db.py 新增 memory_refresh_episode(id, **fields)：在 BEGIN IMMEDIATE 事务内计算 new_rowid = max(MAX(memory_episode.rowid), 所有 meta 中 dream_cursor:* 的值, MAX(dream_batch.cursor_to)) + 1，先 DELETE，再用显式 rowid INSERT；candidate_evidence 通过 TEXT episode_id 关联，不受影响。nodus/episodes.py 新增 refresh_episode(run, verify_state)：只在 verdict 或 evidence 变化时调用上面的函数，无变化时不操作，保证幂等。nodus/verify.py 在对已结束的 run 持久化 verify.green 或 red 后调用 refresh_episode。测试（tests/test_episodes_dream.py、tests/test_verify_marks.py）：(1) run 以 unverified 结束 → 游标推进越过它 → verify 转绿 → 刷新后 seq 大于游标，下一次 dream.plan 的批次包含该 episode；(2) 推进游标后再次执行 plan，不会重复消费同一个 episode；(3) 两个线程同时 refresh 加上 replay_episodes 重放后，只剩一行，且 rowid 大于游标。",
+      "deps": [],
+      "file_scope": [
+        "nodus/db.py",
+        "nodus/episodes.py",
+        "nodus/verify.py",
+        "tests/test_episodes_dream.py",
+        "tests/test_verify_marks.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_episodes_dream.py tests/test_verify_marks.py tests/test_verify.py"
+      ],
+      "difficulty": 4,
+      "route_hint": "sol",
+      "budget_cny": 8
+    },
+    {
+      "id": "n5-compensation-queue",
+      "milestone": "EP",
+      "title": "dream.plan 消费补偿队列（sol P1-b）",
+      "description": "目前 nodus/dream.py:80-82 在没有新 rowid 时返回 None，补偿项永远不会触发批次。nodus/db.py 在 MEMORY_SCHEMA 迁移中新增表 dream_compensation(workspace, episode_id, enqueued_at, batch_id NULL, acked_at NULL, PRIMARY KEY(workspace, episode_id))，INSERT OR IGNORE 负责去重；dream_batch 新增 comp_json 列，并新增 comp_key 列参与唯一索引 idx_dream_range（workspace_id, cursor_from, cursor_to, comp_key），避免纯补偿批次在同一游标处冲突。dream.plan 在同一个事务内认领 batch_id IS NULL 且未 ack 的补偿项，把 episode_id 快照写入 comp_json；即使 rows 为空（cursor_from == cursor_to），只要有补偿项也生成批次。_episodes 返回游标区间内的行与 comp_json 快照行的并集，按 id 去重。count 或 apply 成功后，把这些补偿项的 acked_at 设为当前时间；批次失败时清空 batch_id，让补偿项可以重新认领。在 UPDATE candidate_evidence 等需要补偿的路径以及 refresh_episode 中把对应 episode 入队。测试（tests/test_dream_engine.py、tests/test_episodes_dream.py）：纯补偿场景下 plan 返回批次而不是 None；ack 后再次 plan 返回 None；同一 episode 入队两次只处理一次；批次失败后重新 plan 仍包含该补偿项；补偿项和新 rowid 混在一起时，批次快照完整。 代际修正（sol review 2026-11-10）：dream_compensation 主键改为 (workspace, episode_id, generation)，每次刷新插入新 generation（不 INSERT OR IGNORE），批次认领时快照 (episode_id, generation) 并只在 ack 时更新匹配 generation 的行；ack 后再次刷新会生成新 generation 并重新入队，认领期间刷新不会吞掉，下一批继续消费。新增 schema v8 迁移：给 dream_batch 增加 comp_json/comp_key，回填旧行 comp_key，DROP 并重建 idx_dream_range；从 0.8.0（schema v7）升级并保留批次历史的测试必须通过。 失败路径修正（sol R1）：明确 dream.plan/extract 所有失败出口；复用 failed 批次重试时必须重新认领其 comp_json 中的 generation；extract_model 抛异常/解析失败要将批次标 failed 并释放认领，事务边界内完成；增加模型异常、解析失败、释放后重试、新 generation 同时入队的测试。",
+      "deps": [
+        "n4-episode-refresh-rowid"
+      ],
+      "file_scope": [
+        "nodus/dream.py",
+        "nodus/db.py",
+        "nodus/episodes.py",
+        "tests/test_dream_engine.py",
+        "tests/test_episodes_dream.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_dream_engine.py tests/test_episodes_dream.py",
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_dream_engine.py tests/test_episodes_dream.py tests/test_db.py"
+      ],
+      "difficulty": 4,
+      "route_hint": "sol",
+      "budget_cny": 8
+    },
+    {
+      "id": "n6-release",
+      "milestone": "M6",
+      "title": "契约、文档与 release 收尾",
+      "description": "openapi.yaml：/memory/adopt 补上 409 drift 响应 schema，memory candidate 的 status 枚举加入 approved。CHANGELOG.md 增加 0.8.1 条目，记录 M4、M5、EP 以及 3 条 sol finding 的修复。skills/nodus/references/troubleshooting.md 补充 drift 和 reindex 的说明。tests/test_openapi.py 新增断言：409 和 approved 已写入契约。最后跑全量 pytest。",
+      "deps": [
+        "n2-drift-surface",
+        "n3-approved-visible",
+        "n5-compensation-queue"
+      ],
+      "file_scope": [
+        "openapi.yaml",
+        "CHANGELOG.md",
+        "skills/nodus/references/troubleshooting.md",
+        "tests/test_openapi.py"
+      ],
+      "acceptance": [
+        "A:\\Anaconda\\python.exe -m pytest -q tests/test_openapi.py",
+        "A:\\Anaconda\\python.exe -m pytest -q"
+      ],
+      "difficulty": 1,
+      "route_hint": "sol",
+      "budget_cny": 2
+    }
+  ],
+  "risks": [
+    "n4 的显式 rowid 依赖 SQLite 隐式 rowid 语义；如果以后给表加上 WITHOUT ROWID 或 AUTOINCREMENT，这个修复会失效，需要用测试锁住",
+    "n5 需要迁移唯一索引 idx_dream_range；老库里已有的批次行，其 comp_key 默认值必须一致，否则 INSERT OR IGNORE 的语义会变",
+    "n3 把 adopted 拆成 approved 加 adopted；历史上状态为 adopted 但尚未落盘的行需要兼容判断，否则可能重复写入或遗漏",
+    "n1、n2、n3 都改 nodus/server.py 和 nodus/memory.py，需要按 DAG 串行合并，避免冲突",
+    "Windows 下 SQLite 并发测试可能不稳定；并发用例需要使用 BEGIN IMMEDIATE 并设置重试或超时",
+    "n5：若不加 generation，永久主键与 INSERT OR IGNORE 会吞掉 ack 后再次刷新，这是 sol P1；必须用迁移版本 v8 保证已升级的 0.8.0 库获得新列与索引。",
+    "n2：漂移展示必须依赖 board 自身的 hash 比对，不能假设写路径一定抛异常；MCP 不能新增 agent 采纳能力。",
+    "n5：failed 批次复用若不一致恢复认领，会重复消费或永久挂起；必须用测试锁住。"
+  ],
+  "rollback": "每个节点单独提交；出现回归时 git revert 对应提交即可。n5 的新表和新列是向后兼容的增量迁移，回滚代码后旧版本会忽略 dream_compensation 和 comp_json；如果要回滚 n3，对 approved 行执行 UPDATE memory_candidate SET status='adopted' WHERE status='approved'，即可恢复 0.8.0 的语义。",
+  "review_points": [
+    "n4：新 rowid 是否同时大于 MAX(rowid)、所有 dream_cursor:* 和 MAX(dream_batch.cursor_to)，并且在 BEGIN IMMEDIATE 事务内计算",
+    "n5：没有新 rowid、只有补偿项时，plan 是否生成批次；ack、去重和失败后重新认领是否都有测试覆盖",
+    "n3：board.py 的查询是否包含 approved；busy 或 drift 时 approved 行是否仍可见，并在 apply 后变成 adopted",
+    "n1：漂移返回结构化结果后，reindex 写入的基线能否让 rollback 保留手改内容",
+    "n6：openapi 契约与 CHANGELOG 是否完整覆盖 3 条 sol finding",
+    "n5：ack 后同一 episode 再次刷新是否重新入队（generation）；认领期间刷新是否不被旧批次 ack 吞掉；v7→v8 迁移是否保留历史批次。",
+    "n3：文件已含 fact 时批准后是否收敛为 adopted。",
+    "n5：failed 批次重试是否重新认领 comp generation；extract_model 异常/解析失败是否标 failed 并释放；事务边界是否覆盖。",
+    "n2：board 是否只读比对 l3_hash 并显示漂移；remember 写入路径 drift 是否结构化透传；未新增 agent adopt 工具。",
+    "n2/n3：ui.py 是否实际渲染 approved 标签和 drift 提示；渲染层回归是否覆盖 approved 可见。"
+  ]
+}

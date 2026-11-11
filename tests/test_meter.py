@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nodus import config, meter, providers
+from sodus import config, meter, providers
 
 
 def _usage(value: float) -> meter.Reading:
@@ -130,8 +130,8 @@ def test_gateway_is_not_asked_without_a_session_id(monkeypatch):
 
 def test_gateway_currency_can_be_overridden(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.delenv("NODUS_MAGPIE_CURRENCY", raising=False)
+    monkeypatch.delenv("SODUS_MAGPIE_CURRENCY", raising=False)
     # Verified against `magpie usage`, which prints ≈$; a wrong unit is a 7x error.
     assert config.gateway_currency() == "USD"
-    monkeypatch.setenv("NODUS_MAGPIE_CURRENCY", "cny")
+    monkeypatch.setenv("SODUS_MAGPIE_CURRENCY", "cny")
     assert config.gateway_currency() == "CNY"

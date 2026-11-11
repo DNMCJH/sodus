@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from nodus import review
+from sodus import review
 
 
 def test_extract_plain_json():

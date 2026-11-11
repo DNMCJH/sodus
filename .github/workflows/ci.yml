@@ -33,11 +33,11 @@ jobs:
       - name: CLI answers without a daemon
         shell: pwsh
         run: |
-          $version = python nodus.py --version
-          if ($LASTEXITCODE -ne 0) { throw "nodus --version failed" }
+          $version = python sodus.py --version
+          if ($LASTEXITCODE -ne 0) { throw "sodus --version failed" }
           Write-Host $version
-          python nodus.py --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "nodus --help failed" }
+          python sodus.py --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "sodus --help failed" }
 
       - name: Every command surface loads
         shell: pwsh

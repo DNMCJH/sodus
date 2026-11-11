@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from nodus import config, db, pet
+from sodus import config, db, pet
 
 
 @pytest.fixture()

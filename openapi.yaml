@@ -1,16 +1,16 @@
 openapi: 3.1.0
 info:
   title: Sodus HTTP API
-  version: 0.8.1
+  version: 0.9.0
   summary: Sodus daemon 的 HTTP + SSE 接口
   description: |
-    产品名 Sodus，实现名 nodus（路径、包名、工具名仍是 nodus）。
-    这份契约对应 `nodus/server.py` 里实际存在的每一条路由，默认地址
-    `http://127.0.0.1:4199`（`nodus up` 或 `python -m nodus serve`）。
+    产品名 Sodus。
+    这份契约对应 `sodus/server.py` 里实际存在的每一条路由，默认地址
+    `http://127.0.0.1:4199`（`sodus up` 或 `python -m sodus serve`）。
 
     鉴权：除公开端点外，所有请求都要带
-    `Authorization: Bearer <token>`。token 存在 `~/.nodus/token`
-    （Windows 为 `%USERPROFILE%\.nodus\token`；`NODUS_HOME` 可改根目录），
+    `Authorization: Bearer <token>`。token 存在 `~/.sodus/token`
+    （Windows 为 `%USERPROFILE%\.sodus\token`；`SODUS_HOME` 可改根目录），
     首次运行 daemon 时自动生成。token 不对返回 `401 {"error":"unauthorized"}`。
 
     公开端点（`security: []`）：`GET /`、`GET /health`、`GET /pet`、
@@ -27,7 +27,7 @@ info:
     `413 {"error":"body too large"}`。
 
     安全边界：daemon 默认只绑定环回地址，非环回绑定需要
-    `NODUS_ALLOW_REMOTE=1`。HTTP 层只有这一枚本地 token，没有多用户/RBAC。
+    `SODUS_ALLOW_REMOTE=1`。HTTP 层只有这一枚本地 token，没有多用户/RBAC。
   contact:
     name: Sodus
 servers:
@@ -990,7 +990,7 @@ paths:
       description: |
         把人审过的候选追加到项目根 `AGENTS.md` 的 `## 已验证事实` 小节，格式为
         `- YYYY-MM-DD（来源 <文件>）<事实>`。重复采纳同一条不会写第二遍，
-        文件里已有的内容一行不动。候选来自 `nodus debug memory harvest`，
+        文件里已有的内容一行不动。候选来自 `sodus debug memory harvest`，
         或 `/board` 的 `memory_candidates`。
       requestBody:
         required: true
@@ -1037,7 +1037,7 @@ paths:
         同一 agent 每分钟 ≤ 10 次。超了返回 `429`，`kind=rate-limited`。
 
         记账：每次成功的调用都会在 `run` 表落一行（`status=completed`，
-        `usage_json` 与 run 同字段），所以 `nodus stats` / `nodus stats usage`
+        `usage_json` 与 run 同字段），所以 `sodus stats` / `sodus stats usage`
         能看到这笔花费。`cost_basis` 说明这个数字有多可信：
         `calibrated`（按实测标定）/ `list_price`（按价目表）/
         `metered`（账户计量前后差，账户级，含并发重叠）/ 省略（未计价）。
@@ -1258,8 +1258,8 @@ components:
       type: http
       scheme: bearer
       description: |
-        `~/.nodus/token` 的内容（Windows 为
-        `%USERPROFILE%\.nodus\token`；`NODUS_HOME` 可改根目录）。请求头写法
+        `~/.sodus/token` 的内容（Windows 为
+        `%USERPROFILE%\.sodus\token`；`SODUS_HOME` 可改根目录）。请求头写法
         `Authorization: Bearer <token>`。首次启动 daemon 时自动生成。
     eventsToken:
       type: apiKey
@@ -1332,7 +1332,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     InternalError:
-      description: handler 内未捕获异常；细节只写进 `~/.nodus/daemon.log`
+      description: handler 内未捕获异常；细节只写进 `~/.sodus/daemon.log`
       content:
         application/json:
           schema:
@@ -1376,7 +1376,7 @@ components:
       additionalProperties: false
       required: [version, workspace_id, now, running, counts, today, asks, memory]
       properties:
-        version: {type: string, const: '0.8.1'}
+        version: {type: string, const: '0.9.0'}
         workspace_id: {type: string}
         now: {type: number}
         running:
@@ -1509,7 +1509,7 @@ components:
           description: 写进这次 run 的 note（桌宠传「碎碎念」「对话」），只用于看板显示
         cwd:
           type: string
-          description: 写进这次 run 的 cwd；不传则用状态目录（默认 ~/.nodus）
+          description: 写进这次 run 的 cwd；不传则用状态目录（默认 ~/.sodus）
 
     LlmMessage:
       type: object

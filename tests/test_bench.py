@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from nodus import bench
+from sodus import bench
 
 TASKS = Path(__file__).resolve().parent.parent / "eval" / "tasks"
 

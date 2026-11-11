@@ -1,7 +1,7 @@
 """Usage stats: one cache-hit definition, no invented zeros and no FX.
 
 Every fixture row here is synthetic except the one integration test, which
-writes into a throwaway NODUS_HOME so a test never touches the operator's real
+writes into a throwaway SODUS_HOME so a test never touches the operator's real
 history.
 """
 
@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from nodus import config, db, usage
+from sodus import config, db, usage
 
 
 def _local(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> float:
@@ -215,7 +215,7 @@ def test_groups_are_ordered_by_runs_then_tokens():
 
 def test_summary_reads_the_run_table(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-usage-test")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-usage-test")
     now = time.time()
     first = db.create_run(task_id="task-usage", agent="claude", cwd=".")
     db.update_run(
@@ -234,5 +234,5 @@ def test_summary_reads_the_run_table(tmp_path, monkeypatch):
     assert data["totals"]["runs"] == 2
     assert data["totals"]["unrecorded"] == 1
     assert data["totals"]["cost"]["CNY"]["total"] == pytest.approx(2.0)
-    # json.dumps is what `nodus usage --json` does; the payload must survive it.
+    # json.dumps is what `sodus usage --json` does; the payload must survive it.
     assert json.loads(json.dumps(data))["totals"]["tokens"]["total"] == 400

@@ -8,8 +8,8 @@ This module is that record's read side — no scheduling, no mutation.
 
 from __future__ import annotations
 
-from nodus import config, db, diagnosis, harness
-from nodus.cli import build_parser, main
+from sodus import config, db, diagnosis, harness
+from sodus.cli import build_parser, main
 
 
 def _run(**over) -> dict:
@@ -79,19 +79,19 @@ def test_the_brief_version_comes_from_the_recorded_event():
 
 
 def test_the_brief_version_changes_when_the_prompt_changes():
-    from nodus import runner
+    from sodus import runner
 
     assert len(runner.BRIEF_VERSION) == 8
     assert harness.version_of(runner.PROMPT_TEMPLATE) == runner.BRIEF_VERSION
 
 
 def test_the_command_is_registered_under_debug_and_prints_evidence(tmp_path, monkeypatch, capsys):
-    args = build_parser("nodus").parse_args(["debug", "harness-stats", "--by", "model"])
+    args = build_parser("sodus").parse_args(["debug", "harness-stats", "--by", "model"])
     assert args.func.__name__ == "harness_stats"
     assert args.by == "model"
 
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setenv("NODUS_WORKSPACE", "ws-harness")
+    monkeypatch.setenv("SODUS_WORKSPACE", "ws-harness")
     task = db.create_task("demo", "pytest green")
     run = db.create_run(task["id"], "claude", str(tmp_path), route="claude")
     db.update_run(

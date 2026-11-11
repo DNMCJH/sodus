@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from nodus import config, providers
+from sodus import config, providers
 
 
 def test_builtins_cover_the_accounts_endpoints():

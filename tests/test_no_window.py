@@ -3,7 +3,7 @@
 import inspect
 import os
 
-from nodus import board, config, daemon, observe, pet, plan, propose, review, runner, verify
+from sodus import board, config, daemon, observe, pet, plan, propose, review, runner, verify
 
 
 def test_no_window_flag_is_windows_only_constant():

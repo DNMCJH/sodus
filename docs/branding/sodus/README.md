@@ -1,4 +1,4 @@
-> 产品名 Sodus，实现名 nodus。
+> 产品名 Sodus。
 
 # sodus 标志文件
 
@@ -34,7 +34,7 @@
 - 强调色：90°/270° 两条；整只标绕中心旋转 **+16.6°**，使蓝色那对的视觉主轴精确落在 **90°（竖直）**
 - 整体外径 108 / viewBox 256（四周留 20 边距）；方向为顺时针（`MIRROR=True`）
 
-生成器：`A:\AgentWorkspace\scripts\nodus_logo_final.py`
+生成器：`A:\AgentWorkspace\scripts\sodus_logo_final.py`
 `build_svg(spec, fill=..., fill2=..., rotate=16.6)` 即可复现；`g.arm(...)` 造参数。
 
 ## 已完成（2026-10-27 补）
@@ -48,8 +48,8 @@
 
 ## 相关记录
 
-- 商标/近似初筛：`A:\AgentWorkspace\reports\2026-10-27_nodus-trademark-prefilter.md`
-  （结论：「Nodus」在软件/AI 领域已有多方在用，欧洲有已注册文字商标；改用 **Sodus** 规避，
+- 商标/近似初筛：`A:\AgentWorkspace\reports\2026-10-27_sodus-trademark-prefilter.md`
+  （结论：「Sodus」在软件/AI 领域已有多方在用，欧洲有已注册文字商标；改用 **Sodus** 规避，
   且 Sodus 源自「Assorodus = 银色的水」，与银身水滴图形呼应）
-- 设计与评审过程（含两份 Claude 评审原文、几何演进）：`A:\AgentWorkspace\reports\nodus-logo\`
+- 设计与评审过程（含两份 Claude 评审原文、几何演进）：`A:\AgentWorkspace\reports\sodus-logo\`
 - 工作日志：`A:\AgentWorkspace\journal\2026-10-26.md`、`journal\2026-10-27.md`

@@ -1,6 +1,6 @@
 """A daemon must not adopt runs it did not start.
 
-`nodus mcp` and `nodus run` hold their own runs. Before ownership was recorded,
+`sodus mcp` and `sodus run` hold their own runs. Before ownership was recorded,
 starting the daemon failed all of them and reaped their files — silent loss for
 anyone who used two processes.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import socket
 
-from nodus import db, runner
+from sodus import db, runner
 
 
 def run_row(**over):

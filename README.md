@@ -1,7 +1,7 @@
 # Sodus
 
-> 名字来自拉丁语 *nodus*（结、节点）。产品名是 **Sodus**，实现名仍是 **nodus**——CLI 命令、Python 包、仓库目录、默认状态目录都叫 `nodus`（`~/.nodus`）。两个命令是同一条 CLI：`nodus` 和 `sodus`（`sodus --help` 的 usage 行显示 sodus），同一个 daemon、同一个数据库。
-> 2026-10-21 之前它叫 `wb`／`workbench`，旧状态目录会在首次运行时自动迁移。改名阶段与 `SODUS_HOME`／`migrate-home` 见 [docs/sodus-migration.md](docs/sodus-migration.md)。
+> 名字来自拉丁语 nodus（结、节点）。0.9.0 起包名、CLI、仓库目录、默认状态目录统一叫 sodus（~/.sodus）；旧的 nodus 只作为迁移来源保留，用 sodus migrate-home --apply 把 ~/.nodus 复制过来。
+> 2026-10-21 之前它叫 wb/workbench，更早的状态目录会在首次运行时自动迁移。迁移步骤见 docs/sodus-migration.md。
 
 本地多 agent 任务编排器。不重写 agent loop，把 Claude Code / Codex / DSH / MiniMax 当 worker 驱动，
 自己只管任务、会话、产物、交接和审计。产品原则见 [docs/vision.md](docs/vision.md)。
@@ -9,21 +9,21 @@
 ## 快速开始
 
 ```powershell
-pip install -e .                 # 装一次，之后任何目录都能用 nodus
-nodus topology                   # 一眼看全：agent × provider × route
-nodus task "目标" --accept "验收标准"
-nodus run <task-id> --route claude --cwd D:\work\demo
+pip install -e .                 # 装一次，之后任何目录都能用 sodus
+sodus topology                   # 一眼看全：agent × provider × route
+sodus task "目标" --accept "验收标准"
+sodus run <task-id> --route claude --cwd D:\work\demo
 ```
 
-不装也行，等价写法是 `A:\Anaconda\python.exe nodus.py ...` 或 `python -m nodus ...`。
+不装也行，等价写法是 `A:\Anaconda\python.exe sodus.py ...` 或 `python -m sodus ...`。
 
-`nodus run` 会自动在 4199 端口拉起 daemon，**作为独立进程**，客户端退出它不退：
-跑了三个并发 run、全部结束后 daemon PID 不变。日志在 `~/.nodus/daemon.log`。
+`sodus run` 会自动在 4199 端口拉起 daemon，**作为独立进程**，客户端退出它不退：
+跑了三个并发 run、全部结束后 daemon PID 不变。日志在 `~/.sodus/daemon.log`。
 
 要前台看输出就手动起：
 
 ```powershell
-nodus serve
+sodus serve
 ```
 
 daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，其所有者进程必然已经死了，
@@ -34,87 +34,87 @@ daemon 启动时会**重新对账**：库里任何还标着 `running` 的 run，
 
 | 命令 | 作用 |
 |---|---|
-| `nodus topology` | agents / providers / routes 一屏看完 |
-| `nodus agents` | 各 CLI 是否装了 |
-| `nodus providers list\|show\|probe\|add\|rm` | 端点：地址、凭据、单价、探活 |
-| `nodus routes list\|show\|set\|rm` | 路由组：一个 CLI + 有序回退链 |
-| `nodus profiles list\|show\|use\|new\|rm` | 配置快照：切一套环境 |
-| `nodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
-| `nodus mcp` | MCP server over stdio（接 Claude Code / DSH，见 [docs/mcp.md](docs/mcp.md)） |
-| `nodus migrate-home` | 把 `~/.nodus` 复制到 `~/.sodus` 并校验；默认 dry-run，`--apply` 才落地 |
-| `nodus --version` | 版本 |
-| `nodus task "goal" --accept "..."` | 建任务，返回 task-id |
-| `nodus sessions [--vendor] [--query] [--source]` | 三家会话 + Sodus run，一张表 |
-| `nodus session <id>` | 统一格式的对话记录 |
-| `nodus brief <id> --task "..."` | 生成跨会话交接文件 |
-| `nodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
-| `nodus branch <id> [--note]` | 从这段历史分叉/播种一个新会话 |
-| `nodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] [--no-verify] [--propose] --cwd PATH` | 起一次执行并跟踪（改过文件会自动跑测试；`--propose` 在独立 worktree 里干） |
-| `nodus proposals [--all]` | 未合并的提案 |
-| `nodus proposal <id>` | 看一份提案和它的 patch |
-| `nodus merge <id>` | 合入主树（主树写锁） |
-| `nodus reject <id>` | 丢弃提案和 worktree |
-| `nodus watch <run>` | 跟踪已有 run |
-| `nodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
-| `nodus locks` | 哪些工作目录正被占用、被谁 |
-| `nodus unlock <cwd>` | 强制释放一个目录（正常情况用不到） |
-| `nodus show <run>` | 看 run 的原始记录 |
-| `nodus handoff <run>` | 看这次生成的交接单 |
-| `nodus stop <run>` | 杀掉进程树 |
-| `nodus reconcile [--stale 900]` | 把进程已死却还停在 running 的 run 标成 failed |
-| `nodus route <task>` | Jev 选 agent + effort（和上面的 `routes` 是两件事） |
-| `nodus triage <run>` | Jev 给执行打分 |
-| `nodus decisions [--last N]` | 看历史决策 |
-| `nodus usage [--days N]` | 按 route 汇总 token 与花费，标出花费来源和回退次数 |
-| `nodus cost` | 标定过的每 token 单价，以及标定 vs 账单的漂移 |
-| `nodus probe` | 探活各 provider（免费） |
-| `nodus status` | 探活结果 + 今日用量 |
-| `nodus verify --cwd DIR [--command "pytest -q"]` | 跑测试，返回 exit code（不花 token） |
-| `nodus tdd <task> --cwd DIR [--review]` | 红→绿 TDD；`--review` 追加交叉审查（跑在 daemon 里） |
-| `nodus review <run> [--by codex] [--scope task\|run] [--dry-run]` | 换一家审改动，落结构化 findings；有问题返回 exit 2（跑在 daemon 里） |
-| `nodus fix <run> [--by dsh] [--rounds 2] [--review-first]` | 审查→修→验证→复审，收敛才 exit 0（跑在 daemon 里） |
-| `nodus pipelines [--status S]` | 谁在跑、跑完没有 |
-| `nodus report <task-id\|run-id> [--print]` | 生成任务报告到 `tasks/<id>/report.md` |
+| `sodus topology` | agents / providers / routes 一屏看完 |
+| `sodus agents` | 各 CLI 是否装了 |
+| `sodus providers list\|show\|probe\|add\|rm` | 端点：地址、凭据、单价、探活 |
+| `sodus routes list\|show\|set\|rm` | 路由组：一个 CLI + 有序回退链 |
+| `sodus profiles list\|show\|use\|new\|rm` | 配置快照：切一套环境 |
+| `sodus doctor` | 自检：目录、token、数据库、路由、会话、密钥、磁盘 |
+| `sodus mcp` | MCP server over stdio（接 Claude Code / DSH，见 [docs/mcp.md](docs/mcp.md)） |
+| `sodus migrate-home` | 把 `~/.sodus` 复制到 `~/.sodus` 并校验；默认 dry-run，`--apply` 才落地 |
+| `sodus --version` | 版本 |
+| `sodus task "goal" --accept "..."` | 建任务，返回 task-id |
+| `sodus sessions [--vendor] [--query] [--source]` | 三家会话 + Sodus run，一张表 |
+| `sodus session <id>` | 统一格式的对话记录 |
+| `sodus brief <id> --task "..."` | 生成跨会话交接文件 |
+| `sodus resume <id> --note "..."` | 接续一个会话（任何厂商） |
+| `sodus branch <id> [--note]` | 从这段历史分叉/播种一个新会话 |
+| `sodus run <task> --route NAME [--profile NAME] [--model M] [--wait SECONDS] [--no-verify] [--propose] --cwd PATH` | 起一次执行并跟踪（改过文件会自动跑测试；`--propose` 在独立 worktree 里干） |
+| `sodus proposals [--all]` | 未合并的提案 |
+| `sodus proposal <id>` | 看一份提案和它的 patch |
+| `sodus merge <id>` | 合入主树（主树写锁） |
+| `sodus reject <id>` | 丢弃提案和 worktree |
+| `sodus watch <run>` | 跟踪已有 run |
+| `sodus runs [--task ID]` | 列执行，带 route / provider / `verify=` 标记 |
+| `sodus locks` | 哪些工作目录正被占用、被谁 |
+| `sodus unlock <cwd>` | 强制释放一个目录（正常情况用不到） |
+| `sodus show <run>` | 看 run 的原始记录 |
+| `sodus handoff <run>` | 看这次生成的交接单 |
+| `sodus stop <run>` | 杀掉进程树 |
+| `sodus reconcile [--stale 900]` | 把进程已死却还停在 running 的 run 标成 failed |
+| `sodus route <task>` | Jev 选 agent + effort（和上面的 `routes` 是两件事） |
+| `sodus triage <run>` | Jev 给执行打分 |
+| `sodus decisions [--last N]` | 看历史决策 |
+| `sodus usage [--days N]` | 按 route 汇总 token 与花费，标出花费来源和回退次数 |
+| `sodus cost` | 标定过的每 token 单价，以及标定 vs 账单的漂移 |
+| `sodus probe` | 探活各 provider（免费） |
+| `sodus status` | 探活结果 + 今日用量 |
+| `sodus verify --cwd DIR [--command "pytest -q"]` | 跑测试，返回 exit code（不花 token） |
+| `sodus tdd <task> --cwd DIR [--review]` | 红→绿 TDD；`--review` 追加交叉审查（跑在 daemon 里） |
+| `sodus review <run> [--by codex] [--scope task\|run] [--dry-run]` | 换一家审改动，落结构化 findings；有问题返回 exit 2（跑在 daemon 里） |
+| `sodus fix <run> [--by dsh] [--rounds 2] [--review-first]` | 审查→修→验证→复审，收敛才 exit 0（跑在 daemon 里） |
+| `sodus pipelines [--status S]` | 谁在跑、跑完没有 |
+| `sodus report <task-id\|run-id> [--print]` | 生成任务报告到 `tasks/<id>/report.md` |
 
 `--agent` 仍然可用，是 `--route` 的旧名字。
 
 ## 结构
 
 ```
-nodus.py                 入口，等价于 python -m nodus
-nodus/cli/               argparse + 每个命令一个 handler
+sodus.py                 入口，等价于 python -m sodus
+sodus/cli/               argparse + 每个命令一个 handler
   client.py              HTTP 客户端（唯一知道 daemon 地址的地方）
-nodus/config.py          路径、token、secrets、用户配置、旧目录迁移
-nodus/providers.py       端点：地址、凭据、单价、计量口径（数据，可被 JSON 覆盖）
-nodus/agents.py          CLI：可执行、参数方言、流格式、能说哪种协议
-nodus/routes.py          路由组：一个 CLI + 有序 provider 回退链
-nodus/profiles.py        配置快照：按 profile × agent × provider 物化配置目录
-nodus/db.py              SQLite，所有读按 workspace 过滤
-nodus/adapters.py        各家 JSONL → 统一事件
-nodus/runner.py          起进程、读流、落事件、尝试循环与回退、生成交接单
-nodus/verify.py          检测测试器、跑测试、把 red/green 落成证据
-nodus/tdd.py             写测试 → 红 → 实现 → 绿 →（可选）审查
-nodus/review.py          跨 agent 审查，结构化 findings
-nodus/fix.py             审查 finding → 换一家修 → 验证 → 复审
-nodus/report.py          任务报告
-nodus/meter.py           计费表：run 前后读端点的账，求差
-nodus/propose.py         提案：worktree / 提交 / patch / 合并 / 丢弃
-nodus/jobs.py            daemon 作业：tdd/review/fix 跑在 daemon 里而不是终端里
-nodus/decision.py        Jev 路由与分诊
-nodus/telemetry.py       探活、用量、余额
-nodus/sessions/          会话层：三家存储的读取 + 接续/分支的统一入口
+sodus/config.py          路径、token、secrets、用户配置、旧目录迁移
+sodus/providers.py       端点：地址、凭据、单价、计量口径（数据，可被 JSON 覆盖）
+sodus/agents.py          CLI：可执行、参数方言、流格式、能说哪种协议
+sodus/routes.py          路由组：一个 CLI + 有序 provider 回退链
+sodus/profiles.py        配置快照：按 profile × agent × provider 物化配置目录
+sodus/db.py              SQLite，所有读按 workspace 过滤
+sodus/adapters.py        各家 JSONL → 统一事件
+sodus/runner.py          起进程、读流、落事件、尝试循环与回退、生成交接单
+sodus/verify.py          检测测试器、跑测试、把 red/green 落成证据
+sodus/tdd.py             写测试 → 红 → 实现 → 绿 →（可选）审查
+sodus/review.py          跨 agent 审查，结构化 findings
+sodus/fix.py             审查 finding → 换一家修 → 验证 → 复审
+sodus/report.py          任务报告
+sodus/meter.py           计费表：run 前后读端点的账，求差
+sodus/propose.py         提案：worktree / 提交 / patch / 合并 / 丢弃
+sodus/jobs.py            daemon 作业：tdd/review/fix 跑在 daemon 里而不是终端里
+sodus/decision.py        Jev 路由与分诊
+sodus/telemetry.py       探活、用量、余额
+sodus/sessions/          会话层：三家存储的读取 + 接续/分支的统一入口
   dsh.py                 zstd JSONL
   claude.py              projects/<cwd>/<uuid>.jsonl
   codex.py               sessions/YYYY/MM/DD/rollout-*.jsonl
-nodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
-nodus/mcp.py             MCP over stdio（JSON-RPC 2.0，换行分帧）
+sodus/server.py          HTTP + SSE，默认 127.0.0.1:4199
+sodus/mcp.py             MCP over stdio（JSON-RPC 2.0，换行分帧）
 openapi.yaml             HTTP API 契约（OpenAPI 3.1；daemon 也经 GET /openapi.yaml 直接给）
 tests/                   自己的一套 pytest（195 条）
 ```
 
 架构决策（为什么代码这样分层、安全边界在哪）见 [docs/architecture.md](docs/architecture.md)。
 
-状态默认放 `%USERPROFILE%\.nodus\`：
+状态默认放 `%USERPROFILE%\.sodus\`：
 
 ```
 providers.json                端点的覆盖项（只存和内置不同的部分）
@@ -133,7 +133,7 @@ runs/<run-id>/review.md       人读版审查
 runs/<run-id>/context.md      审查者看到的证据（可复查）
 tasks/<task-id>/report.md     任务报告
 backup/agents-<时间>/         升级前的 settings.json / config.toml 原件
-nodus.sqlite3                 全部状态
+sodus.sqlite3                 全部状态
 ```
 
 ## 三层：CLI / 端点 / 路由组
@@ -155,7 +155,7 @@ sodus memory rollback --to 1
 ### 0.7 多宿主与 planner
 
 - MCP 所有工具改由 daemon HTTP 执行（daemon 是唯一 run 所有者）；`sodus mcp install --host codex|claude|dsh` 一键写配置，`--check` / `--uninstall` 可查可撤。
-- 新增只读 `GET /state`（面板/宠物/脚本用），看板展示层从 `server.py` 拆到 `nodus/board.py`。
+- 新增只读 `GET /state`（面板/宠物/脚本用），看板展示层从 `server.py` 拆到 `sodus/board.py`。
 - planner：`sodus plan new/review/approve` 与 `POST /plan`；`plan.json` v1 先过机械校验（base_sha、路径存在、DAG 无环、每节点有验收），opus 规划、sol 异源评审、人显式批准。
 
 ```powershell
@@ -181,12 +181,12 @@ profile   哪套环境：一个目录，装 agent 的本地配置，可切换、
 这不是重复，是事实：它们确实共用凭据，而那值得被看得见。
 
 ```powershell
-nodus topology                  # 一屏
-nodus providers probe           # 四个端点各打一次模型列表，不花 token
-nodus routes set cheap --agent claude --providers minimax
-nodus run <task> --route cheap
-nodus profiles new work --from default
-nodus profiles use work
+sodus topology                  # 一屏
+sodus providers probe           # 四个端点各打一次模型列表，不花 token
+sodus routes set cheap --agent claude --providers minimax
+sodus run <task> --route cheap
+sodus profiles new work --from default
+sodus profiles use work
 ```
 
 `providers.json` / `routes.json` 里**只存和内置不同的部分**。所以升级不会把你手上的默认值冻住。
@@ -203,7 +203,7 @@ nodus profiles use work
 那正是回退链最不该引入的故障模式。这条规则有独立测试（真起子进程，不是 mock）。
 
 回退不是静默的：CLI 会打印 `!! relay-dead failed before doing anything (...) → retrying on minimax`，
-交接单里写 `回退：relay-dead → minimax`，`nodus runs` 显示最终 provider，`nodus usage` 数回退次数。
+交接单里写 `回退：relay-dead → minimax`，`sodus runs` 显示最终 provider，`sodus usage` 数回退次数。
 
 实测一次（`run-90c6a47c9bae`）：第一段指向死端口，Claude Code 自己重试到放弃并打出
 `Connection refused (ECONNREFUSED)`，Sodus 判定无副作用、换到 minimax，任务完成，花费 ¥0.013476。
@@ -217,20 +217,20 @@ nodus profiles use work
 用**部分唯一索引**顶住——第二个 INSERT 直接失败，而不是两个 worker 悄悄互相覆盖。
 
 ```powershell
-nodus run $t2 --cwd D:\work\demo
+sodus run $t2 --cwd D:\work\demo
 # error: D:\work\demo is already being written by run-10080926f04d (agent=claude, 6s);
 #        wait for it, or use a different --cwd
-nodus run $t2 --cwd D:\work\demo --wait 300    # 排队而不是报错
-nodus locks                                    # 谁占着，占多久
+sodus run $t2 --cwd D:\work\demo --wait 300    # 排队而不是报错
+sodus locks                                    # 谁占着，占多久
 ```
 
 行和锁在**同一个事务**里插入。分开插会留下"有锁没有 run"的窗口，另一个进程会合理地判定持有者已死。
 锁跟着 run 的生命周期走：完成、失败、被对账判死，三条路径都释放，而且**先释放再写状态**——
-这样 `nodus wait` 返回"完成"就意味着这个目录可以立刻给下一次 run 用了（`nodus tdd` 就是紧接着这么干的）。
+这样 `sodus wait` 返回"完成"就意味着这个目录可以立刻给下一次 run 用了（`sodus tdd` 就是紧接着这么干的）。
 持有者的 run 已经结束还留着锁，算残骸：`create_run` 会清掉它并重试一次，不需要 `--force`。
 
-已实测：A 跑着的时候 `nodus locks` 显示 `run-10080926f04d claude@minimax 5s`，B 在同目录 exit 1 并报出持有者，
-A 完成后 `nodus locks` 回到 `(no directory is locked)`。
+已实测：A 跑着的时候 `sodus locks` 显示 `run-10080926f04d claude@minimax 5s`，B 在同目录 exit 1 并报出持有者，
+A 完成后 `sodus locks` 回到 `(no directory is locked)`。
 
 ## 会话：查询、读取、接续、分支
 
@@ -243,11 +243,11 @@ A 完成后 `nodus locks` 回到 `(no directory is locked)`。
 | 分支 | `--resume <id> --fork-session` | `exec fork <id>` | **没有原生 fork**，用 brief 播种 |
 
 ```powershell
-nodus sessions                      # 三家会话 + Sodus run，一张表
-nodus sessions --vendor claude --query 水印
-nodus session claude:be6acd2c       # 统一格式，工具调用和系统噪音都滤掉
-nodus resume  claude:be6acd2c --note "接着改"      # 同一会话加一轮
-nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话不动
+sodus sessions                      # 三家会话 + Sodus run，一张表
+sodus sessions --vendor claude --query 水印
+sodus session claude:be6acd2c       # 统一格式，工具调用和系统噪音都滤掉
+sodus resume  claude:be6acd2c --note "接着改"      # 同一会话加一轮
+sodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话不动
 ```
 
 `vendor:id` 是完整写法；只给 id 或唯一前缀也行，歧义会报错并列出候选。
@@ -268,9 +268,9 @@ nodus branch  claude:be6acd2c --note "另起一条"    # 新会话，原会话�
 所以默认不碰你自己的会话，要原地接续得显式 `--in-place`。
 
 ```powershell
-nodus resume dsh:session-efa2394b --note "..."            # 你自己的 → 分叉
-nodus resume dsh:session-efa2394b --note "..." --in-place  # 真的追加进原对话
-nodus session dsh:session-efa2394b                        # 看它现在长什么样（含 Sodus 加的轮次）
+sodus resume dsh:session-efa2394b --note "..."            # 你自己的 → 分叉
+sodus resume dsh:session-efa2394b --note "..." --in-place  # 真的追加进原对话
+sodus session dsh:session-efa2394b                        # 看它现在长什么样（含 Sodus 加的轮次）
 ```
 
 接续时 CLI 会把**将要发送的原文**打出来，再告诉你它会出现在哪里，不用猜。
@@ -287,7 +287,7 @@ nodus session dsh:session-efa2394b                        # 看它现在长什�
 | 把 A 的对话交给 B 接着做 | **能**，但方式是 `--into`：读 A 的历史 → 在 B 上开**新会话**，第一句是交接文档 |
 
 ```powershell
-nodus branch claude:63ff6726 --into dsh --note "总结这段对话在做什么"
+sodus branch claude:63ff6726 --into dsh --note "总结这段对话在做什么"
 # 跨厂商交接：读 claude 的对话，在 dsh 上开一个新会话。不是接续
 ```
 
@@ -316,7 +316,7 @@ dsh 是**播种**（新会话从一份 brief 开始，不是原历史的副本�
 写锁解决"两个 agent 改同一棵树互相覆盖"，代价是**不能并行**。提案把这两半补齐：
 
 ```
-branch   每个 run 一个真实 git worktree，分支 nodus/<run-id>
+branch   每个 run 一个真实 git worktree，分支 sodus/<run-id>
 commit   run 结束时在 worktree 里提交
 PR       proposal 行 + 一个可以读的 patch 文件
 merge    在主树的写锁下把分支合进去
@@ -326,11 +326,11 @@ merge    在主树的写锁下把分支合进去
 于是并行不需要放宽任何规则，而"拿主树的锁"这件事本身就成了 merge 的语义。
 
 ```powershell
-nodus run $t --cwd D:\repo --propose      # 在独立 worktree 里干活
-nodus proposals                           # 谁在提案、改了多少
-nodus proposal prop-7fd1353f16cc          # 看 patch，不用打开文件
-nodus merge prop-7fd1353f16cc             # 合入主树，删分支和 worktree
-nodus reject prop-7fd1353f16cc            # 丢弃
+sodus run $t --cwd D:\repo --propose      # 在独立 worktree 里干活
+sodus proposals                           # 谁在提案、改了多少
+sodus proposal prop-7fd1353f16cc          # 看 patch，不用打开文件
+sodus merge prop-7fd1353f16cc             # 合入主树，删分支和 worktree
+sodus reject prop-7fd1353f16cc            # 丢弃
 ```
 
 实测（同一个仓库、两个任务同时跑）：
@@ -344,7 +344,7 @@ proposals: 2 open
 
 merge 两次之后：
 主树：alpha.txt  beta.txt  README.md
-git log: Merge branch 'nodus/run-...' ×2
+git log: Merge branch 'sodus/run-...' ×2
 branches: 只剩 main      worktrees: 只剩主树
 ```
 
@@ -419,7 +419,7 @@ dsh plugin --profile web remove dsh-pet   # 撤销
 
 交接单由 runner 确定性生成（不调模型）：目标、验收、本次结论、改动文件、错误、未决，外加一行 **验证**。
 
-那一行的三种取值和 `nodus runs` 的 `verify=` 对齐：
+那一行的三种取值和 `sodus runs` 的 `verify=` 对齐：
 
 | 标记 | 含义 |
 |---|---|
@@ -505,10 +505,10 @@ per_call         1.0350e-03      （站内余额）
 ```powershell
 python scripts/calibrate_relay.py --model "claude-opus-5-5[1M]"
 # 系数不合格（负值或残差 >5%）时脚本拒绝输出
-nodus cost                     # 看当前系数，以及标定 vs 账单的漂移
+sodus cost                     # 看当前系数，以及标定 vs 账单的漂移
 ```
 
-系数写在 `~/.nodus/config.json` 的 `cost_models`，覆盖内置的那一份——relay 调价时改配置，不用改代码。
+系数写在 `~/.sodus/config.json` 的 `cost_models`，覆盖内置的那一份——relay 调价时改配置，不用改代码。
 `meter_observed` 会和标定值一起存在 run 里，用来发现"哪天真调价了"。
 
 ## 为什么不要一家一个 CLI
@@ -521,26 +521,26 @@ Jev 接在编排层，不接进 worker。原因：决策要可审计、不占 ag
 
 ```powershell
 # 1) 放 key 和代理
-Copy-Item secrets.example.json $env:USERPROFILE\.nodus\secrets.json
+Copy-Item secrets.example.json $env:USERPROFILE\.sodus\secrets.json
 # 编辑 secrets.json，填 TYPESAFE_API_KEY
 
 # 2) 检查
-A:\Anaconda\python.exe nodus.py jev
+A:\Anaconda\python.exe sodus.py jev
 
 # 3) 路由：让 Jev 同时选 agent 和思考档位
-A:\Anaconda\python.exe nodus.py route <task-id>
-A:\Anaconda\python.exe nodus.py run <task-id> --agent auto
-A:\Anaconda\python.exe nodus.py run <task-id> --agent codex --effort high
+A:\Anaconda\python.exe sodus.py route <task-id>
+A:\Anaconda\python.exe sodus.py run <task-id> --agent auto
+A:\Anaconda\python.exe sodus.py run <task-id> --agent codex --effort high
 
 # 4) 分诊：给一次执行打分，决定你要不要看
-A:\Anaconda\python.exe nodus.py triage <run-id>
+A:\Anaconda\python.exe sodus.py triage <run-id>
 
 # 5) 看历史决策，用来校准
-A:\Anaconda\python.exe nodus.py decisions --last 10
+A:\Anaconda\python.exe sodus.py decisions --last 10
 ```
 
 路由的实现：一次请求里问两个 `choice`，`agent` 的 criteria 带上相对成本档和擅长项，
-`effort` 的 criteria 是 low/medium/high 的语义。Jev 只输出标签，真正改参数的是 nodus：
+`effort` 的 criteria 是 low/medium/high 的语义。Jev 只输出标签，真正改参数的是 sodus：
 
 | vendor | effort 落地方式 | 备注 |
 |---|---|---|
@@ -552,16 +552,16 @@ A:\Anaconda\python.exe nodus.py decisions --last 10
 
 - 任何失败（没 key、代理不通、451、超时、5xx）返回 `unavailable`，调用方按原逻辑继续。
 - 决策只影响“先看哪个/用多深”，不认证完成、不授予权限。
-- 每次决策追加到 `%USERPROFILE%\.nodus\decisions.jsonl`，包含 state hash、答案、token 用量和延迟，用来事后判断 Jev 是否真的省了事。
+- 每次决策追加到 `%USERPROFILE%\.sodus\decisions.jsonl`，包含 state hash、答案、token 用量和延迟，用来事后判断 Jev 是否真的省了事。
 - 默认模型 `jev-latest`；官方 API 不接受 `jev-1.14` 这类版本号（会 400）。
-- **成本档是占位值**（claude 3 / codex 2 / dsh 1），不是实测价格。要校准就改 `nodus/decision.py` 里的 `AGENT_PROFILE`，或者等 `decisions.jsonl` 攒够样本后按实际用量重排。
+- **成本档是占位值**（claude 3 / codex 2 / dsh 1），不是实测价格。要校准就改 `sodus/decision.py` 里的 `AGENT_PROFILE`，或者等 `decisions.jsonl` 攒够样本后按实际用量重排。
 - Jev 自身只有 `jev-latest` 和 `jev-preview` 两个模型，没有思考档位；能调的是下游 agent 的 effort。
 
 ## 监控
 
 探活走各家的 `/v1/models`，不花生成 token：
 9527 一次约 1s 返回 43 个模型，TypeSafe 约 1s 返回 2 个。结果追加到
-`%USERPROFILE%\.nodus\probes.jsonl`。
+`%USERPROFILE%\.sodus\probes.jsonl`。
 
 用量来自 run 表，按 agent 汇总。注意 `in` 是新鲜输入，`cache_read` 是缓存输入，
 两者相加才是总的输入上下文；只把 `in` 当账单会严重低估。
@@ -575,7 +575,7 @@ Jev 没有余额接口，只能：
 
 ## 验收：verify
 
-`nodus verify` 是唯一不依赖 agent 自述的验收信号。检测顺序：`pyproject.toml`/`pytest.ini`/`tox.ini`/`setup.cfg` → `package.json` 的 `scripts.test` → `Cargo.toml` → `go.mod`；都没有就返回 exit 2。
+`sodus verify` 是唯一不依赖 agent 自述的验收信号。检测顺序：`pyproject.toml`/`pytest.ini`/`tox.ini`/`setup.cfg` → `package.json` 的 `scripts.test` → `Cargo.toml` → `go.mod`；都没有就返回 exit 2。
 
 实测三种路径：
 
@@ -600,14 +600,14 @@ no test runner detected in C:\Users\35336\AppData\Local\Temp
 
 - 没改文件就不跑（纯读的 run 没有可验的东西）。
 - 检测不到已知测试命令就不跑。**不猜**——在没人看过的仓库里跑未知测试是这套东西少数能真正破坏工作的行为。
-- `nodus run --no-verify` 单次关掉；全局默认在 `config.json` 的 `auto_verify`，或 `NODUS_AUTO_VERIFY=0`。
+- `sodus run --no-verify` 单次关掉；全局默认在 `config.json` 的 `auto_verify`，或 `SODUS_AUTO_VERIFY=0`。
 
 代价：run 会多花一次测试的时间（上面的例子 3.8 秒），而且这段时间它还是 `running`，写锁也还握着。
-测试如果挂住，`NODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。
+测试如果挂住，`SODUS_VERIFY_TIMEOUT`（默认 600 秒）兜底。
 
 ## 失败恢复：能自己好的不交给人
 
-进程退出、daemon 重启、网络断掉，这些不是需要人做的决定。`nodus/recover.py` 把失败分成三类：
+进程退出、daemon 重启、网络断掉，这些不是需要人做的决定。`sodus/recover.py` 把失败分成三类：
 
 | 类 | 例子 | 处理 |
 |---|---|---|
@@ -620,15 +620,15 @@ no test runner detected in C:\Users\35336\AppData\Local\Temp
 一条链最多 2 次，退避 60s / 300s；orphaned 不用等——它的 owner 已经不在了。
 24 小时以前的失败当历史，不复活；`task.budget_json` 的 `max_runs` / `max_cost` 是硬上限。
 
-daemon 启动时，reap orphans 之后立刻跑一轮恢复，之后每 5 分钟一轮（`NODUS_AUTO_RECOVER_INTERVAL`）。
-`NODUS_AUTO_RECOVER=0` 全关。已成功的、没失败的、需要人工判断的、超预算的一律不碰。
+daemon 启动时，reap orphans 之后立刻跑一轮恢复，之后每 5 分钟一轮（`SODUS_AUTO_RECOVER_INTERVAL`）。
+`SODUS_AUTO_RECOVER=0` 全关。已成功的、没失败的、需要人工判断的、超预算的一律不碰。
 
 看板相应拆成三块：**需要你决定**（只有 human / 重试耗尽 / 超预算 / 红测试 / 未验证 / 提案，
 每条带项目、任务、目标、问题、改动、建议）、**自动重试中**（第几次 + 下次什么时候，没有按钮）、
 **不会自动重试**（deterministic，附"修好后再重跑"）。旧的 `/board.decisions` 保留给 MCP 和桌宠。
 
 ```python
-from nodus import recover
+from sodus import recover
 recover.auto_retry()   # {"retried": [...], "skipped": [{"class": "deterministic", "reason": "deterministic"}], ...}
 ```
 
@@ -638,7 +638,7 @@ writer 写失败测试 → `verify` 必须红 → impl 实现（禁止改测试�
 
 每次验证都落成证据：完整输出写 `runs/<id>/verify-<phase>.txt`，同时写一条 `verify.red|green` 事件，报告和审查都从这里读，不靠终端回滚。
 
-2026-10-20 用 `%TEMP%\nodus-slug-demo` 实测（一条命令 `nodus tdd task-07b9e79c4e68 --cwd ... --review`）：
+2026-10-20 用 `%TEMP%\sodus-slug-demo` 实测（一条命令 `sodus tdd task-07b9e79c4e68 --cwd ... --review`）：
 
 ```
 writer  claude  6 个测试，全部按预期失败
@@ -657,7 +657,7 @@ review  claude  verdict=accept  critical=0 high=0 low=1
 
 结论只有三种 `accept / revise / reject`，findings 必须带文件、行号、证据、建议。**审查不是判决**：它不能把任务从失败改成成功，只能把 `done` 降级为 `needs_review`。exit code 只表达"审查这件事"：0 通过，2 有 `critical` 或未通过，1 没跑成。
 
-负向对照（证明它真能抓到东西）：把已绿的实现换成"只折叠半角空格"的版本，6 条测试仍然全绿，`nodus review run-350c09aeb28b` 直接给出
+负向对照（证明它真能抓到东西）：把已绿的实现换成"只折叠半角空格"的版本，6 条测试仍然全绿，`sodus review run-350c09aeb28b` 直接给出
 
 ```
 verdict=revise  critical=0 high=1
@@ -668,7 +668,7 @@ verdict=revise  critical=0 high=1
 
 ## 修复回路：fix
 
-`nodus fix <run> --review-first` 把审查结论交回给另一个 agent，修完重新跑测试，再用同一个审查者复审。停止条件只有三个：复审通过、测试变红、轮数用完。fixer 不能自己宣布成功。
+`sodus fix <run> --review-first` 把审查结论交回给另一个 agent，修完重新跑测试，再用同一个审查者复审。停止条件只有三个：复审通过、测试变红、轮数用完。fixer 不能自己宣布成功。
 
 2026-10-20 实测（task-07b9e79c4e68 / run-350c09aeb28b，预置"测试 6 passed 但只折叠半角空格"）：
 
@@ -690,30 +690,30 @@ DSH 把每个会话存成 `$DSH_HOME/sessions/<project>/<id>/session.v4.jsonl.zs
 
 | 想做的事 | 能不能 | 怎么做 |
 |---|---|---|
-| 读另一个会话的内容 | 能 | `nodus session <id>` / `nodus brief <id> --task ...` |
-| 让另一个会话接着干 | 能，有条件 | `nodus resume <id> --note "..."`：走 DSH `--session-id`，必须用该会话记录的工作目录，开的是新 turn |
+| 读另一个会话的内容 | 能 | `sodus session <id>` / `sodus brief <id> --task ...` |
+| 让另一个会话接着干 | 能，有条件 | `sodus resume <id> --note "..."`：走 DSH `--session-id`，必须用该会话记录的工作目录，开的是新 turn |
 | 两个会话实时互相问答 | 不能 | DSH web 没有会话间消息通道；只能文件接力，由人或调度器触发 |
-| 往正在 GUI 打开的会话里插话 | 不安全 | 同一会话双写会打架；`nodus resume` 默认拒绝 120s 内写过的会话，要 `--force` |
+| 往正在 GUI 打开的会话里插话 | 不安全 | 同一会话双写会打架；`sodus resume` 默认拒绝 120s 内写过的会话，要 `--force` |
 
 实测：
 
 ```
-nodus sessions --limit 3
+sodus sessions --limit 3
 → session-5711924e… 沐曦训练营课程截止时间查询  user=4
 
-nodus resume 8bb738b6 --force --note "最后确认一次：我让你记的数字是多少？"
+sodus resume 8bb738b6 --force --note "最后确认一次：我让你记的数字是多少？"
 → 7391   （会话是另一个进程建的，这次是 turn 3；Sodus 只负责续一轮）
 ```
 
 交接文件是机械抽取，不是总结：任务 + 来源会话原话 + 提取到的链接/本地路径，标注「未改写」。目标会话拿到的是证据，不是转述。
 
-三条护栏：读会话只读不写；`nodus resume` 用 `~/.nodus/locks/<session>.lock` 保证单写者，并拒绝 120 秒内被写过的会话；`~/.nodus/config.json` 里配 `session_roots` 可以限制只读哪些工作区的会话（不配则不过滤）。
+三条护栏：读会话只读不写；`sodus resume` 用 `~/.sodus/locks/<session>.lock` 保证单写者，并拒绝 120 秒内被写过的会话；`~/.sodus/config.json` 里配 `session_roots` 可以限制只读哪些工作区的会话（不配则不过滤）。
 
 ## 多 agent 协作实测（2026-10-20）
 
 三个场景，都是真实 agent 调用，没有 mock：
 
-**A. 顺序交接**（task-242f58a8b3f8，demo `%TEMP%\nodus-handoff-demo`）
+**A. 顺序交接**（task-242f58a8b3f8，demo `%TEMP%\sodus-handoff-demo`）
 
 ```
 claude  只做第一步（明确要求不写第四行）  → data.txt 三行
@@ -740,13 +740,13 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 
 并发这一轮撞到一次真挂起：dsh 子进程 13 分钟没有输出，进程还活着。因此补了两层：
 
-- runner 空闲看门狗：`NODUS_IDLE_TIMEOUT`（默认 900s）内没有任何输出就杀掉并标 failed，不再无限等；
-- `nodus reconcile`：把"启动它的进程已经死了、状态还停在 running"的 run 标成 failed（这次就是用它清掉的）。
+- runner 空闲看门狗：`SODUS_IDLE_TIMEOUT`（默认 900s）内没有任何输出就杀掉并标 failed，不再无限等；
+- `sodus reconcile`：把"启动它的进程已经死了、状态还停在 running"的 run 标成 failed（这次就是用它清掉的）。
 - 报告也改了口径：完全没有验证记录时写"结果只靠 agent 自述"，不再硬说"缺少 red"。
 
 ## 报告：report
 
-`nodus report <task>` 把 run、事件、决策汇成一页：墙钟与 agent 累计时间、token、成本、每次验证的 exit 和证据路径、审查结论、Jev 决策、以及**标记**（失败 run、测试被改、没有 red、red 意外通过、最新审查未通过、`needs_review`）。
+`sodus report <task>` 把 run、事件、决策汇成一页：墙钟与 agent 累计时间、token、成本、每次验证的 exit 和证据路径、审查结论、Jev 决策、以及**标记**（失败 run、测试被改、没有 red、red 意外通过、最新审查未通过、`needs_review`）。
 
 `usage_json` 里记四个字段：`cost`、`currency`、`cost_basis`、`meter`。
 `cost_basis` 只有四种取值，从可信到不可信：
@@ -759,7 +759,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 | `reported` | CLI 自报 `total_cost_usd` | 前三者都拿不到时的兜底，报告里标"CLI 自报" |
 
 币种仍然分开加总，不跨币种相加——2026-10-20 之前的历史 run 是 `reported`（USD），
-读起来会偏大，`nodus usage` 会在后面标"（含 CLI 自报，偏大）"。
+读起来会偏大，`sodus usage` 会在后面标"（含 CLI 自报，偏大）"。
 那批数据没有逐 run 账单可回溯，所以不猜、也不改，只标来源。
 
 2026-10-20 修复：`total_cost_usd` 在 Claude 的 result 对象上，不在 `usage` 里，适配器之前一直漏读；已修，并回填了 7 个历史 run。
@@ -768,14 +768,14 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 
 - Windows 上子进程可能继承 stdout 管道不释放，runner 用 2s 退出宽限兜底，不是完美方案。
 - codex 的 bypass 参数等于关掉沙箱，只在受控 cwd 下用。
-- CLI 的 `nodus watch` 仍是轮询（0.5s），没有 SSE 客户端；看板 UI 由 daemon 的 `/board` 提供。
+- CLI 的 `sodus watch` 仍是轮询（0.5s），没有 SSE 客户端；看板 UI 由 daemon 的 `/board` 提供。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
 - dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。没有 per-run effort 入口。
 - ~~dsh 没有隔离配置目录，跑的时候带着你的全局 AGENTS.md、skills 和 MCP~~ —— 2026-10-21 量过，这个判断是错的：
   `DSH_HOME` 确实认（`resolveDshHome`: 显式配置 > `$DSH_HOME` > `~/.dsh`），但 headless 用的是自动生成的 `headless` profile，
   本来就不加载用户的全局配置。同一个 prompt 实测 global `in=9424/cache=19456` vs isolated `in=9451/cache=29312`，
   没有收益，反而多一轮工具调用。所以没做隔离。
-- `--model` 已接：`nodus run <task> --route claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
+- `--model` 已接：`sodus run <task> --route claude --model claude-opus-5-5[1M]`。claude 走 `--model`，codex 走 `-c model="..."`，dsh 没有 per-run 入口（只记进 run 记录）。
 - 回退链救结果不救时间：CLI 自己的重试预算会先耗掉（实测死端点那次整轮 187 秒）。要更快失败得给"首字节前"设单独的短超时，那是猜，没做。
 - 回退链里第 2 个端点用的是**它自己的模型**，不是本次 pin 的模型。pin 只对第一个端点生效，否则会把一个那端点不认识的模型名发过去。
 - 路由准确性没测过；一次 choice 在 criteria 写得含糊时会给高置信度的错答案（实测把文档任务判给 codex，0.90）。
@@ -783,46 +783,46 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 - 审查读的是**当前工作区**，不是 run 时刻的快照。文件被改动时，`context.md` 里对应文件会标"当前内容与 run 记录不一致"，但审查仍按当前内容做——负向对照就是靠这一点。
 - 审查上下文到 80k 字符会截断，`review.json` 里有 `context_truncated` 字段，`review.md` 里没有显式警告，大 diff 时容易误判"看全了"。
 - 成本：relay 上只有 claude-opus-5-5[1M] 有标定，其余模型仍走余额差（并发时是上界）；还有几个洞：minimax 要 admin key 才能读余额（普通 key 返回 `token_type_mismatch`），所以它用价目表；dsh 的 DeepSeek 余额只有 0.01 元精度，低于这个数的 run 记 0；**dsh 和本机 DSH 会话共用同一个 key**，所以它的余额 delta 会混进别的用量，那个数是上界不是精确值；中转站的余额差是账户级的，两个 claude/codex run 并发时窗口重叠，那个数会偏大。
-- 一次 run 有多次尝试时，顶层 `cost` 记的是**最后那次**（真正产出结果的那次）。前面失败尝试的开销留在 `usage.attempts[]` 里，`nodus usage` 的合计只加顶层那个——失败尝试通常没花到钱，但不是永远为 0。
+- 一次 run 有多次尝试时，顶层 `cost` 记的是**最后那次**（真正产出结果的那次）。前面失败尝试的开销留在 `usage.attempts[]` 里，`sodus usage` 的合计只加顶层那个——失败尝试通常没花到钱，但不是永远为 0。
 - 并发只测了 2 个 run 同时跑；SQLite 单写者，10 个以上并发和跨小时长任务没测。
 - fix 回路只认最新一次审查；审查误报时没有自动驳回，只能靠 fixer 在回复里说明"不成立"。
 - 跨会话续跑只支持 dsh；claude/codex 的会话 ID 体系不同，没接。
 - DSH 会话文件没有"正在被 GUI 使用"的标记，只能按最近写入时间猜；`--force` 有双写风险。
 - 读会话依赖 `zstandard`（本机已装）；会话是 append-only，Sodus 只读不写。
-- ~~流水线命令在 CLI 进程里执行（ADR-004）：关终端会中断~~ —— 2026-10-21 已改成 daemon 作业：`nodus tdd/review/fix` 提交给 daemon，CLI 只跟随；实测杀掉客户端进程后流水线照常跑完。
-- `nodus run` 不会自动跑验收：`completed` 只等于 exit 0，要不要验证得显式调 `nodus tdd` 或 `nodus verify`。`verify=none` 就是这个意思，别把它读成通过。
-- 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.nodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。
-- `nodus route` 的画像表里还没有 minimax，`--agent auto` 只会在 claude / codex / dsh 里选。
-- minimax 复用的是 Claude Code，所以 Claude Code 的限制它全都有：本地按 200k 上下文档位算（MiniMax 实际是 1M）、`--effort` 档位走 Claude 的枚举（MiniMax 支持 low/medium/high/xhigh/max，`xhigh` 没验证过）、不能 `nodus resume`。
+- ~~流水线命令在 CLI 进程里执行（ADR-004）：关终端会中断~~ —— 2026-10-21 已改成 daemon 作业：`sodus tdd/review/fix` 提交给 daemon，CLI 只跟随；实测杀掉客户端进程后流水线照常跑完。
+- `sodus run` 不会自动跑验收：`completed` 只等于 exit 0，要不要验证得显式调 `sodus tdd` 或 `sodus verify`。`verify=none` 就是这个意思，别把它读成通过。
+- 安全边界是 cwd：agent 以 bypass 权限跑，能执行任意命令。`~/.sodus/secrets.json` 已收紧 ACL（去掉继承，只留当前用户 + SYSTEM），但 `token` 文件没有做同样处理。
+- `sodus route` 的画像表里还没有 minimax，`--agent auto` 只会在 claude / codex / dsh 里选。
+- minimax 复用的是 Claude Code，所以 Claude Code 的限制它全都有：本地按 200k 上下文档位算（MiniMax 实际是 1M）、`--effort` 档位走 Claude 的枚举（MiniMax 支持 low/medium/high/xhigh/max，`xhigh` 没验证过）、不能 `sodus resume`。
 - profiles 是快照，不是运行时隔离：切换只影响新起的 run，正在跑的那一个还用着旧目录。两个 run 用不同 provider 并发是安全的（目录按 provider 分开），用同一个 provider 但不同 profile 也安全（按 profile 分开）。
 
 ## 下一步
 
 1. 给 dsh 建隔离 profile（`DSH_HOME` 或独立 headless 配置），别让它带着全局指令和 MCP 跑；profile 层已经在了，缺的是 dsh 认哪个环境变量。
-2. ~~`nodus run` 跑完自动验一次~~ —— 已做（2026-10-21），见「验收：verify」。
+2. ~~`sodus run` 跑完自动验一次~~ —— 已做（2026-10-21），见「验收：verify」。
 3. 打包：PyInstaller 单文件先试，失败就换 Go 重写这几百行。
-4. `nodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
+4. `sodus discuss`：同一问题发给多家裸模型，产出对照表（不要一家一个 CLI，成本会炸）。
 5. VS Code 扩展只做三件事：列表、派活、看事件流和 diff。
 6. 多写者锁 + propose/merge：现在一个 cwd 只能有一个 run 在写，"协作"还只是串行交接。
 
 ## 一个问题，一个入口
 
-命令有 46 个，但日常只该记住下面这张表。其余是给排障和扩展用的，`nodus --help` 里都在。
+命令有 46 个，但日常只该记住下面这张表。其余是给排障和扩展用的，`sodus --help` 里都在。
 
 | 你想知道 / 想做的事 | 用这个 |
 |---|---|
-| 后台服务起来了吗，怎么看 | `nodus up` → 打开 `http://127.0.0.1:4199/` |
-| 停掉它 | `nodus down` |
+| 后台服务起来了吗，怎么看 | `sodus up` → 打开 `http://127.0.0.1:4199/` |
+| 停掉它 | `sodus down` |
 | 现在有几个任务在跑、花了多少钱、有什么等我决定 | 看板首屏 |
-| 派一个活给某个 agent | `nodus run --route <claude\|codex\|dsh\|opencode-glm\|opencode-gemini>` |
-| 看某次执行到底做了什么 | `nodus show <run-id>` |
-| 有提案在等合入吗 | `nodus proposals list` |
-| 合入 / 丢弃一个提案 | `nodus merge <id>` / `nodus reject <id>` |
-| 这台机器上哪些 agent 真能用 | `nodus agents` |
-| 自检（目录、token、库、凭据、锁、磁盘） | `nodus doctor` |
-| 今天花了多少、按 agent 分 | `nodus cost` |
-| 把一个任务从头接管/续跑 | `nodus resume <session>` / `nodus branch <session>` |
-| 让别的工具接进来（IDE、agent） | HTTP：`/openapi.yaml`；MCP：`nodus mcp` |
+| 派一个活给某个 agent | `sodus run --route <claude\|codex\|dsh\|opencode-glm\|opencode-gemini>` |
+| 看某次执行到底做了什么 | `sodus show <run-id>` |
+| 有提案在等合入吗 | `sodus proposals list` |
+| 合入 / 丢弃一个提案 | `sodus merge <id>` / `sodus reject <id>` |
+| 这台机器上哪些 agent 真能用 | `sodus agents` |
+| 自检（目录、token、库、凭据、锁、磁盘） | `sodus doctor` |
+| 今天花了多少、按 agent 分 | `sodus cost` |
+| 把一个任务从头接管/续跑 | `sodus resume <session>` / `sodus branch <session>` |
+| 让别的工具接进来（IDE、agent） | HTTP：`/openapi.yaml`；MCP：`sodus mcp` |
 
 三条原则：
 

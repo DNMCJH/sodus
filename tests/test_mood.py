@@ -5,7 +5,7 @@ Pure planning tests only — no pet, no window, no sleeping in the test suite.
 
 from __future__ import annotations
 
-from nodus import mood, pet
+from sodus import mood, pet
 
 
 def test_plan_falls_back_to_the_single_animation(monkeypatch):
