@@ -1,0 +1,511 @@
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=61
+* Getting build dependencies for sdist...
+running egg_info
+writing sodus.egg-info\PKG-INFO
+writing dependency_links to sodus.egg-info\dependency_links.txt
+writing entry points to sodus.egg-info\entry_points.txt
+writing requirements to sodus.egg-info\requires.txt
+writing top-level names to sodus.egg-info\top_level.txt
+reading manifest file 'sodus.egg-info\SOURCES.txt'
+writing manifest file 'sodus.egg-info\SOURCES.txt'
+* Installed build dependency versions:
+  - setuptools==84.2.1
+* Building sdist...
+running sdist
+running egg_info
+writing sodus.egg-info\PKG-INFO
+writing dependency_links to sodus.egg-info\dependency_links.txt
+writing entry points to sodus.egg-info\entry_points.txt
+writing requirements to sodus.egg-info\requires.txt
+writing top-level names to sodus.egg-info\top_level.txt
+reading manifest file 'sodus.egg-info\SOURCES.txt'
+writing manifest file 'sodus.egg-info\SOURCES.txt'
+running check
+creating sodus-0.9.0
+creating sodus-0.9.0\sodus
+creating sodus-0.9.0\sodus.egg-info
+creating sodus-0.9.0\sodus\cli
+creating sodus-0.9.0\sodus\cli\commands
+creating sodus-0.9.0\sodus\sessions
+creating sodus-0.9.0\tests
+copying files to sodus-0.9.0...
+copying README.md -> sodus-0.9.0
+copying pyproject.toml -> sodus-0.9.0
+copying sodus\__init__.py -> sodus-0.9.0\sodus
+copying sodus\__main__.py -> sodus-0.9.0\sodus
+copying sodus\adapters.py -> sodus-0.9.0\sodus
+copying sodus\agents.py -> sodus-0.9.0\sodus
+copying sodus\ask.py -> sodus-0.9.0\sodus
+copying sodus\bench.py -> sodus-0.9.0\sodus
+copying sodus\board.py -> sodus-0.9.0\sodus
+copying sodus\budget.py -> sodus-0.9.0\sodus
+copying sodus\config.py -> sodus-0.9.0\sodus
+copying sodus\daemon.py -> sodus-0.9.0\sodus
+copying sodus\db.py -> sodus-0.9.0\sodus
+copying sodus\decision.py -> sodus-0.9.0\sodus
+copying sodus\desk.py -> sodus-0.9.0\sodus
+copying sodus\diagnosis.py -> sodus-0.9.0\sodus
+copying sodus\dream.py -> sodus-0.9.0\sodus
+copying sodus\episodes.py -> sodus-0.9.0\sodus
+copying sodus\fix.py -> sodus-0.9.0\sodus
+copying sodus\handoff.py -> sodus-0.9.0\sodus
+copying sodus\harness.py -> sodus-0.9.0\sodus
+copying sodus\harness_status.py -> sodus-0.9.0\sodus
+copying sodus\jobs.py -> sodus-0.9.0\sodus
+copying sodus\ledger.py -> sodus-0.9.0\sodus
+copying sodus\lifecycle.py -> sodus-0.9.0\sodus
+copying sodus\lineage.py -> sodus-0.9.0\sodus
+copying sodus\llm.py -> sodus-0.9.0\sodus
+copying sodus\mcp.py -> sodus-0.9.0\sodus
+copying sodus\memory.py -> sodus-0.9.0\sodus
+copying sodus\meter.py -> sodus-0.9.0\sodus
+copying sodus\mood.py -> sodus-0.9.0\sodus
+copying sodus\observe.py -> sodus-0.9.0\sodus
+copying sodus\observe_ccswitch.py -> sodus-0.9.0\sodus
+copying sodus\observe_magpie.py -> sodus-0.9.0\sodus
+copying sodus\observe_sync.py -> sodus-0.9.0\sodus
+copying sodus\pet.py -> sodus-0.9.0\sodus
+copying sodus\plan.py -> sodus-0.9.0\sodus
+copying sodus\policy.py -> sodus-0.9.0\sodus
+copying sodus\pricing.py -> sodus-0.9.0\sodus
+copying sodus\profiles.py -> sodus-0.9.0\sodus
+copying sodus\propose.py -> sodus-0.9.0\sodus
+copying sodus\providers.py -> sodus-0.9.0\sodus
+copying sodus\recover.py -> sodus-0.9.0\sodus
+copying sodus\report.py -> sodus-0.9.0\sodus
+copying sodus\review.py -> sodus-0.9.0\sodus
+copying sodus\route_meta.py -> sodus-0.9.0\sodus
+copying sodus\routes.py -> sodus-0.9.0\sodus
+copying sodus\runner.py -> sodus-0.9.0\sodus
+copying sodus\server.py -> sodus-0.9.0\sodus
+copying sodus\state.py -> sodus-0.9.0\sodus
+copying sodus\statuslight.py -> sodus-0.9.0\sodus
+copying sodus\tdd.py -> sodus-0.9.0\sodus
+copying sodus\telemetry.py -> sodus-0.9.0\sodus
+copying sodus\ui.py -> sodus-0.9.0\sodus
+copying sodus\usage.py -> sodus-0.9.0\sodus
+copying sodus\verify.py -> sodus-0.9.0\sodus
+copying sodus\watchdog.py -> sodus-0.9.0\sodus
+copying sodus.egg-info\PKG-INFO -> sodus-0.9.0\sodus.egg-info
+copying sodus.egg-info\SOURCES.txt -> sodus-0.9.0\sodus.egg-info
+copying sodus.egg-info\dependency_links.txt -> sodus-0.9.0\sodus.egg-info
+copying sodus.egg-info\entry_points.txt -> sodus-0.9.0\sodus.egg-info
+copying sodus.egg-info\requires.txt -> sodus-0.9.0\sodus.egg-info
+copying sodus.egg-info\top_level.txt -> sodus-0.9.0\sodus.egg-info
+copying sodus\cli\__init__.py -> sodus-0.9.0\sodus\cli
+copying sodus\cli\client.py -> sodus-0.9.0\sodus\cli
+copying sodus\cli\commands\__init__.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\bench.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\decisions.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\dream.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\handoff.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\mcp.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\memory.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\migrate.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\observe.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\pipeline.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\plan.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\proposals.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\sessions.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\system.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\tasks.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\cli\commands\topology.py -> sodus-0.9.0\sodus\cli\commands
+copying sodus\sessions\__init__.py -> sodus-0.9.0\sodus\sessions
+copying sodus\sessions\claude.py -> sodus-0.9.0\sodus\sessions
+copying sodus\sessions\codex.py -> sodus-0.9.0\sodus\sessions
+copying sodus\sessions\dsh.py -> sodus-0.9.0\sodus\sessions
+copying sodus\sessions\model.py -> sodus-0.9.0\sodus\sessions
+copying tests\test_070e.py -> sodus-0.9.0\tests
+copying tests\test_adapters.py -> sodus-0.9.0\tests
+copying tests\test_agents.py -> sodus-0.9.0\tests
+copying tests\test_ask.py -> sodus-0.9.0\tests
+copying tests\test_autoverify.py -> sodus-0.9.0\tests
+copying tests\test_bench.py -> sodus-0.9.0\tests
+copying tests\test_board.py -> sodus-0.9.0\tests
+copying tests\test_board_recovery.py -> sodus-0.9.0\tests
+copying tests\test_brand.py -> sodus-0.9.0\tests
+copying tests\test_budget.py -> sodus-0.9.0\tests
+copying tests\test_cli_rename.py -> sodus-0.9.0\tests
+copying tests\test_cli_surface.py -> sodus-0.9.0\tests
+copying tests\test_cli_watch.py -> sodus-0.9.0\tests
+copying tests\test_client_daemon_state.py -> sodus-0.9.0\tests
+copying tests\test_config_migration.py -> sodus-0.9.0\tests
+copying tests\test_cost.py -> sodus-0.9.0\tests
+copying tests\test_daemon.py -> sodus-0.9.0\tests
+copying tests\test_default_route.py -> sodus-0.9.0\tests
+copying tests\test_desk.py -> sodus-0.9.0\tests
+copying tests\test_diagnosis.py -> sodus-0.9.0\tests
+copying tests\test_dream_engine.py -> sodus-0.9.0\tests
+copying tests\test_episodes_dream.py -> sodus-0.9.0\tests
+copying tests\test_fallback.py -> sodus-0.9.0\tests
+copying tests\test_fix.py -> sodus-0.9.0\tests
+copying tests\test_harness.py -> sodus-0.9.0\tests
+copying tests\test_harness_status.py -> sodus-0.9.0\tests
+copying tests\test_jobs.py -> sodus-0.9.0\tests
+copying tests\test_ledger.py -> sodus-0.9.0\tests
+copying tests\test_lifecycle.py -> sodus-0.9.0\tests
+copying tests\test_lineage.py -> sodus-0.9.0\tests
+copying tests\test_live_tokens.py -> sodus-0.9.0\tests
+copying tests\test_llm.py -> sodus-0.9.0\tests
+copying tests\test_locks.py -> sodus-0.9.0\tests
+copying tests\test_mcp.py -> sodus-0.9.0\tests
+copying tests\test_mcp_install.py -> sodus-0.9.0\tests
+copying tests\test_memory.py -> sodus-0.9.0\tests
+copying tests\test_memory_staging.py -> sodus-0.9.0\tests
+copying tests\test_memory_stats.py -> sodus-0.9.0\tests
+copying tests\test_meter.py -> sodus-0.9.0\tests
+copying tests\test_mood.py -> sodus-0.9.0\tests
+copying tests\test_no_window.py -> sodus-0.9.0\tests
+copying tests\test_observe.py -> sodus-0.9.0\tests
+copying tests\test_observe_ccswitch.py -> sodus-0.9.0\tests
+copying tests\test_observe_magpie.py -> sodus-0.9.0\tests
+copying tests\test_observe_sync.py -> sodus-0.9.0\tests
+copying tests\test_openapi.py -> sodus-0.9.0\tests
+copying tests\test_opencode.py -> sodus-0.9.0\tests
+copying tests\test_ownership.py -> sodus-0.9.0\tests
+copying tests\test_pet.py -> sodus-0.9.0\tests
+copying tests\test_plan.py -> sodus-0.9.0\tests
+copying tests\test_policy.py -> sodus-0.9.0\tests
+copying tests\test_pricing.py -> sodus-0.9.0\tests
+copying tests\test_profiles.py -> sodus-0.9.0\tests
+copying tests\test_project_handoff.py -> sodus-0.9.0\tests
+copying tests\test_prompt.py -> sodus-0.9.0\tests
+copying tests\test_propose.py -> sodus-0.9.0\tests
+copying tests\test_providers.py -> sodus-0.9.0\tests
+copying tests\test_reconcile.py -> sodus-0.9.0\tests
+copying tests\test_recover.py -> sodus-0.9.0\tests
+copying tests\test_recovery.py -> sodus-0.9.0\tests
+copying tests\test_report.py -> sodus-0.9.0\tests
+copying tests\test_resume.py -> sodus-0.9.0\tests
+copying tests\test_review.py -> sodus-0.9.0\tests
+copying tests\test_routes.py -> sodus-0.9.0\tests
+copying tests\test_run_kind.py -> sodus-0.9.0\tests
+copying tests\test_runner_memory.py -> sodus-0.9.0\tests
+copying tests\test_runner_policy.py -> sodus-0.9.0\tests
+copying tests\test_server_policy.py -> sodus-0.9.0\tests
+copying tests\test_sessions.py -> sodus-0.9.0\tests
+copying tests\test_sodus_identity.py -> sodus-0.9.0\tests
+copying tests\test_state.py -> sodus-0.9.0\tests
+copying tests\test_statuslight.py -> sodus-0.9.0\tests
+copying tests\test_telemetry.py -> sodus-0.9.0\tests
+copying tests\test_today_rows.py -> sodus-0.9.0\tests
+copying tests\test_ui.py -> sodus-0.9.0\tests
+copying tests\test_usage.py -> sodus-0.9.0\tests
+copying tests\test_verify.py -> sodus-0.9.0\tests
+copying tests\test_verify_marks.py -> sodus-0.9.0\tests
+copying tests\test_w3c.py -> sodus-0.9.0\tests
+copying tests\test_watchdog.py -> sodus-0.9.0\tests
+copying tests\test_workspace.py -> sodus-0.9.0\tests
+Writing sodus-0.9.0\setup.cfg
+Creating tar archive
+removing 'sodus-0.9.0' (and everything under it)
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=61
+* Getting build dependencies for wheel...
+running egg_info
+writing sodus.egg-info\PKG-INFO
+writing dependency_links to sodus.egg-info\dependency_links.txt
+writing entry points to sodus.egg-info\entry_points.txt
+writing requirements to sodus.egg-info\requires.txt
+writing top-level names to sodus.egg-info\top_level.txt
+reading manifest file 'sodus.egg-info\SOURCES.txt'
+writing manifest file 'sodus.egg-info\SOURCES.txt'
+* Installed build dependency versions:
+  - setuptools==84.2.1
+* Building wheel...
+running bdist_wheel
+running build
+running build_py
+creating build\lib\sodus
+copying sodus\adapters.py -> build\lib\sodus
+copying sodus\agents.py -> build\lib\sodus
+copying sodus\ask.py -> build\lib\sodus
+copying sodus\bench.py -> build\lib\sodus
+copying sodus\board.py -> build\lib\sodus
+copying sodus\budget.py -> build\lib\sodus
+copying sodus\config.py -> build\lib\sodus
+copying sodus\daemon.py -> build\lib\sodus
+copying sodus\db.py -> build\lib\sodus
+copying sodus\decision.py -> build\lib\sodus
+copying sodus\desk.py -> build\lib\sodus
+copying sodus\diagnosis.py -> build\lib\sodus
+copying sodus\dream.py -> build\lib\sodus
+copying sodus\episodes.py -> build\lib\sodus
+copying sodus\fix.py -> build\lib\sodus
+copying sodus\handoff.py -> build\lib\sodus
+copying sodus\harness.py -> build\lib\sodus
+copying sodus\harness_status.py -> build\lib\sodus
+copying sodus\jobs.py -> build\lib\sodus
+copying sodus\ledger.py -> build\lib\sodus
+copying sodus\lifecycle.py -> build\lib\sodus
+copying sodus\lineage.py -> build\lib\sodus
+copying sodus\llm.py -> build\lib\sodus
+copying sodus\mcp.py -> build\lib\sodus
+copying sodus\memory.py -> build\lib\sodus
+copying sodus\meter.py -> build\lib\sodus
+copying sodus\mood.py -> build\lib\sodus
+copying sodus\observe.py -> build\lib\sodus
+copying sodus\observe_ccswitch.py -> build\lib\sodus
+copying sodus\observe_magpie.py -> build\lib\sodus
+copying sodus\observe_sync.py -> build\lib\sodus
+copying sodus\pet.py -> build\lib\sodus
+copying sodus\plan.py -> build\lib\sodus
+copying sodus\policy.py -> build\lib\sodus
+copying sodus\pricing.py -> build\lib\sodus
+copying sodus\profiles.py -> build\lib\sodus
+copying sodus\propose.py -> build\lib\sodus
+copying sodus\providers.py -> build\lib\sodus
+copying sodus\recover.py -> build\lib\sodus
+copying sodus\report.py -> build\lib\sodus
+copying sodus\review.py -> build\lib\sodus
+copying sodus\routes.py -> build\lib\sodus
+copying sodus\route_meta.py -> build\lib\sodus
+copying sodus\runner.py -> build\lib\sodus
+copying sodus\server.py -> build\lib\sodus
+copying sodus\state.py -> build\lib\sodus
+copying sodus\statuslight.py -> build\lib\sodus
+copying sodus\tdd.py -> build\lib\sodus
+copying sodus\telemetry.py -> build\lib\sodus
+copying sodus\ui.py -> build\lib\sodus
+copying sodus\usage.py -> build\lib\sodus
+copying sodus\verify.py -> build\lib\sodus
+copying sodus\watchdog.py -> build\lib\sodus
+copying sodus\__init__.py -> build\lib\sodus
+copying sodus\__main__.py -> build\lib\sodus
+creating build\lib\sodus\cli
+copying sodus\cli\client.py -> build\lib\sodus\cli
+copying sodus\cli\__init__.py -> build\lib\sodus\cli
+creating build\lib\sodus\sessions
+copying sodus\sessions\claude.py -> build\lib\sodus\sessions
+copying sodus\sessions\codex.py -> build\lib\sodus\sessions
+copying sodus\sessions\dsh.py -> build\lib\sodus\sessions
+copying sodus\sessions\model.py -> build\lib\sodus\sessions
+copying sodus\sessions\__init__.py -> build\lib\sodus\sessions
+creating build\lib\sodus\cli\commands
+copying sodus\cli\commands\bench.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\decisions.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\dream.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\handoff.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\mcp.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\memory.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\migrate.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\observe.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\pipeline.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\plan.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\proposals.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\sessions.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\system.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\tasks.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\topology.py -> build\lib\sodus\cli\commands
+copying sodus\cli\commands\__init__.py -> build\lib\sodus\cli\commands
+running egg_info
+writing sodus.egg-info\PKG-INFO
+writing dependency_links to sodus.egg-info\dependency_links.txt
+writing entry points to sodus.egg-info\entry_points.txt
+writing requirements to sodus.egg-info\requires.txt
+writing top-level names to sodus.egg-info\top_level.txt
+reading manifest file 'sodus.egg-info\SOURCES.txt'
+writing manifest file 'sodus.egg-info\SOURCES.txt'
+installing to build\bdist.win-amd64\wheel
+running install
+running install_lib
+creating build\bdist.win-amd64\wheel
+creating build\bdist.win-amd64\wheel\sodus
+copying build\lib\sodus\adapters.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\agents.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\ask.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\bench.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\board.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\budget.py -> build\bdist.win-amd64\wheel\.\sodus
+creating build\bdist.win-amd64\wheel\sodus\cli
+copying build\lib\sodus\cli\client.py -> build\bdist.win-amd64\wheel\.\sodus\cli
+creating build\bdist.win-amd64\wheel\sodus\cli\commands
+copying build\lib\sodus\cli\commands\bench.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\decisions.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\dream.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\handoff.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\mcp.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\memory.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\migrate.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\observe.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\pipeline.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\plan.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\proposals.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\sessions.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\system.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\tasks.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\topology.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\commands\__init__.py -> build\bdist.win-amd64\wheel\.\sodus\cli\commands
+copying build\lib\sodus\cli\__init__.py -> build\bdist.win-amd64\wheel\.\sodus\cli
+copying build\lib\sodus\config.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\daemon.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\db.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\decision.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\desk.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\diagnosis.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\dream.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\episodes.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\fix.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\handoff.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\harness.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\harness_status.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\jobs.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\ledger.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\lifecycle.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\lineage.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\llm.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\mcp.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\memory.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\meter.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\mood.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\observe.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\observe_ccswitch.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\observe_magpie.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\observe_sync.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\pet.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\plan.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\policy.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\pricing.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\profiles.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\propose.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\providers.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\recover.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\report.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\review.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\routes.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\route_meta.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\runner.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\server.py -> build\bdist.win-amd64\wheel\.\sodus
+creating build\bdist.win-amd64\wheel\sodus\sessions
+copying build\lib\sodus\sessions\claude.py -> build\bdist.win-amd64\wheel\.\sodus\sessions
+copying build\lib\sodus\sessions\codex.py -> build\bdist.win-amd64\wheel\.\sodus\sessions
+copying build\lib\sodus\sessions\dsh.py -> build\bdist.win-amd64\wheel\.\sodus\sessions
+copying build\lib\sodus\sessions\model.py -> build\bdist.win-amd64\wheel\.\sodus\sessions
+copying build\lib\sodus\sessions\__init__.py -> build\bdist.win-amd64\wheel\.\sodus\sessions
+copying build\lib\sodus\state.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\statuslight.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\tdd.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\telemetry.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\ui.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\usage.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\verify.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\watchdog.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\__init__.py -> build\bdist.win-amd64\wheel\.\sodus
+copying build\lib\sodus\__main__.py -> build\bdist.win-amd64\wheel\.\sodus
+running install_egg_info
+Copying sodus.egg-info to build\bdist.win-amd64\wheel\.\sodus-0.9.0-py3.13.egg-info
+running install_scripts
+creating build\bdist.win-amd64\wheel\sodus-0.9.0.dist-info\WHEEL
+creating 'C:\\Users\\35336\\AppData\\Local\\Temp\\sodus-release-9215d43125c04164a3adf1f2bc76d746\\dist\\.tmp-f3eh19qk\\sodus-0.9.0-py3-none-any.whl' and adding 'build\\bdist.win-amd64\\wheel' to it
+adding 'sodus/__init__.py'
+adding 'sodus/__main__.py'
+adding 'sodus/adapters.py'
+adding 'sodus/agents.py'
+adding 'sodus/ask.py'
+adding 'sodus/bench.py'
+adding 'sodus/board.py'
+adding 'sodus/budget.py'
+adding 'sodus/config.py'
+adding 'sodus/daemon.py'
+adding 'sodus/db.py'
+adding 'sodus/decision.py'
+adding 'sodus/desk.py'
+adding 'sodus/diagnosis.py'
+adding 'sodus/dream.py'
+adding 'sodus/episodes.py'
+adding 'sodus/fix.py'
+adding 'sodus/handoff.py'
+adding 'sodus/harness.py'
+adding 'sodus/harness_status.py'
+adding 'sodus/jobs.py'
+adding 'sodus/ledger.py'
+adding 'sodus/lifecycle.py'
+adding 'sodus/lineage.py'
+adding 'sodus/llm.py'
+adding 'sodus/mcp.py'
+adding 'sodus/memory.py'
+adding 'sodus/meter.py'
+adding 'sodus/mood.py'
+adding 'sodus/observe.py'
+adding 'sodus/observe_ccswitch.py'
+adding 'sodus/observe_magpie.py'
+adding 'sodus/observe_sync.py'
+adding 'sodus/pet.py'
+adding 'sodus/plan.py'
+adding 'sodus/policy.py'
+adding 'sodus/pricing.py'
+adding 'sodus/profiles.py'
+adding 'sodus/propose.py'
+adding 'sodus/providers.py'
+adding 'sodus/recover.py'
+adding 'sodus/report.py'
+adding 'sodus/review.py'
+adding 'sodus/route_meta.py'
+adding 'sodus/routes.py'
+adding 'sodus/runner.py'
+adding 'sodus/server.py'
+adding 'sodus/state.py'
+adding 'sodus/statuslight.py'
+adding 'sodus/tdd.py'
+adding 'sodus/telemetry.py'
+adding 'sodus/ui.py'
+adding 'sodus/usage.py'
+adding 'sodus/verify.py'
+adding 'sodus/watchdog.py'
+adding 'sodus/cli/__init__.py'
+adding 'sodus/cli/client.py'
+adding 'sodus/cli/commands/__init__.py'
+adding 'sodus/cli/commands/bench.py'
+adding 'sodus/cli/commands/decisions.py'
+adding 'sodus/cli/commands/dream.py'
+adding 'sodus/cli/commands/handoff.py'
+adding 'sodus/cli/commands/mcp.py'
+adding 'sodus/cli/commands/memory.py'
+adding 'sodus/cli/commands/migrate.py'
+adding 'sodus/cli/commands/observe.py'
+adding 'sodus/cli/commands/pipeline.py'
+adding 'sodus/cli/commands/plan.py'
+adding 'sodus/cli/commands/proposals.py'
+adding 'sodus/cli/commands/sessions.py'
+adding 'sodus/cli/commands/system.py'
+adding 'sodus/cli/commands/tasks.py'
+adding 'sodus/cli/commands/topology.py'
+adding 'sodus/sessions/__init__.py'
+adding 'sodus/sessions/claude.py'
+adding 'sodus/sessions/codex.py'
+adding 'sodus/sessions/dsh.py'
+adding 'sodus/sessions/model.py'
+adding 'sodus-0.9.0.dist-info/METADATA'
+adding 'sodus-0.9.0.dist-info/WHEEL'
+adding 'sodus-0.9.0.dist-info/entry_points.txt'
+adding 'sodus-0.9.0.dist-info/top_level.txt'
+adding 'sodus-0.9.0.dist-info/RECORD'
+removing build\bdist.win-amd64\wheel
+Successfully built sodus-0.9.0.tar.gz and sodus-0.9.0-py3-none-any.whl
+
+[notice] A new release of pip is available: 25.1.1 -> 26.3
+[notice] To update, run: C:\Users\35336\AppData\Local\Temp\sodus-release-9215d43125c04164a3adf1f2bc76d746\venv\Scripts\python.exe -m pip install --upgrade pip
+sodus mcp: ready (0.9.0, protocol 2024-11-05)
+sodus mcp: client release-check 1
+........................................................................ [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 17%]
+........................................................................ [ 23%]
+........................................................................ [ 29%]
+........................................................................ [ 35%]
+........................................................................ [ 41%]
+........................................................................ [ 47%]
+........................................................................ [ 53%]
+........................................................................ [ 59%]
+........................................................................ [ 65%]
+........................................................................ [ 71%]
+........................................................................ [ 77%]
+........................................................................ [ 83%]
+........................................................................ [ 89%]
+...................................../state HTTP p95=31.744ms (20 serial requests, warm-up excluded)
+................................... [ 95%]
+.........................................................                [100%]
+release_check: PASS
