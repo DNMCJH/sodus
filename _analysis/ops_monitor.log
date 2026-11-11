@@ -1,0 +1,5 @@
+2026-11-09 23:55 CST goal created: 0.8.1 development (M4-M6 replan, plan execution, leftovers); relay 90.50
+2026-11-10 00:10 CST plan job pwsh-28fe514940e64e7c started (opus, nodus-0.8.1); fixes job pwsh-d02c9d7596504008 started (sol, nodus-0.8.1-fixes)
+2026-11-10 00:20 CST plan-766f14a2c7c7 validated (salvaged from run-88b8da66d913); sol review started job pwsh-dec9688ff5ba46cc; fixes job still running
+2026-11-10 00:55 CST plan-9d7318c01882 reviewed verdict=approve; fixes merged 9b41132; 0.8.1-exec job pwsh-2af67fd780344cf9 started
+2026-11-10 00:55 CST v0.8.1 released (1754491, tag v0.8.1, daemon 11324); plan-9d7318c01882 reviewed approve pending human TTY; no active jobs

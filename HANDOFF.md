@@ -5,7 +5,7 @@ updated: '2026-11-11'
 version: 3.0.0
 type: project-handoff
 status: active
-snapshot_at: '2026-11-11 23:40:00 +08:00'
+snapshot_at: '2026-11-11 22:58:00 +08:00'
 tags:
   - workflow/handoff
   - sodus
@@ -17,7 +17,7 @@ tags:
 > 本文件是 sodus 仓库的权威项目控制台（A:\VScode\Code\Projects\sodus\HANDOFF.md）。新会话先完整读取本文件，再刷新“实时状态”，然后继续。sodus 项目上下文极大，不要试图从聊天记录重建决策和路径。详细内容通过索引跳转，不在这里重复。
 
 > [!warning] 快照边界
-> 这是 2026-11-11 23:40 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
+> 这是 2026-11-11 22:58 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
 
 ## 0. 三分钟启动区
 
@@ -44,7 +44,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 
 | 项 | 值 |
 |---|---|
-| 版本 / tag | sodus 0.9.0；main 待提交（本控制台随改名提交）；tag v0.9.0 未打 |
+| 版本 / tag | sodus 0.9.0；main 36d2980（refactor!: rename）；tag v0.9.0 已推送 |
 | daemon | 0.9.0，pid 56388，单实例监听 4199，/health ok |
 | 发行门禁 | 全量 pytest 通过（1417 项，EXIT=0，改名后 2026-11-11）；release_check.ps1 待重跑 |
 | DB | ~/.sodus/sodus.sqlite3，schema v8，tasks=333 runs=574（migrate-home 自 ~/.nodus，源未动） |
@@ -52,7 +52,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 | 四宿主 | codex / claude / dsh / opencode 均 configured；MCP 工具 12 个，全部 sodus_*；serverInfo.name=sodus 0.9.0 |
 | 并发 | 4 个 run 在不同目录并行实测通过；同目录仍由写锁串行 |
 | 交接台 | 控制台 3.0.0；sodus handoff sync/check 可用；检查前先 sync 一次刷新 HEAD/daemon |
-| 未推送 | GitHub 仓库待改名后 push；本地 main 领先旧 origin 70+ 提交、9 个旧 tag |
+| 未推送 | 无：main 与全部 tag 已推送到 DNMCJH/sodus（2026-11-11） |
 
 ## 1. 关键路径索引
 
@@ -97,7 +97,8 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 | 2026-11-10 | v0.8.1 发布：plan 物化/执行/replan、handoff 迁移 | ✅ |
 | 2026-11-11 | 路由建模 + 动态路由元数据 + Carbon 首发价 guardrail（commits 96b0fb3/48fc33c/eb8db36/375722f） | ✅ |
 | 2026-11-11 | **v0.9.0 全面更名**：包/CLI/MCP 工具/状态目录/数据库/仓库目录统一 sodus；migrate-home 迁移 333 tasks / 574 runs | ✅ |
-| 待定 | 0.9.0 push + tag + release_check；宿主重启冒烟 | ⏳ |
+| 2026-11-11 | v0.9.0 push + tag 完成（GitHub DNMCJH/sodus） | ✅ |
+| 待定 | 0.9.0 release_check + 干净环境安装 + 宿主重启冒烟 | ⏳ |
 | 待定 | 0.8.2：route_meta 持久化、runner requirements 硬校验、difficulty 1–10 | ⏳ |
 | 待定 | 效率 A/B（12 题 ×10 ×2 组 = 240 对） | ⏳ 设计已定，未跑 |
 
@@ -119,7 +120,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 
 ## 5. 下一步（按顺序）
 
-1. push：git -C A:\VScode\Code\Projects\sodus push origin main，再 push origin --tags（GitHub 仓库已改为 DNMCJH/sodus）。
+1. 确认新 origin 拉取正常、CI 在新仓库名下跑一次；干净虚拟环境 pip install 冒烟。
 2. 重启 DSH / 各宿主，确认 MCP 工具名 sodus_*，跑一次真实 sodus_run 冒烟。
 3. 0.9.0 收尾：scripts/release_check.ps1 重跑、CHANGELOG 已写、tag v0.9.0；干净环境 pip install 验证。
 4. 0.8.2 路由：route_meta 持久化到 routes.json/Route（load/save 往返），runner 对 requirements 硬校验 + provider fallback 重校验，difficulty 1–5→1–10（带迁移和测试）。
@@ -159,12 +160,12 @@ git -C A:\VScode\Code\Projects\sodus log --oneline -5
 - 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
 
 <!-- sodus:auto:start -->
-head: c7ecc2748b9515c1f40c88302416042deddf05f4
+head: 36d29808bc95c925f4415d5de852ff2affce5718
 ```json
 {
-  "head": "c7ecc2748b9515c1f40c88302416042deddf05f4",
+  "head": "36d29808bc95c925f4415d5de852ff2affce5718",
   "branch": "main",
-  "tag": "pre-sodus-rename-20261111",
+  "tag": "v0.9.0",
   "daemon": {
     "version": "0.9.0",
     "pid": 56388
