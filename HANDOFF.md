@@ -1,11 +1,11 @@
 ---
 title: "sodus 项目接力控制台"
 date: "2026-11-09"
-updated: "2026-11-10"
-version: 2.1.0
+updated: "2026-11-11"
+version: 2.2.0
 type: project-handoff
 status: active
-snapshot_at: "2026-11-10 00:45:00 +08:00"
+snapshot_at: "2026-11-11 17:30:00 +08:00"
 tags:
   - workflow/handoff
   - sodus
@@ -17,7 +17,7 @@ tags:
 > 本文件是 sodus 仓库的权威项目控制台（`A:\VScode\Code\Projects\nodus\HANDOFF.md`）。新会话先完整读取本文件，再刷新“实时状态”，然后继续。sodus 项目上下文极大（上一会话约 1036M token、多次压缩），不要试图从聊天记录重建决策和路径。详细内容通过索引跳转，不在这里重复。
 
 > [!warning] 快照边界
-> 这是 2026-11-10 00:45 的快照，Markdown 不自动同步。`snapshot_at` 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
+> 这是 2026-11-11 17:30 的快照，Markdown 不自动同步。`snapshot_at` 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
 
 ## 0. 三分钟启动区
 
@@ -28,7 +28,7 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 ### 当前唯一优先
 
 > [!todo]
-> **0.8.1 已发布：plan 物化/执行/replan、handoff 迁移、协议修复。M4–M6 计划已重做并获 sol `approve`（`plan-9d7318c01882`，reviewed），但人工批准不能代办，保持 pending。下一阶段：**① 你回来后用交互式 TTY `sodus plan approve plan-9d7318c01882 --by human` 后再 execute；② 预注册效率 A/B（12 题 ×10 ×2 = 240 对）；③ DSH 面板、DB 备份、verify 3221225786 根因。
+> **当前主线：0.8.2 路由/策略收敛，并先把本地提交推上去。** 0.8.1 已发布；11-11 完成动态路由元数据、模型路由+effort 分配、Carbon 首发价优先（窗口到 2026-12-01）。新会话先做三件事：① `git push origin main` + `git push origin --tags`（本地领先 69 个提交，tag 也只在本地）；② 0.8.2 范围：route_meta 能力/价格/requirements 持久化进 `routes.json` 与 `Route` 的 load/save 往返，runner 对 requirements 硬校验并在 provider fallback 时重校验，difficulty 1–5→1–10；③ 12-01 后 Carbon 回到 $4/$20，复查 `carbon.promotion` 是否移除、argon 回池后的排序。M4–M6 计划（`plan-9d7318c01882`）仍待人工 TTY 批准，暂缓。
 
 ### 硬规则（用户明确要求，改之前先问）
 
@@ -40,29 +40,28 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 - 不把密钥、token、provider apiKey 写进本文档；只写路径。
 - 重启 DSH Web GUI 会中断当前会话，先问用户；重启 sodus daemon 可以直接做。
 
-### 实时状态（2026-11-09 23:45，Checked/Measured）
+### 实时状态（2026-11-11 17:30，Checked/Measured）
 
 | 项 | 值 |
 |---|---|
-| 版本 / tag | `sodus 0.8.1`；main `1754491`（merge 0.8.1），tag `v0.8.1` |
-| daemon | 0.8.1，pid 11324，单实例监听 4199；`auto_recover=false` |
-| 发行门禁 | `scripts/release_check.ps1` PASS，exit 0；全量 pytest 绿 |
+| 版本 / tag | `sodus 0.8.1`；main `375722f`（比 tag 多 5 个提交），tag `v0.8.1` → `893a374` |
+| daemon | 0.8.1，pid 14276，单实例监听 4199，`/health` ok；`auto_recover=false` |
+| 发行门禁 | tag `v0.8.1` 时 release_check PASS；HEAD `375722f` 全量 pytest：通过（pytest -q EXIT=0，收集 1417 项，2026-11-11） |
 | DB | `~/.nodus/nodus.sqlite3`，schema v8（plan_node.run_id 等，只增表可回退） |
 | 预算 | `budget.soft_families={claude:100,gpt:80,other:80}`；无 `daily_cny`/`soft_cny`；今日花费与 relay 余额用 `sodus status` 重查 |
 | 四宿主 | codex / claude / dsh / opencode 均 configured；`sodus mcp install --check` exit 0 |
 | 并发 | 4 个 run 在不同目录并行实测通过；同目录仍由写锁串行 |
-| 交接台 | `sodus handoff` 六命令可用；`sync` 能自动给旧控制台插 auto 标记并迁移；`check` 支持 warnings；MCP 三个只读工具 |
+| 交接台 | `sodus handoff` 六命令可用；控制台 2.2.0（2026-11-11 更新，head 已 sync）；`check` 支持 warnings；MCP 三个只读工具 |
 | 安全现状 | B3：env 白名单 + plan/review 临时 worktree；codex 的 Windows sandbox helper 无法在 worktree 启动，已改为隔离 cwd + 常规 headless flags（残余：无 OS 级隔离）；B4：HTTP approve 关闭，CLI 仅 TTY 确认 |
-| 未推送 | 所有 tag/commit 只在本地，未 push origin |
+| 未推送 | main 比 origin/main 多 69 个提交；9 个 tag 全在本地，未 push |
 
 ## 1. 关键路径索引
 
 | 用途 | 路径 |
 |---|---|
 | 主仓库 | `A:\VScode\Code\Projects\nodus` |
-| 0.6/0.7/0.7.1/0.7.2 worktree | `A:\VScode\Code\Projects\nodus-0.6` … `nodus-0.7.2` |
-| 0.8 分支 worktree | `A:\VScode\Code\Projects\nodus-0.8`（feat/sodus-0.8，已合并） |
-| 0.8 安全 worktree | `A:\VScode\Code\Projects\nodus-0.8b`（feat/sodus-0.8-security，已合并） |
+| 旧版 worktree（已删） | 9 个 feat worktree 于 2026-11-11 删除（分支全部并入 main），备份 `A:\VScode\Code\Projects\_archive\nodus-worktrees-20261111.zip` |
+| 路由元数据 | `nodus/route_meta.py`、`nodus/policy.py`、`nodus/decision.py`、`tests/test_policy.py` |
 | 0.8 交付 | `reports/080a-report.md`（handoff）、`reports/080b1-report.md`（B3）、`reports/080b2-report.md`（B4）、`reports/080c-report.md`（迁移/协议）、`reports/080d-report.md`（plan 执行） |
 | 旧版交接 | `reports/HANDOFF-0.7.2.md`、`reports/HANDOFF-0.7.1.md`、`reports/HANDOFF-0.7.md` |
 | 复查原文 | `reports/review-0.7-opus-20261109.md`、`reports/review-0.7-sol-20261109.md` |
@@ -81,6 +80,8 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 - **0.7.2**：按用户要求改成模型族软上限（Claude/opus 100、GPT 80、other 80），无日硬上限；补 opencode MCP 安装器；四终端并发文档与测试。
 - **0.8.0**：项目级 `sodus handoff`（单项目一份 HANDOFF.md，工作区只放索引）；B3 env 白名单 + plan/review 只读（claude `--permission-mode plan`）+ 临时 worktree；B4 关闭 HTTP approve，CLI 仅 TTY 确认。
 - **0.8.1**：plan 物化/执行/replan（schema v8）；handoff `sync` 自动迁移旧控制台、`check` warnings；修 HTTP 未授权 POST 残留 body 协议缺陷；午夜边界测试；codex 沙箱在 Windows worktree 启动失败→隔离 cwd 回退。
+- **2026-11-11 路由建模**：`claude` 是 CLI/agent，不是模型；`opus`/`fable`/`sonnet` 是模型，`-high/-xhigh/-max` 只是 effort。自动分配只从 canonical 模型路由里选，effort 是独立属性；`claude` 和 effort alias 不参与候选。policy/decision 的候选列表改为从 `~/.nodus/routes.json` 动态加载，不再硬编码。
+- **2026-11-11 Carbon 首发价**：官方 2026-11-30 前 $2/M 输入、$10/M 输出，12-01 起 $4/$20。promotion 窗口内 carbon cost_tier 降为 2，`prefer_over=["argon"]` 通过 `dated-promotion` guardrail 把 argon 移出候选池；这是“carbon 优先于 argon”，不是压过所有路线。
 - **预算口径**：用户确认“没有定过预算”；relay 余额才是硬约束；族软上限只拦新 run。
 - **并发口径**：多个宿主各自拉 MCP 进程，但都只是 HTTP 客户端；daemon 单实例、多线程；不同 cwd 可并行，同一 cwd 写锁串行；SQLite 单写者。
 - **交接口径**：per-run handoff、session brief 都是单次快照；项目控制台是权威恢复入口，`sodus handoff` 只操作当前项目，不聚合内容。
@@ -95,7 +96,11 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 | 2026-11-09 | v0.8.0 发布：项目 handoff、B3 隔离、B4 CLI 批准；release_check PASS | ✅ |
 | 2026-11-10 | M4–M6 重做计划 + 多轮 sol review | ✅ `plan-9d7318c01882` reviewed，verdict **approve**；待人工 TTY 批准 |
 | 2026-11-10 | v0.8.1 发布：plan 物化/执行/replan、handoff 迁移 | ✅ |
+| 2026-11-11 | fable tier 映射修复 `adeb038`；动态路由元数据 `96b0fb3` | ✅ |
+| 2026-11-11 | 模型路由 + effort 分配，去掉 effort alias `48fc33c` | ✅ |
+| 2026-11-11 | Carbon 路由元数据 `eb8db36`；首发价优先 guardrail `375722f` | ✅ |
 | 待定 | M4–M6 人工批准后实际执行 | ⏳ |
+| 待定 | 0.8.2：route meta 持久化、runner requirements 硬校验、difficulty 1–10 | ⏳ |
 | 待定 | 效率 A/B（12 题 ×10 ×2 组 = 240 对） | ⏳ 设计已定，未跑 |
 
 ## 4. 未决与风险
@@ -108,13 +113,19 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 - **DSH 事故**：历史 daemon 在杀 MCP 进程时无日志退出，已多次恢复；当前 daemon 11324，继续观察。
 - **其他**：DSH YAML 注释保留、DB 自动备份、verify `3221225786` 根因、DSH 面板、效率实验未做。
 - **软上限语义**：按已记账成本检查，不预留在途/并发成本；多个 run 同时起跑可能一起越线，relay 余额仍是硬约束。
+- **未推送**：main 领先 origin/main 69 个提交，9 个 tag 全在本地；开新会话前先 push，别让它们只存在这台机器上。
+- **Carbon 促销到期**：2026-12-01 起 $4/$20，promotion 自动失效；要复查 argon 回池后的排序和测试是否仍绿。
+- **路由元数据未持久化**：route_meta 只在代码里，routes.json 自定义路由的 load/save 不携带能力/价格/requirements；runner 也没有对 requirements 硬校验或在 provider fallback 时重校验。
+- **Jev 依赖**：官方 key 已停用，DSH jev MCP 走 Netlify 函数代理（`https://dnmcjh.netlify.app`，key 在 `%APPDATA%\jev-netlify-mcp\config.env`）；代理挂了 Jev 不可用，policy 本身 fail-open。
+- **Agent Reach**：1.6.1 已装（`C:\Users\35336\.local\bin\agent-reach.exe`），旧 1.5 venv 改名备份；微信文章走 JustOneAPI，不走 Jina。
 
 ## 5. 下一步（按顺序）
 
-1. 用户回来后在 TTY 执行 `sodus plan approve plan-9d7318c01882 --by human`，再 `sodus plan execute plan-9d7318c01882`；失败时用 `plan replan`。
-2. 预注册并跑效率 A/B（12 题 ×10 ×2 = 240 对；exact McNemar，非劣界 −5pp；成本/时间配对 bootstrap，界 +20%）。
-3. 补 DSH 面板（只读）、DB 自动备份、DSH YAML 注释、verify 根因、测试网络抖动、codex 只读回退的长期方案。
-4. `sodus handoff sync` 会自动迁移旧控制台并在 `check` 中给 warnings；本项目控制台已迁移。
+1. `git -C A:\VScode\Code\Projects\nodus push origin main`，再 `git push origin --tags`——69 个提交和 9 个 tag 目前只在本地。
+2. 0.8.2：route_meta 持久化到 `routes.json`/`Route`（load/save 往返），runner 对 requirements 硬校验 + provider fallback 重校验，difficulty 1–5→1–10（带迁移和测试）。
+3. 12-01 前复查 Carbon：promotion 失效后 argon 是否回池、排序是否符合预期；决定“Carbon 只优先于 argon”还是全局默认。
+4. M4–M6 计划仍待人工 TTY 批准（`plan-9d7318c01882`）：`sodus plan approve plan-9d7318c01882 --by human`，再 execute/replan。
+5. 效率 A/B（240 对）、DSH 面板、DB 备份、verify 根因维持排期。
 
 ## 6. 会话/交接机制
 
@@ -130,6 +141,7 @@ Sodus（实现名 nodus，命令 `sodus`）是给 agent 用的任务验收层：
 
 ```powershell
 A:\Anaconda\python.exe -m sodus status
+A:\Anaconda\python.exe -m sodus route-for --task "..." --json
 A:\Anaconda\python.exe -m sodus runs
 A:\Anaconda\python.exe -m sodus handoff show --json
 A:\Anaconda\python.exe -m sodus handoff check --json
@@ -149,15 +161,15 @@ git -C A:\VScode\Code\Projects\nodus log --oneline -5
 - 校验：`git HEAD`、tag、daemon pid/version、config、relay 余额在每次新会话开始时重查。
 - 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
 <!-- sodus:auto:start -->
-head: 175449112460e5d90445fc3e45539f39c05cf589
+head: 375722feac3f76f02c7edc85567c486d0fe75ed7
 ```json
 {
-  "head": "175449112460e5d90445fc3e45539f39c05cf589",
+  "head": "375722feac3f76f02c7edc85567c486d0fe75ed7",
   "branch": "main",
-  "tag": "v0.8.1",
+  "tag": "v0.8.1-7-g375722f",
   "daemon": {
     "version": "0.8.1",
-    "pid": 11324
+    "pid": 14276
   },
   "tasks": [
     {
