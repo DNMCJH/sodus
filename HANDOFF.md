@@ -165,12 +165,12 @@ git -C A:\VScode\Code\Projects\sodus log --oneline -5
 - 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
 
 <!-- sodus:auto:start -->
-head: 3b3d641ec1b907709ebd69722b4788c0fa79a74a
+head: 8444193cdff00c2f523dfa5f28b11f16fd4ff64c
 ```json
 {
-  "head": "3b3d641ec1b907709ebd69722b4788c0fa79a74a",
+  "head": "8444193cdff00c2f523dfa5f28b11f16fd4ff64c",
   "branch": "main",
-  "tag": "v0.9.0-2-g3b3d641",
+  "tag": "v0.9.0-1-g8444193",
   "daemon": {
     "version": "0.9.0",
     "pid": 56388
