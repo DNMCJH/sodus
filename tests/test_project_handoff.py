@@ -61,6 +61,26 @@ def test_sync_preserves_human_and_check_failures(project, monkeypatch):
     assert 'daemon_version_mismatch' in handoff.check()['errors']
 
 
+def test_committing_the_synced_console_is_not_drift(project):
+    handoff.init()
+    handoff.append('人工内容')
+    handoff.sync()
+    subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'add', 'HANDOFF.md'], check=True, capture_output=True)
+    subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'commit', '-m', 'handoff'], check=True, capture_output=True)
+    result = handoff.check()
+    assert result['ok']
+    assert 'head_mismatch' not in result['warnings']
+    # A real code change after the snapshot is still drift.
+    (project / 'code.txt').write_text('x', encoding='utf-8')
+    subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'add', 'code.txt'], check=True, capture_output=True)
+    subprocess.run(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.org',
+                    'commit', '-m', 'code'], check=True, capture_output=True)
+    assert 'head_mismatch' in handoff.check()['warnings']
+
+
 def test_config_fallback_and_missing(project, monkeypatch):
     monkeypatch.setattr(config, 'load_config', lambda: {'handoff': {'path': 'docs/console.md'}})
     assert not handoff.show()['exists']

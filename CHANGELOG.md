@@ -1,5 +1,9 @@
 # 更新日志
 
+## 未发布
+
+- `sodus handoff check`：控制台自身同步后的提交不再误报 head_mismatch；只有其它文件改动才报 drift。
+
 ## 0.9.0 — 全面更名为 sodus
 
 - 包名、Python 模块、CLI 命令、MCP 工具名、状态目录、数据库文件、环境变量统一改为 sodus；nodus 命令和包移除。

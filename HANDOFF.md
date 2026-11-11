@@ -2,10 +2,10 @@
 title: 'sodus 项目接力控制台'
 date: '2026-11-09'
 updated: '2026-11-12'
-version: 3.1.0
+version: 3.2.0
 type: project-handoff
 status: active
-snapshot_at: '2026-11-12 02:35:00 +08:00'
+snapshot_at: '2026-11-12 03:15:00 +08:00'
 tags:
   - workflow/handoff
   - sodus
@@ -17,7 +17,7 @@ tags:
 > 本文件是 sodus 仓库的权威项目控制台（A:\VScode\Code\Projects\sodus\HANDOFF.md）。新会话先完整读取本文件，再刷新“实时状态”，然后继续。sodus 项目上下文极大，不要试图从聊天记录重建决策和路径。详细内容通过索引跳转，不在这里重复。
 
 > [!warning] 快照边界
-> 这是 2026-11-12 02:35 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
+> 这是 2026-11-12 03:15 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
 
 ## 0. 三分钟启动区
 
@@ -44,7 +44,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 
 | 项 | 值 |
 |---|---|
-| 版本 / tag | sodus 0.9.0；main 3b3d641（pyyaml 修复）+ 本控制台提交；tag v0.9.0 指向 release 提交 |
+| 版本 / tag | sodus 0.9.0；main f30acf1（release）+ 本次收尾提交；tag v0.9.0 指向 release 提交 |
 | daemon | 0.9.0，pid 56388，单实例监听 4199，/health ok |
 | 发行门禁 | release_check.ps1 PASS（构建/干净 venv 安装/doctor/MCP 握手/全量 pytest，日志 reports/release-0.9.0.log）；全量 pytest 1458 项 EXIT=0（2026-11-12） |
 | CI | GitHub Actions windows-latest × Python 3.11/3.12/3.13 全绿（run 43077407300） |
@@ -62,6 +62,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 |---|---|
 | 主仓库 | A:\VScode\Code\Projects\sodus |
 | 旧版 worktree（已删） | 9 个 feat worktree 于 2026-11-11 删除（分支全部并入 main），备份 A:\VScode\Code\Projects\_archive\nodus-worktrees-20261111.zip |
+| 旧 home 归档 | A:\VScode\Code\Projects\_archive\nodus-home-rollback-20261112（旧 ~/.nodus 关键文件，63MB） |
 | 路由元数据 | sodus/route_meta.py、sodus/policy.py、sodus/decision.py、tests/test_policy.py |
 | 改名迁移 | docs/sodus-migration.md（从 nodus 到 sodus 0.9.0 的步骤与回滚） |
 | 0.8 交付 | reports/080a-report.md、reports/080b1-report.md、reports/080b2-report.md、reports/080c-report.md、reports/080d-report.md |
@@ -84,6 +85,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 - **0.8.1**：plan 物化/执行/replan（schema v8）；handoff sync 自动迁移旧控制台、check warnings；修 HTTP 未授权 POST 残留 body 协议缺陷；午夜边界测试；codex 沙箱在 Windows worktree 启动失败→隔离 cwd 回退。
 - **2026-11-11 路由建模**：claude 是 CLI/agent，不是模型；opus/fable/sonnet 是模型，-high/-xhigh/-max 只是 effort。自动分配只从 canonical 模型路由里选，effort 是独立属性；claude 和 effort alias 不参与候选。policy/decision 的候选列表改为从 ~/.sodus/routes.json 动态加载，不再硬编码。
 - **2026-11-11 Carbon 首发价**：官方 2026-11-30 前 $2/M 输入、$10/M 输出，12-01 起 $4/$20。promotion 窗口内 carbon cost_tier 降为 2，prefer_over=[argon] 通过 dated-promotion guardrail 把 argon 移出候选池；这是“carbon 优先于 argon”，不是压过所有路线。
+- **2026-11-12 handoff check 提交感知**：`sync` 记录 HEAD，提交控制台本身后 head 必然变化；`check` 现在只在控制台文件以外的改动出现时才报 `head_mismatch`，同步+提交不再误报。
 - **2026-11-11 0.9.0 全面更名**：删掉 nodus 双入口和 sodus 入口壳，nodus 包整体改名为 sodus；默认状态目录 ~/.sodus、数据库 sodus.sqlite3；MCP 工具名全部 sodus_*；环境变量 NODUS_* → SODUS_*；migrate-home 只复制 ~/.nodus 并把数据库改名，源目录不动。理由：用户明确要求全部替换；保留 ~/.nodus 仅作回滚来源。
 - **预算口径**：用户确认“没有定过预算”；relay 余额才是硬约束；族软上限只拦新 run。
 - **并发口径**：多个宿主各自拉 MCP 进程，但都只是 HTTP 客户端；daemon 单实例、多线程；不同 cwd 可并行，同一 cwd 写锁串行；SQLite 单写者。
@@ -101,6 +103,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 | 2026-11-11 | **v0.9.0 全面更名**：包/CLI/MCP 工具/状态目录/数据库/仓库目录统一 sodus；migrate-home 迁移 333 tasks / 574 runs | ✅ |
 | 2026-11-11 | v0.9.0 push + tag 完成（GitHub DNMCJH/sodus） | ✅ |
 | 2026-11-12 | 0.9.0 release_check PASS + CI 全绿 + Claude Code 冒烟 + GitHub Release v0.9.0 | ✅ |
+| 2026-11-12 | 收尾：handoff check 提交感知、DSH 宠物插件改名 sodus-pet、旧 ~/.nodus 归档并删除 | ✅ |
 | 待定 | 宿主重启确认 sodus_* 工具（DSH/Claude/Codex/opencode） | ⏳ |
 | 待定 | 0.8.2：route_meta 持久化、runner requirements 硬校验、difficulty 1–10 | ⏳ |
 | 待定 | 效率 A/B（12 题 ×10 ×2 组 = 240 对） | ⏳ 设计已定，未跑 |
@@ -118,15 +121,15 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 - **路由元数据未持久化**：route_meta 只在代码里，routes.json 自定义路由的 load/save 不携带能力/价格/requirements；runner 也没有对 requirements 硬校验或在 provider fallback 时重校验。
 - **Jev 依赖**：官方 key 已停用，DSH jev MCP 走 Netlify 函数代理（https://dnmcjh.netlify.app，key 在 %APPDATA%\jev-netlify-mcp\config.env）；代理挂了 Jev 不可用，policy 本身 fail-open。
 - **Agent Reach**：1.6.1 已装（C:\Users\35336\.local\bin\agent-reach.exe），旧 1.5 venv 改名备份；微信文章走 JustOneAPI，不走 Jina。
-- **旧 ~/.nodus 保留**：迁移后源目录 1.2GB 未删，作回滚来源；确认稳定后可删除或归档。
-- **DSH 宠物插件仍是 nodus-pet**：A:\dsh\home\nodus-pet 是本地 DSH 插件包，配置与脚本内仍用 nodus 命名；产品代码已不依赖它，是否改名待确认。
+- **旧 ~/.nodus 已归档**：关键文件（DB 快照、config/secrets/routes/providers、token、policy/决策日志）在 A:\VScode\Code\Projects\_archive\nodus-home-rollback-20261112（63MB）；原目录 1.2GB 已删除（2026-11-12）。
+- **DSH 宠物插件已改名 sodus-pet**：目录 A:\dsh\home\sodus-pet（旧 nodus-pet 已移走），包名/菜单/快捷键/日志/环境变量全部改；托盘已从新路径重启。
 
 ## 5. 下一步（按顺序）
 
 1. 0.8.2 路由：route_meta 持久化到 routes.json/Route（load/save 往返），runner 对 requirements 硬校验 + provider fallback 重校验，difficulty 1–5→1–10（带迁移和测试）。
 2. 12-01 前复查 Carbon promotion：argon 回池排序、测试仍绿、价格改 $4/$20。
 3. M4–M6 计划仍待人工 TTY 批准（plan-9d7318c01882）。
-4. 收尾：DSH 宠物插件 nodus-pet 是否改名；旧 ~/.nodus 1.2GB 归档/删除；宿主重启后工具名核对。
+4. 收尾：宿主重启后工具名核对（sodus_*）；可选发布 0.9.1（含 handoff check 修正）。
 
 ## 6. 会话/交接机制
 

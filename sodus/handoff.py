@@ -223,6 +223,24 @@ def sync(cwd=None):
     return show(cwd)
 
 
+def _console_only_commit(root: Path, recorded: str, console: str) -> bool:
+    """True when the only tree change since the recorded snapshot is this console.
+
+    `sync` records the HEAD it saw, then the operator commits the console that
+    contains that snapshot: by construction the next HEAD differs from the
+    recorded one, and that is not drift. Any other change since the snapshot
+    still warns, because the recorded state is then genuinely stale.
+    """
+    if not recorded:
+        return False
+    changed = [line.strip() for line in git(root, 'diff', '--name-only', recorded, 'HEAD').splitlines() if line.strip()]
+    try:
+        relative = Path(console).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return False
+    return changed == [relative]
+
+
 def check(cwd=None, remote=False):
     data = show(cwd, remote)
     errors = []
@@ -239,7 +257,8 @@ def check(cwd=None, remote=False):
     except (ValueError, TypeError):
         errors.append('snapshot_invalid')
     root = Path(data['project_root'])
-    if data['head'] != git(root, 'rev-parse', 'HEAD'):
+    head = git(root, 'rev-parse', 'HEAD')
+    if data['head'] != head and not _console_only_commit(root, data['head'], data['path']):
         warnings.append('head_mismatch')
     section = re.search(r'^## 关键路径\s*\n(.*?)(?=^## |\Z)', data['content'], re.M | re.S)
     for path in re.findall(r'`([^`]+)`', section.group(1) if section else ''):
