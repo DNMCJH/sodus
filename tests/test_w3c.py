@@ -55,13 +55,36 @@ def test_daily_order_dedupe_and_next_day(monkeypatch):
 
 def test_daily_cap_and_busy(monkeypatch):
     monkeypatch.setattr(config,'dream_daily_tokens',lambda: 0)
-    with pytest.raises(RuntimeError,match='token limit'): dream.daily_once('2026-11-08')
+    assert dream.daily_once('2026-11-08')['status'] == 'disabled'
     with db.connect() as c:
         assert not c.execute("SELECT 1 FROM meta WHERE key LIKE 'dream_last_run:%'").fetchone()
+    # A queued/running row in another workspace must not block this workspace.
+    with db.connect() as c:
+        c.execute(
+            "INSERT INTO run(id,task_id,agent,status,cwd,workspace_id,kind) VALUES('foreign-q','t','codex','queued','.','other-ws','work')"
+        )
+    monkeypatch.setattr(config,'dream_daily_tokens',lambda: 1000)
+    assert dream.daily_once('2026-11-07')['batch']['status'] == 'idle'
     task = db.create_task('busy')
     run = db.create_run(task['id'],'codex','.')
     db.update_run(run['id'],status='running')
     assert dream.daily_once('2026-11-08')['status'] == 'busy'
+
+
+def test_cli_candidate_review_loop(tmp_path, capsys):
+    from sodus.cli import main
+    cid = db.memory_add_candidate('keep tests fast', workspace=config.workspace_id())
+    assert main(['debug', 'memory', 'candidates', '--json'], prog='sodus') == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert any(row['id'] == cid for row in listed)
+    assert main(['debug', 'memory', 'candidate-adopt', cid, '--project', str(tmp_path), '--json'], prog='sodus') == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res['candidate']['status'] == 'adopted'
+    assert res['apply']['status'] == 'applied'
+    assert 'keep tests fast' in (tmp_path / 'AGENTS.md').read_text(encoding='utf-8')
+    cid2 = db.memory_add_candidate('drop noisy rule', workspace=config.workspace_id())
+    assert main(['debug', 'memory', 'candidate-reject', cid2, '--json'], prog='sodus') == 0
+    assert json.loads(capsys.readouterr().out)['status'] == 'rejected'
 
 
 def test_daily_failure_claim_and_loop_survives(monkeypatch):

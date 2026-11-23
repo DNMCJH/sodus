@@ -53,6 +53,22 @@ def add(sub) -> None:
     a.add_argument("--project", default="")
     a.set_defaults(func=memory_adopt, needs_daemon=False)
 
+    mc = nested.add_parser("candidates", help="list staged DB memory candidates (pending/proposed/...)")
+    mc.add_argument("--status", default="", help="filter by status: pending|proposed|adopted|rejected|retired")
+    mc.add_argument("--json", action="store_true")
+    mc.set_defaults(func=memory_candidates, needs_daemon=False)
+
+    ca = nested.add_parser("candidate-adopt", help="approve a DB candidate and apply it to AGENTS.md")
+    ca.add_argument("id", help="candidate-* id from `debug memory candidates`")
+    ca.add_argument("--project", default="")
+    ca.add_argument("--json", action="store_true")
+    ca.set_defaults(func=memory_candidate_adopt, needs_daemon=False)
+
+    cr = nested.add_parser("candidate-reject", help="reject a DB candidate")
+    cr.add_argument("id", help="candidate-* id from `debug memory candidates`")
+    cr.add_argument("--json", action="store_true")
+    cr.set_defaults(func=memory_candidate_reject, needs_daemon=False)
+
     ms = sub.add_parser("memory-stats", help="memory rot and exposure statistics")
     ms.add_argument("--json", action="store_true")
     ms.set_defaults(func=memory_stats, needs_daemon=False)
@@ -145,6 +161,61 @@ def memory_adopt(args) -> int:
         print(f"采纳 {result['added']} 条 → {result['path']}")
     else:
         print(f"没有新内容：这些已经在 {result['path']} 里了")
+    return 0
+
+
+def memory_candidates(args) -> int:
+    from ... import db
+    workspace = config.workspace_id()
+    with db.connect() as c:
+        sql = "SELECT * FROM memory_candidate WHERE workspace=?"
+        params: list = [workspace]
+        if args.status:
+            sql += " AND status=?"
+            params.append(args.status)
+        rows = [dict(r) for r in c.execute(sql + " ORDER BY updated_at DESC", params)]
+        for row in rows:
+            row["evidence_count"] = c.execute(
+                "SELECT COUNT(DISTINCT lineage_root) FROM candidate_evidence WHERE candidate_id=? AND exposed=0",
+                (row["id"],),
+            ).fetchone()[0]
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("没有匹配的记忆候选。")
+        return 0
+    for row in rows:
+        print(f"  {row['id']}  [{row['status']:<15}] v{row['version']} ev={row['evidence_count']}  {row['text']}")
+    return 0
+
+
+def memory_candidate_adopt(args) -> int:
+    from ... import db, dream
+    row = db.memory_get_candidate(args.id)
+    if not row:
+        raise ValueError(f"unknown candidate: {args.id}")
+    updated = db.memory_update_candidate(row["id"], int(row["version"]), status="adopted")
+    root = _root(args)
+    applied = dream.apply_approved(project_root=root)
+    payload = {"candidate": updated, "apply": applied, "project": root}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"已采纳 {updated['id']} → {root} ({applied.get('status')})")
+    return 0
+
+
+def memory_candidate_reject(args) -> int:
+    from ... import db
+    row = db.memory_get_candidate(args.id)
+    if not row:
+        raise ValueError(f"unknown candidate: {args.id}")
+    updated = db.memory_update_candidate(row["id"], int(row["version"]), status="rejected")
+    if args.json:
+        print(json.dumps(updated, ensure_ascii=False, indent=2))
+    else:
+        print(f"已拒绝 {updated['id']}")
     return 0
 
 

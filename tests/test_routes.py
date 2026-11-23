@@ -9,6 +9,11 @@ import pytest
 from sodus import agents, config, routes
 
 
+@pytest.fixture(autouse=True)
+def _isolate_home(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+
+
 def test_builtin_routes_pair_an_agent_with_an_ordered_chain():
     table = routes.load()
     assert table["claude"].agent == "claude"
