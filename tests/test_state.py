@@ -47,7 +47,7 @@ def test_schema_counts_and_ledger(home, monkeypatch):
     assert len(got["running"]) == 3
     assert set(got["running"][0]) == {"id", "task_id", "agent", "route", "started_at", "cwd"}
     assert got["counts"] == {"running": 1, "queued": 1, "needs_you": 0, "unverifiable": 1,
-                             "proposals": 0, "asks_open": 1, "memory_candidates": 1}
+                             "proposals": 0, "asks_open": 1, "memory_candidates": 1, "open_decisions": 0}
     assert got["asks"] == {"open": 1, "running": 1, "done": 1, "failed": 1}
     assert got["today"] == {"CNY": 1.25, "runs": 5, "unpriced": 3}
     assert got["memory"] == {"candidates_pending": 1}

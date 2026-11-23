@@ -73,6 +73,7 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/handoff"),
         ("get", "/handoffs"),
         ("get", "/handoff/check"),
+        ("get", "/handoff/decisions"),
         ("get", "/"),
         ("get", "/health"),
         ("get", "/favicon.ico"),

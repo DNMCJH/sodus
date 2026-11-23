@@ -82,6 +82,9 @@ def test_recursion_validation():
     assert ask.submit({}, 'bad')[0] == 400
     for body in ({}, [], dict(request_id='r', text=' '), dict(request_id='r', text='ok', cwd=2)):
         assert ask.submit(body)[0] == 400
+    # Relative cwd is rejected so asks never silently run inside daemon HOME.
+    assert ask.submit(dict(request_id='rel', text='ok', cwd='.'))[0] == 400
+    assert ask.submit(dict(request_id='rel2', text='ok', cwd='sub/dir'))[0] == 400
 
 
 def test_http_auth_and_contract(monkeypatch):

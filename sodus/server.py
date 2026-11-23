@@ -245,11 +245,21 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(u.query)
         path = u.path.rstrip("/") or "/"
 
-        if path in ('/handoff', '/handoffs', '/handoff/check'):
+        if path in ('/handoff', '/handoffs', '/handoff/check', '/handoff/decisions'):
             from . import handoff
             try:
                 if path == '/handoffs':
                     result = handoff.list_projects(remote=True)
+                elif path == '/handoff/decisions':
+                    all_projects = (qs.get('all') or ['0'])[0].lower() in ('1', 'true', 'yes')
+                    status = (qs.get('status') or ['open'])[0]
+                    cwd = (qs.get('cwd') or [None])[0]
+                    result = handoff.list_decisions(
+                        cwd=cwd,
+                        all_projects=all_projects,
+                        status=status,
+                        remote=True,
+                    )
                 else:
                     cwd = (qs.get('cwd') or [None])[0]
                     result = (handoff.check if path.endswith('/check') else handoff.show)(cwd, remote=True)

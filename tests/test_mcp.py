@@ -11,7 +11,7 @@ import pytest
 from sodus import config, db, mcp
 
 EXPECTED_TOOLS = {
-    "sodus_handoff_show", "sodus_handoff_list", "sodus_handoff_check",
+    "sodus_handoff_show", "sodus_handoff_list", "sodus_handoff_check", "sodus_handoff_decisions",
     "sodus_ask", "sodus_ask_status",
     "sodus_task_create",
     "sodus_run",
@@ -99,7 +99,7 @@ def test_tools_list_returns_every_tool(home):
     reply = call("tools/list")
     tools = reply["result"]["tools"]
     assert {item["name"] for item in tools} == EXPECTED_TOOLS
-    assert len(tools) == 12
+    assert len(tools) == 13
 
 
 def test_every_tool_has_an_object_input_schema(home):

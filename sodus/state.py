@@ -24,7 +24,12 @@ def _slow(conn, workspace, start):
     today = {"CNY": round(cny, 6), "runs": len(rows), "unpriced": unpriced}
     proposals = conn.execute("SELECT COUNT(*) FROM proposal WHERE workspace_id=? AND status='open'", (workspace,)).fetchone()[0]
     candidates = conn.execute("SELECT COUNT(*) FROM memory_candidate WHERE workspace IN (?,?) AND status IN ('proposed','retire_proposed')", (workspace, str(memory.saved_project()))).fetchone()[0]
-    return today, proposals, candidates
+    try:
+        from . import handoff
+        open_decisions = handoff.list_decisions(all_projects=True, status="open")["count"]
+    except Exception:
+        open_decisions = 0
+    return today, proposals, candidates, open_decisions
 
 
 def snapshot(now=None):
@@ -39,7 +44,7 @@ def snapshot(now=None):
             tick = time.monotonic()
             if _CACHE is None or _CACHE[0] != key or tick - _CACHE[1] >= TTL:
                 _CACHE = (key, tick, _slow(conn, workspace, start))
-            today, proposals, candidates = copy.deepcopy(_CACHE[2])
+            today, proposals, candidates, open_decisions = copy.deepcopy(_CACHE[2])
         live = [dict(r) for r in conn.execute(
             "SELECT id,task_id,agent,route,started_at,cwd FROM run WHERE workspace_id=? AND status IN ('queued','running','stalled') ORDER BY started_at DESC LIMIT 20", (workspace,))]
         statuses = dict(conn.execute("SELECT status,COUNT(*) FROM run WHERE workspace_id=? AND status IN ('queued','running','stalled') GROUP BY status", (workspace,)))
@@ -56,5 +61,5 @@ def snapshot(now=None):
     return {"version": "0.9.0", "workspace_id": workspace, "now": now,
             "running": live, "counts": {"running": statuses.get("running", 0), "queued": statuses.get("queued", 0),
             "needs_you": min(proposals, 50) + spend, "unverifiable": unverifiable, "proposals": proposals,
-            "asks_open": asks["open"], "memory_candidates": candidates},
+            "asks_open": asks["open"], "memory_candidates": candidates, "open_decisions": open_decisions},
             "today": today, "asks": asks, "memory": {"candidates_pending": candidates}}

@@ -44,10 +44,22 @@ def submit(body: dict, depth: str = '0') -> tuple[int, dict]:
             return 400, {'error': 'invalid_' + key}
     if body.get('origin', 'http') not in ('http', 'cli', 'mcp'):
         return 400, {'error': 'invalid_origin'}
-    payload = {key: body.get(key) for key in ('text', 'cwd', 'follow_up_of', 'route')}
+    raw_cwd = body.get('cwd')
+    if raw_cwd is not None and raw_cwd.strip():
+        resolved_cwd = Path(raw_cwd).expanduser()
+        if not resolved_cwd.is_absolute():
+            return 400, {'error': 'cwd must be an absolute path'}
+        resolved_cwd = resolved_cwd.resolve()
+        if not resolved_cwd.is_dir():
+            return 400, {'error': 'cwd must be an existing directory'}
+        normalized_cwd = str(resolved_cwd)
+    else:
+        normalized_cwd = None
+    payload = {key: body.get(key) for key in ('text', 'follow_up_of', 'route')}
+    payload['cwd'] = normalized_cwd
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
     row, created = db.ask_create(body['request_id'], body['text'], digest,
-        cwd=body.get('cwd'), route=body.get('route'), follow_up_of=body.get('follow_up_of'),
+        cwd=normalized_cwd, route=body.get('route'), follow_up_of=body.get('follow_up_of'),
         origin=body.get('origin') or 'http', client=body.get('client'),
         session_ref=json.dumps(body.get('session_ref')) if body.get('session_ref') is not None else None, depth=level)
     if not created:

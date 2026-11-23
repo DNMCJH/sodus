@@ -190,6 +190,20 @@ for _name in ('show', 'list', 'check'):
                   'annotations': {'readOnlyHint': True},
                   'inputSchema': _schema({} if _name == 'list' else {'cwd': {'type': 'string'}})})
 
+TOOLS.append({
+    'name': 'sodus_handoff_decisions',
+    'description': (
+        '只读项目级决策收件箱：列出当前项目（默认调用方 cwd）或全部已知项目（all=true）'
+        '在 HANDOFF.md 中等待拍板的 D-xxx 决策；写入仍由本地 CLI sodus handoff decide-* 完成。'
+    ),
+    'annotations': {'readOnlyHint': True},
+    'inputSchema': _schema({
+        'cwd': {'type': 'string', 'description': '项目目录；all=false 且不传时默认调用方当前目录'},
+        'all': {'type': 'boolean', 'description': 'true = 聚合全部已知项目的待拍板决策', 'default': False},
+        'status': {'type': 'string', 'enum': ['open', 'deferred', 'all'], 'default': 'open'},
+    }),
+})
+
 
 def _arguments(value: Any) -> dict:
     if value is None:
@@ -327,12 +341,17 @@ def _memory_candidates(args: dict) -> dict:
 
 
 def _ask(args: dict) -> dict:
-    from .cli import client
     body = {key: _string(args, key) for key in ("request_id", "text")}
     for key in ("cwd", "route", "follow_up_of"):
         if key in args:
             body[key] = _string(args, key, required=False)
     _no_extra(args)
+    if "cwd" in body and body["cwd"]:
+        raw = Path(body["cwd"]).expanduser()
+        if not raw.is_absolute():
+            body["cwd"] = str(raw.resolve())
+    elif "cwd" in body:
+        body.pop("cwd", None)
     body["origin"] = "mcp"
     return _http("POST", "/ask", body,
                        headers={"X-Sodus-Depth": os.environ.get("SODUS_DEPTH", "0")})
@@ -377,8 +396,27 @@ def _handoff_read(args, action):
     return _http('GET', path + ('?' + urlencode({'cwd': cwd}) if cwd else ''))
 
 
+def _handoff_decisions(args: dict) -> dict:
+    all_projects = _boolean(args, 'all', default=False)
+    status = _string(args, 'status', required=False, default='open') or 'open'
+    cwd = _string(args, 'cwd', required=False)
+    _no_extra(args)
+    if status not in ('open', 'deferred', 'all'):
+        raise ToolError('status 必须是 open、deferred 或 all')
+    params: dict[str, str] = {'status': status}
+    if all_projects:
+        params['all'] = '1'
+    else:
+        resolved = Path(cwd or Path.cwd()).expanduser().resolve()
+        if not resolved.is_dir():
+            raise ToolError(f'cwd 不是已存在的目录：{cwd}')
+        params['cwd'] = str(resolved)
+    return _http('GET', '/handoff/decisions?' + urlencode(params))
+
+
 for _action in ('show', 'list', 'check'):
     _HANDLERS['sodus_handoff_' + _action] = lambda args, action=_action: _handoff_read(args, action)
+_HANDLERS['sodus_handoff_decisions'] = _handoff_decisions
 
 
 # ---- MCP result helpers ------------------------------------------------

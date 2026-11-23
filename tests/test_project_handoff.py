@@ -269,3 +269,107 @@ def test_check_cli_warning_is_success(project, capsys):
     assert args.func(args) == 0
     result = json.loads(capsys.readouterr().out)
     assert result['errors'] == [] and result['warnings'] == ['head_mismatch']
+
+
+def test_relative_cwd_rows_never_leak_into_sync_or_known_roots(project):
+    handoff.init()
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO run(id,workspace_id,agent,task_id,cwd,status,started_at) VALUES (?,?,?,?,?,?,?)",
+            ('run-rel-dot', config.workspace_id(), 'codex', 'task-leak', '.', 'completed', 100),
+        )
+        conn.execute(
+            "INSERT INTO run(id,workspace_id,agent,task_id,cwd,status,started_at) VALUES (?,?,?,?,?,?,?)",
+            ('run-rel-sub', config.workspace_id(), 'codex', 'task-leak2', 'sub/dir', 'completed', 101),
+        )
+    assert handoff.known_roots() == [project]
+    synced = handoff.sync()['content']
+    auto = synced.partition(handoff.START)[2].partition(handoff.END)[0]
+    block = json.loads(auto.split('```json', 1)[1].split('```', 1)[0])
+    assert block['recent_runs_count'] == 0
+    assert block['schema_version'] == handoff.SCHEMA_VERSION
+    assert 'task-leak' not in synced
+
+
+def test_decision_inbox_draft_close_defer_and_cross_project_mcp(project, mcp_http, capsys):
+    handoff.init()
+    other = project.parent / 'other_proj'
+    other.mkdir()
+    handoff.init(other)
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO run(id,workspace_id,agent,task_id,cwd,status,started_at) VALUES (?,?,?,?,?,?,?)",
+            ('run-other', config.workspace_id(), 'codex', 't-other', str(other), 'completed', 100),
+        )
+
+    d1 = handoff.decide_draft(
+        '采用路线 C 投稿 ICME？',
+        why='方向取舍需要你拍板',
+        background='论文一已有 17 项实验',
+        options=['A. 全力写论文一', 'C. 论文一 + 1周 pilot'],
+        recommend='C',
+        wait_cost='推迟一周错过截稿',
+    )
+    assert d1['id'] == 'D-001'
+    d2 = handoff.decide_draft('是否加 GPU 预算？', cwd=other)
+    assert d2['id'] == 'D-001'
+
+    all_open = handoff.list_decisions(all_projects=True, status='open')
+    assert all_open['count'] == 2
+    assert {item['project'] for item in all_open['decisions']} == {project.name, other.name}
+
+    mcp_res = mcp.call_tool('sodus_handoff_decisions', {'all': True})
+    assert not mcp_res['isError']
+    mcp_payload = json.loads(mcp_res['content'][0]['text'])
+    assert mcp_payload['count'] == 2
+
+    deferred = handoff.decide_close('D-001', decision='等下周再看', status='deferred', cwd=other)
+    assert deferred['status'] == 'deferred'
+    closed = handoff.decide_close('D-001', decision='定为 C', reason='时间充裕', unnecessary=True)
+    assert closed['status'] == 'decided' and closed['unnecessary'] is True
+
+    assert handoff.list_decisions(all_projects=True, status='open')['count'] == 0
+    assert handoff.list_decisions(all_projects=True, status='deferred')['count'] == 1
+    content = handoff.show()['content']
+    assert '### D-001' not in content
+    assert '| D-001 |' in content and '[unnecessary]' in content
+    d3 = handoff.decide_draft('下一步要不要发 0.9.1？')
+    assert d3['id'] == 'D-002'
+
+    args = build_parser().parse_args(['handoff', 'decisions', '--all', '--json'])
+    assert args.needs_daemon is False
+    assert args.func(args) == 0
+    cli_out = json.loads(capsys.readouterr().out)
+    assert cli_out['count'] == 1 and cli_out['decisions'][0]['id'] == 'D-002'
+
+
+def test_decision_parser_handles_sample_and_numbered_headings(project):
+    path = project / 'HANDOFF.md'
+    path.write_text(
+        '---\nsnapshot_at: "2026-11-23T00:00:00+00:00"\n---\n\n'
+        '## 2. 决策记录（已定，别重复问）\n\n'
+        '| 日期 | 决定 | 依据 |\n|---|---|---|\n| 2026-11-22 | 旧决定 | 样板 |\n\n'
+        '## 4. 未决 / 待你拍板\n\n'
+        '### D-003 局部片段会不会碰师兄工作？\n'
+        '- **为什么轮到你**：边界问题\n'
+        '- **状态**：降级，暂缓\n',
+        encoding='utf-8',
+    )
+    items = handoff.parse_decisions(path.read_text(encoding='utf-8'))
+    assert len(items) == 1 and items[0]['id'] == 'D-003' and items[0]['status'] == 'deferred'
+    drafted = handoff.decide_draft('是否先跑 pilot？')
+    assert drafted['id'] == 'D-004'
+    handoff.decide_close('D-004', decision='先跑 1 周', reason='控风险')
+    text = path.read_text(encoding='utf-8')
+    assert '**D-004**' in text and '### D-004' not in text
+
+
+def test_concurrent_decide_draft_allocates_unique_ids(project):
+    from concurrent.futures import ThreadPoolExecutor
+
+    handoff.init()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda i: handoff.decide_draft(f'并发决策 {i}'), range(6)))
+    ids = [r['id'] for r in results]
+    assert len(set(ids)) == 6
+    assert sorted(ids) == [f'D-{i:03d}' for i in range(1, 7)]

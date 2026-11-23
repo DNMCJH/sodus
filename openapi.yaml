@@ -82,6 +82,28 @@ paths:
           description: Array of project metadata and next actions
         "401":
           description: Missing or invalid bearer token
+  /handoff/decisions:
+    get:
+      summary: Read-only project-level decision inbox (single project or aggregated across known projects)
+      parameters:
+        - in: query
+          name: cwd
+          schema: {type: string}
+          description: Existing directory resolving to a known project root (ignored when all=1)
+        - in: query
+          name: all
+          schema: {type: string, enum: ['0', '1', 'true', 'false']}
+          description: Aggregate decisions across all known projects
+        - in: query
+          name: status
+          schema: {type: string, enum: [open, deferred, all]}
+      responses:
+        "200":
+          description: Decision inbox summary and list of D-xxx items
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Unknown project root or invalid status
   /reconcile:
     post:
       summary: Reconcile runs owned by the daemon
@@ -1276,7 +1298,7 @@ components:
               cwd: {type: [string, 'null']}
         counts:
           type: object
-          required: [running, queued, needs_you, unverifiable, proposals, asks_open, memory_candidates]
+          required: [running, queued, needs_you, unverifiable, proposals, asks_open, memory_candidates, open_decisions]
           additionalProperties: false
           properties:
             running: {type: integer, minimum: 0}
@@ -1286,6 +1308,7 @@ components:
             proposals: {type: integer, minimum: 0}
             asks_open: {type: integer, minimum: 0}
             memory_candidates: {type: integer, minimum: 0}
+            open_decisions: {type: integer, minimum: 0}
         today:
           type: object
           required: [CNY, runs, unpriced]
