@@ -283,34 +283,3 @@ def test_a_run_today_proves_the_cli_exists_even_when_path_disagrees(home):
     assert by_key["claude"]["state"] == "idle"
     assert by_key["codex"]["installed"] is False
     assert by_key["codex"]["state"] == "missing"
-
-
-# ---- the board's contract -------------------------------------------------
-
-
-def test_board_carries_the_terminals(home, monkeypatch):
-    terminal = {
-        "key": "dsh",
-        "name": "DSH",
-        "installed": True,
-        "running": True,
-        "state": "running",
-        "last_active": NOW - 5,
-        "binary": "C:\\bin\\dsh.CMD",
-        "log_root": "C:\\dsh\\home\\sessions",
-        "today": {"runs": 1, "sessions": 1, "cost": {"CNY": 0.01}},
-    }
-    monkeypatch.setattr(
-        server.harness_status, "snapshot", lambda conn, **kwargs: [terminal]
-    )
-    board = server.board_state(now=NOW)
-    assert board["terminals"] == [terminal]
-
-
-def test_a_broken_probe_does_not_take_the_board_down(home, monkeypatch):
-    def boom(conn, **kwargs):
-        raise RuntimeError("log directory vanished")
-
-    monkeypatch.setattr(server.harness_status, "snapshot", boom)
-    board = server.board_state(now=NOW)
-    assert board["terminals"] == []

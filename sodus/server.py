@@ -20,26 +20,23 @@ from urllib.parse import parse_qs, urlparse
 
 from . import (
     budget as budget_mod,
-    board,
     state,
     agents,
     config,
     db,
     diagnosis,
+    evidence,
     harness_status,
     jobs,
     ledger,
-    llm,
     memory,
     observe,
-    pet,
     profiles,
     propose,
     providers,
     recover,
     routes,
     runner,
-    ui,
     verify,
     watchdog,
 )
@@ -93,44 +90,11 @@ def body_allowed(length: int) -> bool:
     return 0 <= length <= MAX_BODY
 
 
-# Compatibility for Python consumers of the former presentation helpers.
-board_state = board.board_state
-_day_start = board._day_start
-_today = board._today
-
-
-def __getattr__(name):
-    if hasattr(board, name):
-        return getattr(board, name)
-    raise AttributeError(name)
-
-
-def attention(now: float | None = None) -> dict:
-    """The status light's three numbers, read off `board_state` — not recounted.
-
-    One source, one denominator. `waiting` and `failed` come from the board's
-    `decision_counts`; `running` is the same live-run list the page shows.
-
-    - `waiting`: decisions a person owns (open proposals + a spend gate past
-      the budget), over the board's 50-newest *work* runs and every open
-      proposal. A failure never lands here.
-    - `failed`: terminal runs in that same 50-work-run window whose outcome is
-      not a success — process failed, or completed with red tests. `red` is a
-      subset; live retries are not failures yet. Chat utterances are never in
-      this window (`board_state` asks for `kind="work"`).
-    - `running`: live work runs.
-
-    `statuslight.snapshot` used to count `status == "failed"` itself from a
-    50-row *all kinds* window: chat failures spoke, and a spend decision never
-    did. That second counter is gone.
-    """
-    board = board_state(now)
-    counts = board.get("decision_counts") or {}
-    return {
-        "waiting": int(counts.get("needs_you") or 0),
-        "running": len(board.get("running") or []),
-        "failed": int(counts.get("failed") or 0),
-    }
+def _today(conn, start: float) -> dict:
+    """Today's spend per agent, combining runs and observed harness sessions."""
+    rows = db.runs_in_window(start, conn=conn)
+    rows.extend(observe.observed_runs(start))
+    return ledger.by_agent(rows)
 
 
 def _json(handler: BaseHTTPRequestHandler, code: int, payload) -> None:
@@ -255,15 +219,11 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def _authorized(self) -> bool:
-        # `/` is the board itself: it has to load before anything else can be
-        # requested, and it carries the token for the requests it makes.
-        #
-        # Compare the *path* only. Comparing `self.path` directly fails for the
-        # natural way to open the board, `/?token=...` — the query string makes
-        # it unequal to "/", so a correct token still got 401.
+        # Public loopback-only metadata endpoints: root service info, health
+        # probe, favicon, and the OpenAPI contract.
         path = urlparse(self.path).path or "/"
         if (path == "/" or path.startswith("/health")
-                or path == "/favicon.ico" or path.startswith("/pet")
+                or path == "/favicon.ico"
                 or path.rstrip("/") == "/openapi.yaml"):
             return True
         if authorized(self.headers.get("Authorization", "")):
@@ -343,19 +303,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/":
-            body = board.page()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        if path == "/pet":
-            # Public on purpose: a desktop widget has no way to hold the token,
-            # and this is the same loopback-only machine.
-            return _json(self, 200, pet.state())
+            return _json(
+                self,
+                200,
+                {
+                    "service": "sodus",
+                    "version": config.VERSION,
+                    "state": "/state",
+                    "openapi": "/openapi.yaml",
+                },
+            )
 
         if path == "/health":
             return _json(
@@ -450,11 +407,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/state":
             return _json(self, 200, state.snapshot())
 
-        if path == "/board":
-            return _json(self, 200, board_state())
-
         if path == "/cost/today":
-            start, day = _day_start(time.time())
+            start, _, day = ledger.bounds("day", time.time())
             with db.connect() as conn:
                 today = _today(conn, start)
             return _json(self, 200, {"day": day, **today})
@@ -470,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
                     rows = [r for r in rows if r["conflict"]]
                 rows = rows[:limit]
                 return _json(self, 200, {"count": len(rows), "project": str(memory.project_root(project)), "candidates": rows,
-                    "adopt_hint": "采纳由人做：看看板或 sodus debug memory adopt <id>"})
+                    "adopt_hint": "采纳由人做：sodus debug memory adopt <id>"})
             except (ValueError, OSError) as exc:
                 return _json(self, 400, {"error": str(exc)})
 
@@ -506,18 +460,16 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.split("/")
             rid = parts[2]
             if len(parts) == 3:
-                board._fresh_cache()
+                evidence.fresh_cache()
                 run = db.get_run(rid)
                 if not run:
                     return _json(self, 404, {"error": f"run not found: {rid}"})
                 run["mcp"] = mcp_status_payload(rid)
                 if run.get("status") == "failed":
-                    # The log view and the board must agree on why something
-                    # failed; the wording lives in recover.py, not in the page.
                     run["problem"] = recover.problem_text(run)
-                    run["evidence"] = board._evidence(run, db.verify_states([rid]).get(rid, "none"))
+                    run["evidence"] = evidence.collect(run, db.verify_states([rid]).get(rid, "none"))
                 elif db.verify_states([rid]).get(rid) == "red":
-                    run["evidence"] = board._evidence(run, "red")
+                    run["evidence"] = evidence.collect(run, "red")
                 return _json(self, 200, run)
             if parts[3] == "events":
                 after = int((qs.get("after") or [0])[0])
@@ -660,21 +612,6 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})
             return _json(self, 201, run)
-
-        if path == "/llm/chat":
-            # The desktop pets' only way to a model. One route, one provider,
-            # one credential — the caller names an agent and never an endpoint,
-            # so a pet host needs no key of its own. Failures carry a `kind`
-            # because the caller has to tell "Sodus is down" from "the agent
-            # name is wrong" without parsing prose.
-            status, payload = llm.chat(
-                agent=body.get("agent") or "",
-                messages=body.get("messages"),
-                max_tokens=body.get("max_tokens"),
-                note=str(body.get("note") or ""),
-                cwd=str(body.get("cwd") or ""),
-            )
-            return _json(self, status, payload)
 
         if path == "/memory/remember":
             try:
@@ -829,17 +766,6 @@ def _serve_bound(server, port, host):
     plan.reconcile()
     stalled = jobs.reap(db.list_pipelines("running"))
     server.daemon_threads = True
-    # The pet doubles as a status light: when something new starts waiting on a
-    # human, the desktop pet says so. Off with SODUS_STATUS_LIGHT=0 for anyone
-    # who does not run a pet — it costs one sqlite read per interval and never
-    # speaks unless a count went up.
-    if os.environ.get("SODUS_STATUS_LIGHT", "1") != "0":
-        try:
-            from . import statuslight
-
-            statuslight.start()
-        except Exception:  # a broken pet must never keep the board from serving
-            pass
     _log(f"sodusd {config.VERSION} listening on {host}:{port} (pid {os.getpid()})")
     if reaped:
         _log(f"reaped {len(reaped)} orphaned run(s): " + ", ".join(r["id"] for r in reaped))

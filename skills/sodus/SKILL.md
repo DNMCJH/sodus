@@ -130,7 +130,7 @@ sodus cost      # claude-opus-5-5[1M] 实测单价；标定 ¥0.6817 vs 账单 �
 sodus status    # today runs=14 in=172502 out=2229；relay balance used=784.71 / limit=930.50
 ```
 
-`sodus balance` 只报中转站余额。MCP 的 `sodus_cost_today` 返回今日按 agent 分组的 CNY，看板 <http://127.0.0.1:4199/board> 首屏就是今日花费。上限两处：
+`sodus balance` 只报中转站余额。MCP 的 `sodus_cost_today` 返回今日按 agent 分组的 CNY，`GET /state` 返回轻量只读快照（在跑任务、待处理数、今日花费）。上限两处：
 
 - **每日**：`config.json` 的 `budget.daily_cny`，或环境变量 `SODUS_DAILY_BUDGET`。只累计 CNY，到顶拒绝新 run，不杀正在跑的。
 - **任务**：`budget_json.max_cost` / `max_runs`。

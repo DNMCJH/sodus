@@ -47,15 +47,8 @@ def test_the_four_entry_points_name_one_cause(expected, error):
     assert recover.cause(run) == answer.cause
     # 2. the retry class
     assert recover.classify(run) == answer.failure_class
-    # 3. the board's failure line
-    assert server._failure_kind(run, {}, "none") == answer.kind
-    # 4. the cause line the UI renders
-    assert server._likely_cause(run, {}, "none").startswith(
-        f"大概率是{answer.label}"
-    )
     # kind and label are two names for one table, not two tables.
     assert answer.kind == answer.label
-    assert answer.label in server.CAUSE_LABELS
 
 
 def test_a_red_test_is_the_fourth_entry_point_on_a_completed_run():
@@ -68,8 +61,7 @@ def test_a_red_test_is_the_fourth_entry_point_on_a_completed_run():
     assert answer.failure_class == "human"
     assert recover.cause(run, facts) == "tests-red"
     assert recover.classify(run, facts) == "human"
-    assert server._failure_kind(run, evidence, "red") == "测试红"
-    assert server._likely_cause(run, evidence, "red").startswith("大概率是测试红")
+    assert answer.kind == "测试红"
 
 
 def test_a_failed_run_with_no_record_is_no_change_not_a_guess():
@@ -81,8 +73,7 @@ def test_a_failed_run_with_no_record_is_no_change_not_a_guess():
     assert answer.failure_class == "human"
     assert recover.cause(run, facts) == "no-change"
     assert recover.classify(run, facts) == "human"
-    assert server._failure_kind(run, {}, "none") == "证据缺失"
-    assert server._likely_cause(run, {}, "none").startswith("大概率是证据缺失")
+    assert answer.kind == "证据缺失"
 
 
 def test_a_completed_run_is_not_a_failure():
@@ -109,8 +100,6 @@ def test_every_cause_has_exactly_one_class_one_kind_and_one_sentence():
         detail = f"大概率是{diagnosis.label(cause)}（报错是 whatever）"
         assert diagnosis.advice(detail) == diagnosis.advice_of(cause)
         assert diagnosis.fix(detail) == diagnosis.fix_of(cause)
-    # The labels the board shows are the labels this module emits.
-    assert tuple(diagnosis.label(cause) for cause in diagnosis.CAUSES) == server.CAUSE_LABELS
 
 
 def test_a_signature_with_no_error_text_still_gets_a_sentence():

@@ -46,7 +46,6 @@ def _stub(monkeypatch, reads_memory_files: bool = False):
     monkeypatch.setattr(providers, "load", lambda: {"p0": provider})
     monkeypatch.setattr(agents, "get", lambda name: spec)
     monkeypatch.setattr(agents, "missing", lambda spec, value, secrets: [])
-    monkeypatch.setattr(runner.pet, "narrate", lambda *args, **kwargs: None)
 
     def fake_attempt(
         self, rid, index, spec, provider, workdir, secrets, profile_name,

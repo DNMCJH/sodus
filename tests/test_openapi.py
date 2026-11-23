@@ -51,13 +51,11 @@ def test_every_operation_has_responses(spec):
 
 
 def test_public_endpoints_opt_out_of_auth(spec):
-    # These five are deliberately reachable without the token: the board has to
-    # load before it can send one, and the pet/probe/contract have no token at
-    # all. Everything else inherits the global bearer requirement.
+    # These four loopback metadata endpoints are reachable without the token.
+    # Everything else inherits the global bearer requirement.
     expected = {
         ("get", "/"),
         ("get", "/health"),
-        ("get", "/pet"),
         ("get", "/favicon.ico"),
         ("get", "/openapi.yaml"),
     }
@@ -77,10 +75,8 @@ def test_contract_covers_every_route_server_serves(spec):
         ("get", "/handoff/check"),
         ("get", "/"),
         ("get", "/health"),
-        ("get", "/pet"),
         ("get", "/favicon.ico"),
         ("get", "/openapi.yaml"),
-        ("get", "/board"),
         ("get", "/state"),
         ("get", "/cost/today"),
         ("get", "/memory/harvest"),
@@ -120,7 +116,6 @@ def test_contract_covers_every_route_server_serves(spec):
         ("post", "/proposals/{id}/merge"),
         ("post", "/proposals/{id}/reject"),
         ("post", "/memory/adopt"),
-        ("post", "/llm/chat"),
         ("get", "/events"),
     }
     actual = {
@@ -132,32 +127,11 @@ def test_contract_covers_every_route_server_serves(spec):
     assert actual == expected
 
 
-def test_board_contract_declares_the_recovery_fields(spec):
-    # The page reads these; `additionalProperties: false` would make the real
-    # response invalid the moment the daemon added them without the contract.
-    board = spec["components"]["schemas"]["Board"]
-    added = {"unverified_runs", "needs_you", "auto_recovering", "deterministic",
-             "history_failures", "memory_candidates"}
-    assert added <= set(board["properties"])
-    assert added <= set(board["required"])
-    counts = spec["components"]["schemas"]["DecisionCounts"]
-    assert {"needs_you", "auto_recovering", "deterministic", "history_failed"} <= set(
-        counts["required"]
-    )
-
-
-def test_board_contract_declares_the_terminals(spec):
-    # The board serves `terminals`; `additionalProperties: false` means an
-    # undeclared field would make the real response invalid.
-    board = spec["components"]["schemas"]["Board"]
-    assert "terminals" in board["properties"]
-    assert "terminals" in board["required"]
-    terminal = spec["components"]["schemas"]["Terminal"]
-    assert {
-        "key", "name", "installed", "running", "state", "last_active",
-        "binary", "log_root", "today",
-    } <= set(terminal["required"])
-    assert terminal["properties"]["state"]["enum"] == ["running", "idle", "missing"]
+def test_retired_routes_and_schemas_absent_from_openapi(spec):
+    for retired in ("/pet", "/board", "/llm/chat"):
+        assert retired not in spec["paths"]
+    for schema_name in ("Board", "PetState", "LlmChatRequest", "LlmChatResult", "LlmError"):
+        assert schema_name not in spec["components"]["schemas"]
 
 
 def test_openapi_yaml_is_served_without_a_token():

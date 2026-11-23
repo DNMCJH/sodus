@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
-from . import board, config, db, ledger, memory, observe, recover
+from . import config, db, ledger, lifecycle, memory, observe, recover
 
 TTL = 1.5
 _LOCK = threading.Lock()
@@ -31,7 +31,7 @@ def snapshot(now=None):
     global _CACHE
     now = time.time() if now is None else now
     workspace = config.workspace_id()
-    start, _ = board._day_start(now)
+    start, _, _ = ledger.bounds("day", now)
     key = (str(config.HOME.resolve()), workspace, start, str(memory.saved_project()))
     conn = db.connect()
     try:
@@ -51,7 +51,7 @@ def snapshot(now=None):
     runs = db.list_runs(limit=50, kind="work")
     states = db.verify_states([r["id"] for r in runs])
     spend = sum(1 for r in runs if r["status"] == "failed" and recover.classify(r) != "deterministic"
-                and recover.enabled() and recover.retry_plan(r, now=now)["gate"] in board.SPEND_GATES)
+                and recover.enabled() and recover.retry_plan(r, now=now)["gate"] in lifecycle.AWAITING_HUMAN_GATES)
     unverifiable = int(any(r["status"] == "completed" and states.get(r["id"], "none") == "none" for r in runs))
     return {"version": "0.9.0", "workspace_id": workspace, "now": now,
             "running": live, "counts": {"running": statuses.get("running", 0), "queued": statuses.get("queued", 0),

@@ -3,7 +3,7 @@
 import inspect
 import os
 
-from sodus import board, config, daemon, observe, pet, plan, propose, review, runner, verify
+from sodus import config, daemon, evidence, observe, plan, propose, review, runner, verify
 
 
 def test_no_window_flag_is_windows_only_constant():
@@ -15,7 +15,7 @@ def test_every_console_spawn_site_opts_out_of_a_window():
     # taskkill, zstd, pytest). Popen on the worker path already uses
     # CREATE_NO_WINDOW; these subprocess.run sites used to pop a console
     # window when the daemon had no console of its own.
-    for mod in (verify, propose, plan, review, observe, daemon, runner):
+    for mod in (evidence, verify, propose, plan, review, observe, daemon, runner):
         src = inspect.getsource(mod)
         runs = src.count("subprocess.run(")
         flags = src.count("creationflags=config.NO_WINDOW")

@@ -18,7 +18,6 @@ from ... import (
     db,
     decision,
     daemon,
-    desk as desk_view,
     harness,
     ledger,
     policy,
@@ -180,11 +179,6 @@ def add(sub) -> None:
     p.add_argument("--stale", type=int, default=900)
     p.set_defaults(func=reconcile)
 
-    p = sub.add_parser("desk", help="render a markdown progress page (for a vault dashboard)")
-    p.add_argument("--out", help="write to this path; default prints to stdout")
-    p.add_argument("--limit", type=int, default=15, help="how many tasks (default 15)")
-    p.set_defaults(func=desk, needs_daemon=False)
-
     p = sub.add_parser("locks", help="which working directories have a writer")
     p.set_defaults(func=locks, needs_daemon=False)
 
@@ -307,18 +301,6 @@ def mcp_cmd(args) -> int:
     from ... import mcp as mcp_server
 
     return mcp_server.serve()
-
-
-def desk(args) -> int:
-    text = desk_view.render(desk_view.collect(args.limit))
-    if not args.out:
-        print(text)
-        return 0
-    path = Path(args.out).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    print(path)
-    return 0
 
 
 def up_cmd(args) -> int:

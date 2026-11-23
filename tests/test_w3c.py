@@ -118,27 +118,3 @@ def test_rollback_cli(tmp_path,capsys):
     memory.apply_ops(target,[dict(op='add',text='- alpha')])
     assert main(['memory','rollback','--to','1','--project',str(tmp_path)],prog='sodus') == 0
     assert json.loads(capsys.readouterr().out)['memory_version'] == 2
-
-
-def test_review_controls_and_board(tmp_path):
-    from sodus import server, ui
-    cid = db.memory_add_candidate('board fact',workspace=str(tmp_path))
-    row = server._memory_board()[0]
-    assert row['id'] == cid and row['version'] == 1
-    assert row['evidence_count'] == 0 and row['status'] == 'proposed'
-    for action in ['reject','edit','retire']:
-        assert "','"+action+"')" in ui.PAGE
-    assert 'encodeURIComponent(id)' in ui.PAGE
-    assert '版本已变化，请刷新后重试' in ui.PAGE
-
-
-def test_memory_board_merges_staged_and_harvest(monkeypatch, tmp_path):
-    from sodus import memory, server
-    staged = db.memory_add_candidate('same fact', workspace=str(tmp_path))
-    harvest = [{'id':'h', 'text':'harvest fact', 'sources':[], 'conflict':False, 'adopted':False},
-               {'id':'dup', 'text':'same fact', 'sources':[], 'conflict':False, 'adopted':False}]
-    monkeypatch.setattr(memory, 'saved_project', lambda: tmp_path)
-    monkeypatch.setattr(memory, 'harvest', lambda _: harvest)
-    rows = server._memory_board()
-    assert {r['text'] for r in rows} == {'same fact', 'harvest fact'}
-    assert any(r['id'] == staged for r in rows)

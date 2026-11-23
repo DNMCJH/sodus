@@ -62,7 +62,6 @@ DEBUG_COMMANDS = (
     "reconcile",
     "locks",
     "unlock",
-    "desk",
     # runs
     "tasks",
     "watch",

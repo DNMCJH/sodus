@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 
 import pytest
-from sodus import board, config, db, observe, server, state
+from sodus import config, db, observe, server, state
 
 
 @pytest.fixture
@@ -41,8 +41,6 @@ def test_schema_counts_and_ledger(home, monkeypatch):
     for status in ("queued", "running", "answered", "failed"):
         ask(status)
     db.memory_add_candidate("pending")
-    # A board render is deliberately forbidden in the lightweight endpoint.
-    monkeypatch.setattr(board, "board_state", lambda *a: pytest.fail("full board called"))
     got = state.snapshot(now)
     assert set(got) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
     assert got["version"] == "0.9.0"

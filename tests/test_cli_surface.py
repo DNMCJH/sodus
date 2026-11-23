@@ -121,7 +121,6 @@ def test_debug_lists_the_long_tail_and_every_entry_runs(capsys):
     for name in (
         "lineage",
         "report",
-        "desk",
         "topology",
         "probe",
         "reconcile",
@@ -130,6 +129,7 @@ def test_debug_lists_the_long_tail_and_every_entry_runs(capsys):
         "handoff",
     ):
         assert name in text
+    assert "    desk " not in text
     # Every entry answers --help from inside the namespace, so none of them
     # fell out while the tree was being assembled.
     for name in DEBUG_COMMANDS:

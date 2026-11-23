@@ -33,7 +33,7 @@ def test_sum_events_treats_a_broken_payload_as_nothing():
     assert usage.tokens.output == 3
 
 
-def test_live_rows_sum_usage_events_through_ledger(tmp_path, monkeypatch):
+def test_sum_events_aggregates_db_usage_events(tmp_path, monkeypatch):
     run = _running_run(tmp_path, monkeypatch)
     for seq, payload in enumerate(
         [
@@ -43,25 +43,13 @@ def test_live_rows_sum_usage_events_through_ledger(tmp_path, monkeypatch):
         start=1,
     ):
         db.append_event(run["id"], seq, "usage", payload)
-    conn = db.connect()
-    try:
-        rows = server._live_rows(conn, time.time())
-    finally:
-        conn.close()
-    row = next(r for r in rows if r["id"] == run["id"])
-    assert row["tokens"] == {"input": 10, "output": 10}
-    assert row["partial_cost"] == 0.3
-    assert row["partial_currency"] == "USD"
-
-
-def test_live_rows_without_usage_events_report_nothing(tmp_path, monkeypatch):
-    run = _running_run(tmp_path, monkeypatch)
-    conn = db.connect()
-    try:
-        rows = server._live_rows(conn, time.time())
-    finally:
-        conn.close()
-    row = next(r for r in rows if r["id"] == run["id"])
-    assert row["tokens"] == {"input": 0, "output": 0}
-    assert row["partial_cost"] is None
-    assert row["partial_currency"] == ""
+    with db.connect() as conn:
+        so_far = ledger.sum_events(
+            ev["payload_json"]
+            for ev in conn.execute(
+                "SELECT payload_json FROM event WHERE run_id=? AND type='usage'",
+                (run["id"],),
+            )
+        )
+    assert (so_far.tokens.input, so_far.tokens.output) == (10, 10)
+    assert round(so_far.cost.amount, 6) == 0.3

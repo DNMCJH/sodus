@@ -68,11 +68,11 @@ sodus/observe_magpie.py / observe_ccswitch.py  第三方用量日志的只读覆
 sodus/harness_status.py 五个终端：装没装、在不在跑、今天多少（只读，不启动任何东西）
 sodus/memory.py       记忆摘要：读各 harness 已有的 AGENTS/CLAUDE 文件，等人采纳
 sodus/bench.py        任务级评测：hidden_tests 打分，不看 agent 自述
-sodus/llm.py          宠物的一句话聊天：按 agent 走路由，限 400 token / 10 次每分钟
 sodus/mcp.py          MCP stdio 服务：sodus_task_create / run / run_status / proposals / cost_today /
-                      memory_remember / memory_candidates（2026-11-08 校准时补列）
-sodus/ui.py / desk.py / decision.py / pet.py / mood.py / statuslight.py  看板与桌面层：只读 server 的
-                      board_state / attention，不自己判状态（2026-11-08 校准时补列）
+                      memory_remember / memory_candidates / ask / handoff
+sodus/evidence.py     单条失败/测试红 run 的只读证据装配（供 GET /runs/{id} 与 sodus show）
+sodus/state.py        轻量只读状态快照（GET /state）；看板与桌宠层（ui/board/pet/mood/statuslight/desk/llm）已退役
+sodus/decision.py     路由决策辅助与策略快照
 sodus/db.py           SQLite：所有读取都按 workspace 过滤；工作目录写锁；`runs_in_window`
                       是「今天取哪些行」的唯一 SQL（看板、stats、预算闸、终端面板共用）
 sodus/config.py       路径、token、secrets、用户配置、当前 profile
@@ -404,10 +404,11 @@ filesystem harvest. `needs_you` follows board's 50-work-run window and capped op
 proposal list; `unverifiable` is the board section count (0 or 1), not run count.
 It never calls full `board_state`, git, evidence rendering or harness probes.
 
-`sodus/board.py` owns board projections, evidence, wording and the HTML serialization
-entry; `sodus/ui.py` retains the unchanged page template. `/board` and Python
-`server.board_state` keep their existing response keys, and existing pet/statuslight
-readers keep their behavior. HTTP routing, authentication and SSE stay in server.
+`sodus/evidence.py` owns per-run failure/red-test evidence assembly for `GET /runs/{id}`.
+The legacy HTML board, desktop pet, statuslight, desk, and `/llm/chat` modules (`board.py`,
+`ui.py`, `pet.py`, `mood.py`, `statuslight.py`, `desk.py`, `llm.py`) have been retired in
+favor of the headless `/state` + CLI + MCP contract. HTTP routing, authentication and SSE
+stay in `server.py`.
 
 
 ### 项目 handoff 控制台迁移与检查

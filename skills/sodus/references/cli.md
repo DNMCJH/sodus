@@ -125,13 +125,13 @@ scope：`private`（只属一个 agent）、`project`（当前 workspace）、`p
 ## HTTP 接口
 
 地址 `http://127.0.0.1:4199`，绑 loopback；要对外得设 `SODUS_ALLOW_REMOTE=1`。
-除 `/`、`/health`、`/pet`、`/favicon.ico` 外都需要
+除 `/`、`/health`、`/favicon.ico`、`/openapi.yaml` 外都需要
 `Authorization: Bearer <token>`，token 在 `%USERPROFILE%\.sodus\token`。
 
 ```text
-GET  /health               {"ok": true, "version": "0.4.0", "profile": "default", "home": "…"}
-GET  /openapi.yaml         OpenAPI 3.1，48KB
-GET  /board                看板 HTML（首屏：在跑的、等你的、今日花费）
+GET  /health               {"ok": true, "version": "0.9.0", "profile": "default", "home": "…"}
+GET  /openapi.yaml         OpenAPI 3.1 契约
+GET  /state                轻量只读状态快照（在跑的、等人的、今日花费、ask 与记忆候选计数）
 GET  /agents               每个 agent 的 ready + missing
 GET  /routes               每条路由的 ready + problems
 GET  /providers  /profiles

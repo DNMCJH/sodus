@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from sodus import ui
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -40,14 +38,3 @@ def test_the_sodus_console_script_shows_sodus():
     assert proc.returncode == 0, _text(proc)
     text = _text(proc)
     assert "usage: sodus" in text
-
-
-def test_the_board_page_says_sodus():
-    assert "<title>Sodus</title>" in ui.PAGE
-    assert "<h1>SODUS</h1>" in ui.PAGE
-    assert "Sodus" in ui.PAGE
-    assert "NODUS" not in ui.PAGE
-
-
-def test_the_theme_key_is_sodus():
-    assert 'localStorage.getItem("sodus-theme")' in ui.PAGE

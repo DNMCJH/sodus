@@ -500,15 +500,15 @@ def test_http_adopt_reports_a_write_failure(env, board_server, monkeypatch):
     assert "read-only file system" in body["error"]
 
 
-def test_the_board_lists_only_pending_candidates(env, board_server):
+def test_harvest_marks_adopted_and_pending_candidates(env, board_server):
     write(env.project / "AGENTS.md", "- 构建用 pnpm\n- 先跑 pytest\n")
     memory.adopt([_only(env.project, "构建用 pnpm")["id"]], env.project)
 
-    status, body = board_server.get("/board", config.token())
+    status, body = board_server.get("/memory/harvest", config.token())
     assert status == 200
-    texts = [row["text"] for row in body["memory_candidates"]]
-    assert "构建用 pnpm" not in texts
-    assert "先跑 pytest" in texts
+    pending = [row["text"] for row in body["candidates"] if not row["adopted"]]
+    assert "构建用 pnpm" not in pending
+    assert "先跑 pytest" in pending
 
 
 
@@ -583,7 +583,6 @@ def _stub_execution(monkeypatch, reads_memory_files: bool):
     monkeypatch.setattr(providers, "load", lambda: {"p0": provider})
     monkeypatch.setattr(agents, "get", lambda name: spec)
     monkeypatch.setattr(agents, "missing", lambda spec, value, secrets: [])
-    monkeypatch.setattr(runner.pet, "narrate", lambda *args, **kwargs: None)
 
     def fake_attempt(
         self, rid, index, spec, provider, workdir, secrets, profile_name,

@@ -33,7 +33,7 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 ### 硬规则（用户明确要求，改之前先问）
 
 - 跑 sodus 不要弹终端窗口；console 子进程必须带 CREATE_NO_WINDOW。
-- 重大/有争议的方案先让 sodus 派 opus + sol 并行评审，再综合；不要单模型拍板。
+- 重大/有争议的方案先让 sodus 派多家族并行盲评（默认 `sol + dsh/neon`，高端裁决用 `fable` 替代 `opus`）再综合；不要单模型拍板。
 - 不做 n=1/n=3 的统计结论；效率结论必须来自预注册的配对实验（见 §5）。
 - main 必须可回退；每个阶段跑全量 pytest + scripts/release_check.ps1 并留证据。
 - 预算没有日硬上限；relay 余额是硬约束。模型族软上限：claude/opus ¥100、gpt ¥80、other ¥80（只拦新 run，--allow-expensive 可豁免）。

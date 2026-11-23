@@ -255,40 +255,15 @@ def test_a_worker_owned_by_another_process_is_not_killed(home, monkeypatch):
     assert result["stalled"][0]["worker"] == "not-owned"
 
 
-# ---- the board and the light ------------------------------------------
+def test_a_stalled_run_is_not_counted_as_needs_you_in_state(home):
+    from sodus import state
 
-
-def test_a_stalled_run_is_stopped_not_a_question_or_active_work(home):
     run = seed(home, age=1200)
     watchdog.sweep()
-
-    board = server.board_state()
-
-    assert all(item.get("run") != run["id"] for item in board["needs_you"])
-    assert all(item.get("run") != run["id"] for item in board["handling"])
-    entry = next(item for item in board["stopped"] if item.get("run") == run["id"])
-    assert entry["kind"] == "stopped"
-    assert entry["stop_reason"] == "stalled"
-    assert entry["failure_kind"] == ""
-    assert "无实质进展" in entry["statement"]
-    assert "tool_call" in entry["why"]
-    assert "不会重试" in entry["plan"]
-    # The row is part of the existing stopped length; no fifth counter, and
-    # `failed` is still only terminal failures.
-    assert board["decision_counts"]["stopped"] == len(board["stopped"])
-    assert board["decision_counts"]["failed"] == 0
-    assert board["running"] == []
-
-
-def test_the_pet_light_does_not_call_a_stall_a_failure(home):
-    run = seed(home, age=1200)
-    watchdog.sweep()
-
-    # `attention` is the status light's one source. A stall is not a spend
-    # decision and not a terminal failure, so it does not speak: the board row
-    # is the notice. Inventing a third light number would be the S3 bug again.
-    assert server.attention() == {"waiting": 0, "running": 0, "failed": 0}
     assert db.get_run(run["id"])["status"] == "stalled"
+    snap = state.snapshot()
+    assert snap["counts"]["needs_you"] == 0
+    assert any(r["id"] == run["id"] for r in snap["running"])
 
 
 def test_serve_starts_the_watchdog_unless_turned_off():

@@ -272,18 +272,12 @@ def test_every_recover_gate_has_an_attention_bucket():
     assert found <= covered, f"gates with no attention bucket: {sorted(found - covered)}"
 
 
-def test_spend_gates_are_the_board_s_spend_gates():
-    assert lifecycle.AWAITING_HUMAN_GATES == server.SPEND_GATES
+def test_spend_gates_match_state_module():
+    assert lifecycle.AWAITING_HUMAN_GATES == ("budget", "cost-cap", "over-budget")
 
 
-def test_retry_pending_is_the_board_s_handling_pair():
-    # Both `_stopped` and `recover.recovering` treat exactly ("", "backoff") as
-    # "the machine is on it". Pin the literal so a third value cannot appear
-    # on one side only.
-    board_source = inspect.getsource(server._stopped) + inspect.getsource(
-        recover.recovering
-    )
-    assert '("", "backoff")' in board_source
+def test_retry_pending_is_the_recover_handling_pair():
+    assert '("", "backoff")' in inspect.getsource(recover.recovering)
     assert lifecycle.RETRY_PENDING_GATES == ("", "backoff")
 
 
@@ -385,38 +379,31 @@ def _facts(run: dict, now: float | None = None) -> dict:
 
 def test_a_retryable_failure_is_handling(home):
     run = _seed(home, "exit code 1")
-    board = server.board_state()
-    entry = next(item for item in board["handling"] if item.get("run") == run["id"])
     facts = _facts(run)
     assert facts["retry_gate"] in lifecycle.RETRY_PENDING_GATES
     assert lifecycle.needs_attention(run, facts) == "retry-pending"
-    assert entry["kind"] == "handling"
 
 
 def test_a_deterministic_failure_is_stopped_not_asked(home):
+    from sodus import state
+
     run = _seed(home, "401 Unauthorized: invalid api key")
-    board = server.board_state()
-    assert all(item.get("run") != run["id"] for item in board["needs_you"])
-    stopped = next(item for item in board["stopped"] if item.get("run") == run["id"])
     facts = _facts(run)
     assert facts["retry_gate"] == "deterministic"
     assert lifecycle.needs_attention(run, facts) == "done"
-    assert stopped["stop_reason"] == "deterministic"
+    assert state.snapshot()["counts"]["needs_you"] == 0
 
 
 def test_the_money_gate_is_the_only_human_question(home, monkeypatch):
-    # Same shape as the board's own budget test: 0.9 CNY already spent today,
-    # a 1.0 ceiling leaves 0.1, and the failed run itself cost 0.4. The retry
-    # is refused for money, which is the only failure a person is asked about.
+    from sodus import state
+
     _seed(home, "", status="completed", usage={"cost": 0.5, "currency": "CNY"})
     run = _seed(home, "exit code 1", usage={"cost": 0.4, "currency": "CNY"})
     monkeypatch.setenv("SODUS_DAILY_BUDGET", "1.0")
-    board = server.board_state()
-    entry = next(item for item in board["needs_you"] if item.get("run") == run["id"])
-    assert entry["kind"] == "budget"
     facts = _facts(run)
     assert facts["retry_gate"] == "budget"
     assert lifecycle.needs_attention(run, facts) == "awaiting-human"
+    assert state.snapshot()["counts"]["needs_you"] == 1
 
 
 # ---- 20 real historical runs -------------------------------------------
@@ -519,16 +506,6 @@ def test_twenty_real_runs_agree_with_recover_lineage_and_the_board(history):
     ids = [run["id"] for run in sample]
     marks = db.verify_states(ids)
     now = time.time()
-    board = server.board_state(now=now)
-    where: dict[str, str] = {}
-    for bucket in ("needs_you", "handling", "stopped"):
-        for item in board[bucket]:
-            if str(item.get("kind") or "") == "proposal":
-                # A proposal is its own entity; needs_attention is about runs.
-                continue
-            run_id = str(item.get("run") or "")
-            if run_id:
-                where.setdefault(run_id, bucket)
 
     mismatches: list[str] = []
     tokens: dict[str, int] = {}
@@ -616,24 +593,6 @@ def test_twenty_real_runs_agree_with_recover_lineage_and_the_board(history):
                 assert not (row["ok"] and row["unverified"])
                 if status != "completed":
                     assert not row["ok"] and not row["unverified"]
-
-        # the board's grouping -> the same three tokens. A live retry child
-        # sits in the board's handling block while its run is still `running`;
-        # `needs_attention` has no "machine is already doing it" token for a
-        # live row (it returns "" unless stalled), so the mapping only applies
-        # to rows that have stopped.
-        bucket = where.get(run_id)
-        if status in ("queued", "running"):
-            bucket = ""
-        expected = {
-            "needs_you": "awaiting-human",
-            "handling": "retry-pending",
-            "stopped": "done",
-        }.get(bucket or "")
-        if expected and token != expected:
-            mismatches.append(
-                f"{run_id}: board={bucket}, lifecycle={token!r} (expected {expected!r})"
-            )
 
     assert not mismatches, "lifecycle disagrees with the code it was copied from:\n" + "\n".join(
         mismatches

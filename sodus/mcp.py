@@ -147,7 +147,7 @@ TOOLS: list[dict] = [
         "description": (
             "只读：列出各 harness 记忆文件（CLAUDE.md / AGENTS.md）里抽出来的候选事实，"
             "带来源路径、是否与另一条冲突、是否已采纳。"
-            "采纳是人做的（看看板 / sodus debug memory adopt），agent 不能替人决定。"
+            "采纳是人做的（sodus debug memory adopt），agent 不能替人决定。"
         ),
         "inputSchema": _schema(
             {

@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, harness, lineage, memory, meter, pet, policy, pricing, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, budget, config, db, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -644,8 +644,6 @@ class Runner:
             },
         )
         db.update_run(rid, status="running", started_at=time.time())
-        # agent= 选哪只桌宠说话（pet_bridge.pet_agents 映射），不写就落到默认那只
-        pet.narrate("", "working", route.name)
 
         table = providers.load()
         attempts: list[dict] = []
@@ -1067,17 +1065,11 @@ class Runner:
             error=err or None,
             provider=chosen["provider"],
         )
-        mood = "done" if status == "completed" else "error"
         try:
             from .episodes import record_episode
             record_episode(db.get_run(rid), verify_mark)
         except Exception:
             logging.getLogger(__name__).exception("Could not record episode for %s", rid)
-        if verify_mark == "red":
-            mood = "error"
-        elif status == "completed" and verify_mark == "none":
-            mood = "tidying"
-        pet.narrate(pet.describe(db.get_run(rid), verify_mark), mood, route.name)
         self._emit(
             rid,
             "run.completed" if status == "completed" else "run.failed",
