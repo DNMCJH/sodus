@@ -136,7 +136,7 @@ open=queued，running=running+stalled，done=answered+promoted，failed=failed�
 ask 运行归 daemon 所有，MCP 退出后仍可按 id 轮询；所有 MCP run 工具也由同一 daemon 执行。
 
 
-Memory review (0.6) uses the dashboard or HTTP `GET /memory/candidates` and
+Memory review uses local CLI (`sodus debug memory candidates`, `candidate-adopt <id>`, `candidate-reject <id>`) or HTTP `GET /memory/candidates` and
 `POST /memory/candidates/{id}` with `{action, version, text?}`. Actions are
 `adopt`, `reject`, `edit`, `retire`; stale versions return 409. There is no new MCP
 review tool. Historical memory rollback is local CLI: `sodus memory rollback --to V`.

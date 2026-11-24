@@ -48,6 +48,17 @@ def add(sub):
     decisions.add_argument('--json', action='store_true')
     decisions.set_defaults(func=execute, needs_daemon=False)
 
+    reg = commands.add_parser('register', help='register a project in ~/.sodus/projects.json')
+    reg.add_argument('path', nargs='?', default=None, help='project directory (default: cwd)')
+    reg.add_argument('--name', default=None, help='optional display name')
+    reg.add_argument('--json', action='store_true')
+    reg.set_defaults(func=execute, needs_daemon=False)
+
+    unreg = commands.add_parser('unregister', help='remove a project from ~/.sodus/projects.json')
+    unreg.add_argument('path', nargs='?', default=None, help='project directory (default: cwd)')
+    unreg.add_argument('--json', action='store_true')
+    unreg.set_defaults(func=execute, needs_daemon=False)
+
 
 def execute(args):
     name = args.handoff_cmd
@@ -58,6 +69,10 @@ def execute(args):
             result = handoff.append(args.text, args.section)
         elif name == 'list':
             result = handoff.list_projects()
+        elif name == 'register':
+            result = handoff.register_project(args.path, name=args.name)
+        elif name == 'unregister':
+            result = handoff.unregister_project(args.path)
         elif name == 'decide-draft':
             result = handoff.decide_draft(
                 args.title,

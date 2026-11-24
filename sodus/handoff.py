@@ -46,6 +46,10 @@ _DECISION_HEADING_RE = re.compile(r'^###\s+(D-\d{3,})\s+(.+?)\s*$', re.M)
 _DECISION_ID_RE = re.compile(r'\bD-(\d{3,})\b')
 _LOCK_STALE_SECONDS = 30.0
 _LOCK_WAIT_SECONDS = 5.0
+_DECISION_CACHE: dict[tuple[str, int, int], list[dict]] = {}
+_DECISION_CACHE_MAX = 512
+_ROOTS_CACHE: tuple[tuple, float, list[Path]] | None = None
+_ROOTS_TTL = 10.0
 
 
 def git(root, *args):
@@ -62,15 +66,48 @@ def git(root, *args):
         return ''
 
 
+def _find_git_root_fast(path: Path, git_cache: dict[str, str | None] | None = None) -> Path:
+    """Locate the enclosing git repository/worktree root without spawning git.
+
+    Checking for `.git` (directory for normal repos, file for worktrees and
+    submodules) matches `git rev-parse --show-toplevel` for local paths while
+    keeping root resolution sub-millisecond across hundreds of stored cwds.
+    """
+    cur = str(path)
+    visited: list[str] = []
+    found: str | None = None
+    while True:
+        if git_cache is not None and cur in git_cache:
+            found = git_cache[cur]
+            break
+        visited.append(cur)
+        if os.path.exists(os.path.join(cur, '.git')):
+            found = cur
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            found = None
+            break
+        cur = parent
+    if git_cache is not None:
+        for d in visited:
+            git_cache[d] = found
+    return Path(found) if found is not None else path
+
+
 def project_root(cwd=None):
     path = Path(cwd or Path.cwd()).expanduser().resolve()
     if not path.is_dir():
         raise ValueError('cwd must be an existing directory')
-    return Path(git(path, 'rev-parse', '--show-toplevel') or path).resolve()
+    return _find_git_root_fast(path)
 
 
-def _stored_root(raw_cwd, cache: dict[str, Path | None] | None = None) -> Path | None:
-    """Resolve a persisted DB cwd strictly.
+def _stored_root(
+    raw_cwd,
+    cache: dict[str, Path | None] | None = None,
+    git_cache: dict[str, str | None] | None = None,
+) -> Path | None:
+    """Resolve a persisted DB cwd strictly without redundant Windows resolve() syscalls.
 
     Relative paths such as '.' are rejected so historical test rows or
     daemon-relative runs can never be misattributed to whichever project runs
@@ -82,11 +119,12 @@ def _stored_root(raw_cwd, cache: dict[str, Path | None] | None = None) -> Path |
     if cache is not None and key in cache:
         return cache[key]
     try:
-        path = Path(key).expanduser()
-        if not path.is_absolute() or not path.is_dir():
+        expanded = os.path.expanduser(key)
+        if not os.path.isabs(expanded) or not os.path.isdir(expanded):
             result = None
         else:
-            result = project_root(path)
+            norm = Path(os.path.normpath(expanded))
+            result = _find_git_root_fast(norm, git_cache=git_cache)
     except (ValueError, OSError):
         result = None
     if cache is not None:
@@ -94,9 +132,10 @@ def _stored_root(raw_cwd, cache: dict[str, Path | None] | None = None) -> Path |
     return result
 
 
-def _is_daemon_home(root: Path) -> bool:
+def _is_daemon_home(root: Path, home_norm: str | None = None) -> bool:
     try:
-        return root.resolve() == config.HOME.resolve()
+        target = home_norm if home_norm is not None else os.path.normcase(os.path.normpath(str(config.HOME)))
+        return os.path.normcase(os.path.normpath(str(root))) == target
     except OSError:
         return False
 
@@ -106,9 +145,13 @@ def console_path(root):
     return (path if path.is_absolute() else Path(root) / path).resolve()
 
 
+def projects_registry_path() -> Path:
+    return config.HOME / 'projects.json'
+
+
 def registered_projects() -> list[dict]:
     """Optional explicit project registry (`~/.sodus/projects.json`)."""
-    reg = config.HOME / 'projects.json'
+    reg = projects_registry_path()
     if not reg.is_file():
         return []
     try:
@@ -119,17 +162,108 @@ def registered_projects() -> list[dict]:
     if not isinstance(items, list):
         return []
     out: list[dict] = []
+    cache: dict[str, Path | None] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
         if item.get('active', True) is False:
             continue
         raw_root = item.get('root') or item.get('path')
-        root = _stored_root(raw_root) if raw_root else None
+        root = _stored_root(raw_root, cache=cache) if raw_root else None
         if root is None:
             continue
         out.append(dict(item, resolved_root=root))
     return out
+
+
+def register_project(cwd=None, *, name: str | None = None, active: bool = True) -> dict:
+    """Register or update a project in `~/.sodus/projects.json`."""
+    root = project_root(cwd)
+    reg = projects_registry_path()
+    existing_items: list[dict] = []
+    if reg.is_file():
+        try:
+            raw = json.loads(reg.read_text(encoding='utf-8'))
+            raw_list = raw.get('projects') if isinstance(raw, dict) else raw
+            if isinstance(raw_list, list):
+                existing_items = [item for item in raw_list if isinstance(item, dict)]
+        except (OSError, json.JSONDecodeError):
+            existing_items = []
+    entry = {
+        'name': (name or '').strip() or root.name,
+        'root': str(root),
+        'active': bool(active),
+    }
+    updated = False
+    new_items: list[dict] = []
+    cache: dict[str, Path | None] = {}
+    for item in existing_items:
+        raw_root = item.get('root') or item.get('path')
+        resolved = _stored_root(raw_root, cache=cache) if raw_root else None
+        if resolved == root:
+            merged = dict(item)
+            merged.update(entry)
+            new_items.append(merged)
+            updated = True
+        else:
+            new_items.append(item)
+    if not updated:
+        new_items.append(entry)
+    payload = {'version': 1, 'projects': new_items}
+    atomic_write(reg, json.dumps(payload, ensure_ascii=False, indent=2) + '\n')
+    return {'registered': entry, 'path': str(reg), 'total': len(new_items)}
+
+
+def unregister_project(cwd=None) -> dict:
+    """Remove a project from `~/.sodus/projects.json`."""
+    root = project_root(cwd)
+    reg = projects_registry_path()
+    if not reg.is_file():
+        return {'removed': False, 'project_root': str(root), 'path': str(reg)}
+    try:
+        raw = json.loads(reg.read_text(encoding='utf-8'))
+        raw_list = raw.get('projects') if isinstance(raw, dict) else raw
+        items = [item for item in raw_list if isinstance(item, dict)] if isinstance(raw_list, list) else []
+    except (OSError, json.JSONDecodeError):
+        return {'removed': False, 'project_root': str(root), 'path': str(reg)}
+    kept: list[dict] = []
+    removed = False
+    cache: dict[str, Path | None] = {}
+    for item in items:
+        raw_root = item.get('root') or item.get('path')
+        resolved = _stored_root(raw_root, cache=cache) if raw_root else None
+        if resolved == root:
+            removed = True
+        else:
+            kept.append(item)
+    if removed:
+        atomic_write(reg, json.dumps({'version': 1, 'projects': kept}, ensure_ascii=False, indent=2) + '\n')
+    return {'removed': removed, 'project_root': str(root), 'path': str(reg), 'total': len(kept)}
+
+
+def _db_cwds() -> set[str]:
+    """Read distinct non-empty stored cwd strings without loading full table rows."""
+    path = config.HOME / 'sodus.sqlite3'
+    if not path.is_file():
+        return set()
+    cwds: set[str] = set()
+    try:
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            for table in ('run', 'task'):
+                cols = {r[1] for r in conn.execute(f'PRAGMA table_info({table})')}
+                if 'cwd' not in cols:
+                    continue
+                query = f"SELECT DISTINCT cwd FROM {table} WHERE cwd IS NOT NULL AND TRIM(cwd) != ''"
+                params: tuple = ()
+                if 'workspace_id' in cols:
+                    query += ' AND workspace_id=?'
+                    params = (config.workspace_id(),)
+                for (raw_cwd,) in conn.execute(query, params):
+                    if isinstance(raw_cwd, str) and raw_cwd.strip():
+                        cwds.add(raw_cwd.strip())
+    except sqlite3.Error:
+        return set()
+    return cwds
 
 
 def records():
@@ -167,31 +301,77 @@ def records():
     return rows
 
 
+def _file_sig(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def known_roots(rows: list[dict] | None = None) -> list[Path]:
     """Deduplicated set of known project roots, skipping relative cwds and daemon HOME."""
+    global _ROOTS_CACHE
+    home_norm = os.path.normcase(os.path.normpath(str(config.HOME)))
+    cache_key = None
+    if rows is None:
+        try:
+            cwd_str = os.getcwd()
+        except OSError:
+            cwd_str = ''
+        db_path = config.HOME / 'sodus.sqlite3'
+        cache_key = (
+            home_norm,
+            config.workspace_id(),
+            cwd_str,
+            _file_sig(db_path),
+            _file_sig(Path(str(db_path) + '-wal')),
+            _file_sig(projects_registry_path()),
+        )
+        now_m = time.monotonic()
+        if _ROOTS_CACHE is not None and _ROOTS_CACHE[0] == cache_key and now_m - _ROOTS_CACHE[1] < _ROOTS_TTL:
+            return list(_ROOTS_CACHE[2])
     reg = registered_projects()
     roots: set[Path] = set()
     try:
         cur = project_root()
-        if not _is_daemon_home(cur):
+        if not _is_daemon_home(cur, home_norm):
             roots.add(cur)
     except (ValueError, OSError):
         pass
     for item in reg:
         roots.add(item['resolved_root'])
     cache: dict[str, Path | None] = {}
-    source_rows = records() if rows is None else rows
-    # Deduplicate raw cwd strings before spawning any git rev-parse subprocess.
-    unique_cwds = {
-        str(r.get('cwd')).strip()
-        for r in source_rows
-        if isinstance(r.get('cwd'), str) and r.get('cwd').strip()
-    }
+    git_cache: dict[str, str | None] = {}
+    if rows is None:
+        unique_cwds = _db_cwds()
+    else:
+        unique_cwds = {
+            str(r.get('cwd')).strip()
+            for r in rows
+            if isinstance(r.get('cwd'), str) and r.get('cwd').strip()
+        }
     for raw_cwd in unique_cwds:
-        root = _stored_root(raw_cwd, cache=cache)
-        if root is not None and not _is_daemon_home(root):
+        root = _stored_root(raw_cwd, cache=cache, git_cache=git_cache)
+        if root is not None and not _is_daemon_home(root, home_norm):
             roots.add(root)
-    return sorted(roots, key=str)
+    result = sorted(roots, key=str)
+    if cache_key is not None:
+        _ROOTS_CACHE = (cache_key, time.monotonic(), result)
+    return result
+
+
+def decision_roots() -> list[Path]:
+    """Roots scanned by cross-project decision aggregation.
+
+    When `~/.sodus/projects.json` defines active projects, only those curated
+    roots are scanned so hundreds of historical temp directories never pollute
+    `/state` or `decisions --all`. Otherwise falls back to `known_roots()`.
+    """
+    reg = registered_projects()
+    if reg:
+        return sorted({item['resolved_root'] for item in reg if not _is_daemon_home(item['resolved_root'])}, key=str)
+    return known_roots()
 
 
 def allowed_root(cwd=None, allowed: set[Path] | list[Path] | None = None) -> Path:
@@ -336,6 +516,11 @@ def init(cwd=None, force=False):
             elif section == '更新规则':
                 text += '- 人工维护决策和下一步；sync 仅刷新机器段，不复制长文或密钥。\n\n'
         atomic_write(path, text)
+    if projects_registry_path().is_file() and not _is_daemon_home(root):
+        try:
+            register_project(root)
+        except OSError:
+            pass
     return show(root)
 
 
@@ -570,6 +755,61 @@ def decide_close(
     }
 
 
+def _cached_decisions(path: Path) -> list[dict]:
+    """Parse decisions from a HANDOFF.md file, cached by (path, mtime_ns, size)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    cached = _DECISION_CACHE.get(key)
+    if cached is not None:
+        return [dict(item) for item in cached]
+    try:
+        content = path.read_text(encoding='utf-8')
+    except OSError:
+        return []
+    parsed = parse_decisions(content)
+    if len(_DECISION_CACHE) >= _DECISION_CACHE_MAX:
+        _DECISION_CACHE.clear()
+    _DECISION_CACHE[key] = parsed
+    return [dict(item) for item in parsed]
+
+
+def open_decisions_summary(limit: int = 20) -> dict:
+    """Zero-git summary of open decisions for lightweight `GET /state`."""
+    configured = Path(config.load_config().get('handoff', {}).get('path', 'HANDOFF.md')).expanduser()
+    is_abs = configured.is_absolute()
+    rel_str = str(configured)
+    items: list[dict] = []
+    total = 0
+    for root in decision_roots():
+        if is_abs:
+            path = configured
+        else:
+            joined = os.path.normpath(os.path.join(str(root), rel_str))
+            if os.path.commonpath([os.path.normcase(str(root)), os.path.normcase(joined)]) != os.path.normcase(str(root)):
+                continue
+            path = Path(joined)
+        if not os.path.isfile(path):
+            continue
+        for entry in _cached_decisions(path):
+            if entry['status'] != 'open':
+                continue
+            total += 1
+            if len(items) < limit:
+                items.append(
+                    {
+                        'project': root.name,
+                        'project_root': str(root),
+                        'id': entry['id'],
+                        'title': entry['title'],
+                        'recommend': entry.get('recommend', ''),
+                    }
+                )
+    return {'open': total, 'items': items}
+
+
 def list_decisions(
     *,
     cwd=None,
@@ -582,24 +822,28 @@ def list_decisions(
         raise ValueError('status must be open, deferred, or all')
     roots: list[Path]
     errors: list[dict] = []
+    configured = Path(config.load_config().get('handoff', {}).get('path', 'HANDOFF.md')).expanduser()
     if all_projects:
-        roots = known_roots()
-        allowed_set = set(roots)
+        roots = decision_roots()
     else:
         allowed_set = set(known_roots()) if remote else None
         roots = [allowed_root(cwd, allowed=allowed_set) if remote else project_root(cwd)]
     items: list[dict] = []
     scanned = 0
     for root in roots:
-        try:
-            data = show(root, remote=remote, allowed=allowed_set)
-        except (ValueError, OSError) as exc:
-            errors.append({'project_root': str(root), 'error': str(exc)})
+        path = (configured if configured.is_absolute() else root / configured).resolve()
+        if remote and not configured.is_absolute() and not path.is_relative_to(root):
+            errors.append({'project_root': str(root), 'error': 'handoff path escapes project root'})
             continue
-        if not data['exists']:
+        if not path.is_file():
             continue
         scanned += 1
-        for entry in parse_decisions(data['content']):
+        try:
+            entries = _cached_decisions(path)
+        except OSError as exc:
+            errors.append({'project_root': str(root), 'error': str(exc)})
+            continue
+        for entry in entries:
             if status != 'all' and entry['status'] != status:
                 continue
             items.append(
@@ -607,7 +851,7 @@ def list_decisions(
                     **entry,
                     'project': root.name,
                     'project_root': str(root),
-                    'path': data['path'],
+                    'path': str(path),
                 }
             )
     return {

@@ -156,8 +156,9 @@ def test_openapi_yaml_is_served_without_a_token():
 def test_state_contract_is_authenticated_and_structured(spec):
     operation = spec["paths"]["/state"]["get"]
     assert operation.get("security", spec["security"]) == [{"bearerAuth": []}]
+    assert operation.get("tags") == ["state"]
     schema = spec["components"]["schemas"]["State"]
-    assert set(schema["required"]) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
+    assert set(schema["required"]) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory", "decisions"}
     assert schema["properties"]["running"]["maxItems"] == 20
     for name in ("counts", "today", "asks", "memory"):
         item = schema["properties"][name]

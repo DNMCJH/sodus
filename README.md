@@ -566,9 +566,7 @@ no test runner detected in C:\Users\35336\AppData\Local\Temp
 daemon 启动时，reap orphans 之后立刻跑一轮恢复，之后每 5 分钟一轮（`SODUS_AUTO_RECOVER_INTERVAL`）。
 `SODUS_AUTO_RECOVER=0` 全关。已成功的、没失败的、需要人工判断的、超预算的一律不碰。
 
-看板相应拆成三块：**需要你决定**（只有 human / 重试耗尽 / 超预算 / 红测试 / 未验证 / 提案，
-每条带项目、任务、目标、问题、改动、建议）、**自动重试中**（第几次 + 下次什么时候，没有按钮）、
-**不会自动重试**（deterministic，附"修好后再重跑"）。旧的 `/board.decisions` 保留给 MCP 和桌宠。
+恢复状态分成三类：**需要人拍板**（human / 重试耗尽 / 超预算 / 红测试 / 提案，可通过 `GET /state` 与 `GET /runs/{id}` 查看结构化证据）、**自动重试中**（记录重试轮次与退避时间）、**不会自动重试**（deterministic，附“修好后再重跑”提示）。旧网页看板与桌宠层已在控制塔重构中退役。
 
 ```python
 from sodus import recover
@@ -711,7 +709,7 @@ PRAGMA integrity_check = ok；每个 run 的 seq 无重复
 
 - Windows 上子进程可能继承 stdout 管道不释放，runner 用 2s 退出宽限兜底，不是完美方案。
 - codex 的 bypass 参数等于关掉沙箱，只在受控 cwd 下用。
-- CLI 的 `sodus watch` 仍是轮询（0.5s），没有 SSE 客户端；看板 UI 由 daemon 的 `/board` 提供。
+- CLI 的 `sodus watch` 仍是轮询（0.5s），没有 SSE 客户端；只读状态快照由 `GET /state` 与 `GET /handoff/decisions` 提供（旧 `/board` 网页看板已退役）。
 - handoff 是确定性的模板，不是模型总结；接 `--parent` 做分叉还没验证。
 - dsh 已跑通（2026-10-20）：headless + `--json` 的 `tool_call` / `tool_result` / `usage` / `text` 都能解析。没有 per-run effort 入口。
 - ~~dsh 没有隔离配置目录，跑的时候带着你的全局 AGENTS.md、skills 和 MCP~~ —— 2026-10-21 量过，这个判断是错的：

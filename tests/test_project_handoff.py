@@ -373,3 +373,37 @@ def test_concurrent_decide_draft_allocates_unique_ids(project):
     ids = [r['id'] for r in results]
     assert len(set(ids)) == 6
     assert sorted(ids) == [f'D-{i:03d}' for i in range(1, 7)]
+
+
+def test_projects_registry_scopes_decisions_and_cli_register(project, capsys):
+    handoff.init()
+    handoff.decide_draft('注册项目里的决策')
+    other = project.parent / 'unregistered'
+    other.mkdir()
+    handoff.init(other)
+    handoff.decide_draft('未注册项目里的决策', cwd=other)
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO run(id,workspace_id,agent,task_id,cwd,status,started_at) VALUES (?,?,?,?,?,?,?)",
+            ('run-unreg', config.workspace_id(), 'codex', 't-u', str(other), 'completed', 100),
+        )
+
+    # Without projects.json, both projects are scanned.
+    assert handoff.list_decisions(all_projects=True)['count'] == 2
+
+    # Register only `project` via CLI: decision aggregation now scopes to registered projects.
+    args = build_parser().parse_args(['handoff', 'register', str(project), '--json'])
+    assert args.needs_daemon is False
+    assert args.func(args) == 0
+    reg_out = json.loads(capsys.readouterr().out)
+    assert reg_out['total'] == 1
+
+    scoped = handoff.list_decisions(all_projects=True)
+    assert scoped['count'] == 1
+    assert scoped['decisions'][0]['project'] == project.name
+
+    # Unregister falls back to DB-discovered roots again.
+    args = build_parser().parse_args(['handoff', 'unregister', str(project), '--json'])
+    assert args.func(args) == 0
+    assert handoff.list_decisions(all_projects=True)['count'] == 2
+

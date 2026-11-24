@@ -42,7 +42,7 @@ def test_schema_counts_and_ledger(home, monkeypatch):
         ask(status)
     db.memory_add_candidate("pending")
     got = state.snapshot(now)
-    assert set(got) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory"}
+    assert set(got) == {"version", "workspace_id", "now", "running", "counts", "today", "asks", "memory", "decisions"}
     assert got["version"] == "0.9.0"
     assert len(got["running"]) == 3
     assert set(got["running"][0]) == {"id", "task_id", "agent", "route", "started_at", "cwd"}
@@ -51,6 +51,7 @@ def test_schema_counts_and_ledger(home, monkeypatch):
     assert got["asks"] == {"open": 1, "running": 1, "done": 1, "failed": 1}
     assert got["today"] == {"CNY": 1.25, "runs": 5, "unpriced": 3}
     assert got["memory"] == {"candidates_pending": 1}
+    assert got["decisions"] == {"open": 0, "items": []}
 
 
 def test_running_cap_sort_and_uncapped_counts(home):
@@ -153,3 +154,37 @@ def test_four_hosts_concurrent_state_and_task_creation(home, mcp_http):
         ids = list(pool.map(client, range(4)))
     assert len(set(ids)) == 4
     assert all(db.get_task(task_id) for task_id in ids)
+
+
+def test_state_and_decisions_zero_git_fast_with_250_roots(home, tmp_path, monkeypatch):
+    from sodus import handoff
+
+    roots_dir = tmp_path / "many_projects"
+    roots_dir.mkdir()
+    with db.connect() as conn:
+        for i in range(250):
+            d = roots_dir / f"p{i:03d}"
+            d.mkdir()
+            if i == 0:
+                (d / ".git").mkdir()
+                handoff.init(d)
+                handoff.decide_draft("是否继续推进 P2？", recommend="先收口 P1.5", cwd=d)
+            conn.execute(
+                "INSERT INTO run(id,workspace_id,agent,task_id,cwd,status,started_at) VALUES (?,?,?,?,?,?,?)",
+                (f"run-many-{i}", config.workspace_id(), "codex", f"t-{i}", str(d), "completed", 100 + i),
+            )
+
+    def forbid_git(*args, **kwargs):
+        pytest.fail("state/decisions must never spawn git subprocesses")
+
+    monkeypatch.setattr(handoff, "git", forbid_git)
+    state._CACHE = None
+    t0 = time.perf_counter()
+    snap = state.snapshot()
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    assert snap["counts"]["open_decisions"] == 1
+    assert snap["decisions"]["open"] == 1
+    assert snap["decisions"]["items"][0]["id"] == "D-001"
+    assert snap["decisions"]["items"][0]["project"] == "p000"
+    assert elapsed_ms < 500, f"state.snapshot took {elapsed_ms:.1f}ms across 250 roots"
+

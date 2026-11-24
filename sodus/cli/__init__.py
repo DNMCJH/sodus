@@ -60,6 +60,7 @@ DEBUG_COMMANDS = (
     "jev",
     "route-for",
     "reconcile",
+    "reap-orphans",
     "locks",
     "unlock",
     # runs

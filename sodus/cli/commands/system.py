@@ -179,6 +179,19 @@ def add(sub) -> None:
     p.add_argument("--stale", type=int, default=900)
     p.set_defaults(func=reconcile)
 
+    p = sub.add_parser(
+        "reap-orphans",
+        help="list or reap orphaned queued/running rows whose owner process is gone (dry-run by default)",
+    )
+    p.add_argument("--apply", action="store_true", help="actually mark orphaned rows failed (default is dry-run)")
+    p.add_argument(
+        "--all-workspaces",
+        action="store_true",
+        help="scan across all workspaces (e.g. leaked test rows)",
+    )
+    p.add_argument("--json", action="store_true", dest="as_json", help="machine-readable JSON output")
+    p.set_defaults(func=reap_orphans_cmd, needs_daemon=False)
+
     p = sub.add_parser("locks", help="which working directories have a writer")
     p.set_defaults(func=locks, needs_daemon=False)
 
@@ -826,4 +839,68 @@ def reconcile(args) -> int:
     for r in rows:
         print(f"{r['id']}  {r['agent']:<7} {r['status']} -> failed  ({r['error']})")
     print(f"{len(rows)} run(s) marked failed")
+    return 0
+
+
+def reap_orphans_cmd(args) -> int:
+    """Dry-run by default; marks dead-owner queued/running rows failed only with --apply."""
+    with db.connect() as conn:
+        if args.all_workspaces:
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM run WHERE status IN ('queued','running') ORDER BY started_at"
+                ).fetchall()
+            ]
+        else:
+            rows = db.live_runs()
+    orphans = [row for row in rows if runner.Runner._owner_is_gone(row)]
+    applied = []
+    if args.apply and orphans:
+        now = time.time()
+        reason = "orphaned: owner process gone (reaped via CLI)"
+        for row in orphans:
+            rid = row["id"]
+            try:
+                db.append_event(
+                    rid,
+                    db.next_seq(rid),
+                    "run.failed",
+                    {"error": reason, "status": "failed", "salvaged": []},
+                )
+            except Exception:
+                pass
+            db.release_write(rid)
+            db.update_run(rid, status="failed", ended_at=now, error=reason)
+            applied.append(rid)
+    payload = {
+        "dry_run": not args.apply,
+        "scope": "all_workspaces" if args.all_workspaces else config.workspace_id(),
+        "candidates": [
+            {
+                "id": r["id"],
+                "workspace_id": r.get("workspace_id"),
+                "status": r.get("status"),
+                "agent": r.get("agent"),
+                "owner_pid": r.get("owner_pid"),
+                "cwd": r.get("cwd"),
+            }
+            for r in orphans
+        ],
+        "count": len(orphans),
+        "reaped": len(applied),
+    }
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    mode = "APPLY" if args.apply else "DRY-RUN"
+    for r in payload["candidates"]:
+        print(
+            f"[{mode}] {r['id']}  ws={r['workspace_id']}  status={r['status']}"
+            f"  pid={r['owner_pid']}  cwd={r['cwd']}"
+        )
+    if args.apply:
+        print(f"{len(applied)} orphan run(s) marked failed.")
+    else:
+        print(f"{len(orphans)} orphan run(s) found (dry-run; pass --apply to mark failed).")
     return 0

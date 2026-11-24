@@ -37,6 +37,8 @@ security:
 tags:
   - name: public
     description: 不需要 Authorization 的端点（仅环回监听）
+  - name: state
+    description: 轻量只读状态与项目决策聚合
   - name: catalog
   - name: tasks
   - name: runs
@@ -227,16 +229,17 @@ paths:
         '401': {description: Unauthorized}
   /state:
     get:
-      tags: [board]
+      tags: [state]
       operationId: getState
-      summary: Lightweight read-only panel and pet snapshot
+      summary: Lightweight read-only control-tower status snapshot
       description: |
-        Live runs and asks are queried on every request. Today, proposals and
-        pending database memory candidates have a 1.5-second TTL. No git probes,
-        evidence assembly, HTML or per-agent cost expansion. needs_you and
-        unverifiable follow the board's newest 50 work runs (unverifiable is 0 or 1).
-        running includes queued/running/stalled, newest first, capped at 20;
-        counts.running and counts.queued are uncapped status counts.
+        Live runs and asks are queried on every request. Today, proposals,
+        pending database memory candidates, and open HANDOFF.md decisions have
+        a 1.5-second TTL. Zero git subprocess probes, no evidence assembly, no
+        HTML rendering or per-agent cost expansion. needs_you and unverifiable
+        cover the newest 50 work runs (unverifiable is 0 or 1). running includes
+        queued/running/stalled, newest first, capped at 20; counts.running and
+        counts.queued are uncapped status counts.
       responses:
         '200':
           description: State snapshot
@@ -967,8 +970,8 @@ paths:
       description: |
         把人审过的候选追加到项目根 `AGENTS.md` 的 `## 已验证事实` 小节，格式为
         `- YYYY-MM-DD（来源 <文件>）<事实>`。重复采纳同一条不会写第二遍，
-        文件里已有的内容一行不动。候选来自 `sodus debug memory harvest`，
-        或 `/board` 的 `memory_candidates`。
+        文件里已有的内容一行不动。候选来自 `sodus debug memory harvest`
+        或 `sodus debug memory candidates`。
       requestBody:
         required: true
         content:
@@ -1278,7 +1281,7 @@ components:
     State:
       type: object
       additionalProperties: false
-      required: [version, workspace_id, now, running, counts, today, asks, memory]
+      required: [version, workspace_id, now, running, counts, today, asks, memory, decisions]
       properties:
         version: {type: string, const: '0.9.0'}
         workspace_id: {type: string}
@@ -1331,6 +1334,24 @@ components:
           required: [candidates_pending]
           properties:
             candidates_pending: {type: integer, minimum: 0, description: Database proposed or retire_proposed candidates in workspace or saved project}
+        decisions:
+          type: object
+          required: [open, items]
+          additionalProperties: false
+          properties:
+            open: {type: integer, minimum: 0}
+            items:
+              type: array
+              maxItems: 20
+              items:
+                type: object
+                required: [project, project_root, id, title, recommend]
+                properties:
+                  project: {type: string}
+                  project_root: {type: string}
+                  id: {type: string}
+                  title: {type: string}
+                  recommend: {type: string}
     Error:
       type: object
       additionalProperties: false

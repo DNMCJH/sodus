@@ -101,7 +101,7 @@ run 表，`recover`/`policy`/`budget` 只读 run/task/event。唯一的例外是
   叠加观察账、终端面板含跨午夜的 live 行），但不再各写一条 WHERE。
 - 失败是什么：`diagnosis`。cause → kind / label / problem / suggestion / advice / fix 是同一行的投影，
   渲染句经 `CAUSE_BY_LABEL` 找回同一行，没有第二张文案表。
-- 失败计数：`server.board_state()["decision_counts"]`；状态灯读 `server.attention()`，不自己查库。
+- 失败计数与状态快照：`state.snapshot()`（`GET /state`）统一基于 `db` + `lifecycle` + `recover` 汇总；单条失败/红测证据统一经 `evidence.collect()` 提供给 `GET /runs/{id}`。旧 `board_state()` / `attention()` 与桌宠层已退役。
 
 ### watchdog：没失败，但没在动
 
@@ -127,10 +127,7 @@ runner 自己的 900 秒 idle kill；别的进程拥有的不碰。后两种如�
 `recover`。事件流里 `run.stalled` 在 `run.failed` 之前，卡住的原因不会丢。另外两种 worker 才会让
 `stalled` 一直留到人或 runner 的 900 秒 kill。
 
-看板上还在 `stalled` 的行进"已停止"：它不是失败（没有 error、exit code 或 failure class），也不该进
-"需要你决定"（决策只有合并、花钱、方向三类）或"我在处理"（那是机器正在做的事，卡住是没人在做）。它只加
-`stopped` 的行数，不新增计数，`failed` 仍是终态失败的数；`attention()` 与状态灯因此不变，宠物不会为
-一次卡住说话。
+仍在 `stalled` 的行不属于失败（没有 error、exit code 或 failure class），也不进 `needs_you`（只包含合并提案、超阈花费与方向决策），在 `GET /state` 中保留在 `running` 列表里供人工或 runner 900 秒超时接管。
 
 **这条依赖链是这次重构的判据。** 0.3.0 里 `meter._relay()` 要反读 `AgentSpec.config_home` 下的
 `settings.json` 才能拿到 base URL 和 token——那说明"端点"这个概念不存在，事实寄居在别处。
