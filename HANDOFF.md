@@ -1,11 +1,11 @@
 ---
 title: 'sodus 项目接力控制台'
 date: '2026-11-09'
-updated: '2026-11-12'
-version: 3.2.0
+updated: '2026-11-24'
+version: 3.3.0
 type: project-handoff
 status: active
-snapshot_at: '2026-11-12 03:15:00 +08:00'
+snapshot_at: '2026-11-24 00:00:00 +08:00'
 tags:
   - workflow/handoff
   - sodus
@@ -17,18 +17,18 @@ tags:
 > 本文件是 sodus 仓库的权威项目控制台（A:\VScode\Code\Projects\sodus\HANDOFF.md）。新会话先完整读取本文件，再刷新“实时状态”，然后继续。sodus 项目上下文极大，不要试图从聊天记录重建决策和路径。详细内容通过索引跳转，不在这里重复。
 
 > [!warning] 快照边界
-> 这是 2026-11-12 03:15 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
+> 这是 2026-11-24 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
 
 ## 0. 三分钟启动区
 
 ### 项目一句话
 
-Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199）+ CLI + MCP over stdio + 只读看板；核心是把“派活、验证、评审、记忆、计划、项目接力”收在一个 HTTP 契约下，让 Claude Code / Codex / opencode / DSH 只当薄客户端。0.9.0 起产品、包、CLI、状态目录、MCP 工具名只有 sodus 一个名字。
+Sodus 是双平面个人多项目控制塔：单机 daemon（默认 127.0.0.1:4199）+ CLI + MCP over stdio + 轻量只读 `GET /state`。A 面负责 Agent 间协同（派活、路由、验证、评审、写锁/worktree），B 面负责向人汇报与项目级决策收件箱（`HANDOFF.md` `D-xxx` + 跨项目聚合），已退役网页看板与桌宠层。
 
 ### 当前唯一优先
 
 > [!todo]
-> **0.9.0 已发布（2026-11-12）。** 更名、migrate-home、MCP sodus_*、Claude Code 冒烟、全量 pytest、release_check、CI（Python 3.11/3.12/3.13）全部通过；GitHub Release v0.9.0 已发布。接下来：① 0.8.2 路由收敛：route_meta 持久化、runner requirements 硬校验、difficulty 1–10；② 12-01 前复查 Carbon promotion，argon 回池排序；③ M4–M6 计划仍待人工 TTY 批准；④ 收尾：DSH 宠物插件命名、旧 ~/.nodus 归档。
+> **控制塔重构分支 `refactor/control-tower` 已完成 Phase 0 + Phase 1 + 性能/收口加固（2026-11-24）。** 已完成：① 隔离路由测试、修通 `dream` busy 锁死与 CLI 候选审核、新增 `sodus debug reap-orphans` 干跑命令；② 迁出 `sodus/evidence.py`，退役 7 个 UI/桌宠模块并清理旧文档/OpenAPI 残留；③ 封堵相对 `cwd` 串项目泄漏、上线 `HANDOFF.md` 决策收件箱（CLI/HTTP/MCP + 锁/CAS）与 `projects.json` 注册表，将 `/state` 压回零 Git 子进程快路径。接下来：Phase 1.5（三入口首屏提示 + 两真实项目验收 + 单阶段预算硬闸）→ 合入 `main` → Phase 2（A 面薄纵切 MVP）。
 
 ### 硬规则（用户明确要求，改之前先问）
 
@@ -89,7 +89,8 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 - **2026-11-11 0.9.0 全面更名**：删掉 nodus 双入口和 sodus 入口壳，nodus 包整体改名为 sodus；默认状态目录 ~/.sodus、数据库 sodus.sqlite3；MCP 工具名全部 sodus_*；环境变量 NODUS_* → SODUS_*；migrate-home 只复制 ~/.nodus 并把数据库改名，源目录不动。理由：用户明确要求全部替换；保留 ~/.nodus 仅作回滚来源。
 - **预算口径**：用户确认“没有定过预算”；relay 余额才是硬约束；族软上限只拦新 run。
 - **并发口径**：多个宿主各自拉 MCP 进程，但都只是 HTTP 客户端；daemon 单实例、多线程；不同 cwd 可并行，同一 cwd 写锁串行；SQLite 单写者。
-- **交接口径**：per-run handoff、session brief 都是单次快照；项目控制台是权威恢复入口，sodus handoff 只操作当前项目，不聚合内容。
+- **2026-11-24 双平面控制塔重构（`refactor/control-tower`）**：经 Gate 0 多家族盲评与复核，确立 A 面（Agent 间协同）/ B 面（人机汇报与决策）双平面架构；退役 `board/ui/pet/mood/statuslight/desk/llm` 7 个模块并迁出 `evidence.py`；上线 `HANDOFF.md` `D-xxx` 决策收件箱（文件锁 + hash CAS + 零 Git 读路径 + `~/.sodus/projects.json` 注册表）；MCP 工具增至 13 个（新增 `sodus_handoff_decisions`）。
+- **交接口径**：per-run handoff、session brief 都是单次快照；项目控制台是权威恢复入口，支持单项目写入与跨项目只读决策聚合（CLI/HTTP/MCP）。
 
 ## 3. 进度节点
 
@@ -133,13 +134,13 @@ Sodus 是给 agent 用的任务验收层：单机 daemon（默认 127.0.0.1:4199
 
 ## 6. 会话/交接机制
 
-- sodus handoff init/show/append/sync/check/list：项目级控制台；sync 只更新 auto 标记之间，check 校验 snapshot/HEAD/路径/daemon 版本。
+- sodus handoff init/show/append/sync/check/list/register/unregister/decide-draft/decide-close/decisions：项目级控制台与 `D-xxx` 决策收件箱；sync 只更新 auto 标记之间，check 校验 snapshot/HEAD/路径/daemon 版本。
 - sodus debug sessions --limit 20 [--query ...] [--vendor ...]：扫 Claude/Codex/DSH 三家会话。
 - sodus debug session <id> --tail 40：看某一个会话原话。
 - sodus debug brief <id> --task "..." --tail 12 --out PATH：生成跨会话交接。
 - sodus debug lineage <id> [--json]：会话→run→task→proposal 血缘。
 - sodus debug resume/branch：继续/分叉会话（跨 vendor）。
-- sodus debug desk --out PATH：把任务进度渲染成 markdown（vault dashboard 用）。
+- sodus debug reap-orphans [--all-workspaces] [--apply] [--json]：干跑/清理进程已退出的孤儿 queued/running 记录。
 
 ## 7. 命令速查
 
@@ -165,32 +166,32 @@ git -C A:\VScode\Code\Projects\sodus log --oneline -5
 - 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
 
 <!-- sodus:auto:start -->
-head: 8444193cdff00c2f523dfa5f28b11f16fd4ff64c
+head: 763fd440aa18209a22f58d1e4b81ef1bb0c4b203
 ```json
 {
-  "head": "8444193cdff00c2f523dfa5f28b11f16fd4ff64c",
-  "branch": "main",
-  "tag": "v0.9.0-1-g8444193",
+  "schema_version": 2,
+  "head": "763fd440aa18209a22f58d1e4b81ef1bb0c4b203",
+  "branch": "refactor/control-tower",
+  "tag": "v0.9.0-6-g763fd44",
+  "dirty": true,
   "daemon": {
     "version": "0.9.0",
-    "pid": 56388
+    "pid": 35648
   },
-  "tasks": [],
-  "runs": [
-    {
-      "id": "run-9c9ac8b527f1",
-      "status": "completed",
-      "kind": "work",
-      "task_id": "task-unv"
-    },
-    {
-      "id": "run-d9f01cf6e471",
-      "status": "completed",
-      "kind": "work",
-      "task_id": "task-unv"
-    }
-  ],
-  "plans": [],
+  "open_decisions_count": 0,
+  "deferred_decisions_count": 0,
+  "open_proposals": 0,
+  "latest_verify": null,
+  "cost_today": {
+    "CNY": 2.21352
+  },
+  "cost_30d": {
+    "CNY": 5.689382
+  },
+  "tasks_summary": {
+    "open": 2
+  },
+  "recent_runs_count": 3,
   "budget_soft_families": {
     "claude": 100,
     "gpt": 80,
