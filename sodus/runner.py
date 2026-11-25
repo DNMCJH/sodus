@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, budget, config, db, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, aplane, budget, config, coordinator, db, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -223,6 +223,9 @@ class Runner:
     def __init__(self) -> None:
         self.procs: dict[str, subprocess.Popen] = {}
         self.lock = threading.Lock()
+        # coordinator plans keyed by run_id; populated before thread starts,
+        # consumed and cleared in _finalize()
+        self._plans: dict[str, coordinator.CoordinatorPlan] = {}
 
     # ---- entry point ---------------------------------------------------
 
@@ -283,6 +286,18 @@ class Runner:
         # exists. Every failure path below returns *some* route: the strategy
         # layer is allowed to be wrong, never to be a single point of failure.
         route_decision = self._decide_route(task, route_name)
+        # Store coordinator plan (present only for --route auto) so _finalize
+        # can dispatch auto-review without changing all function signatures.
+        _coord_plan_json = route_decision.get("coordinator_plan")
+        if _coord_plan_json:
+            try:
+                from dataclasses import fields as _dc_fields
+                _known = {f.name for f in _dc_fields(coordinator.CoordinatorPlan)}
+                _filt = {k: v for k, v in _coord_plan_json.items() if k in _known}
+                _cp = coordinator.CoordinatorPlan(**_filt)
+                self._plans[run_id] = _cp
+            except Exception:  # noqa: BLE001
+                pass  # degraded: no auto-review for this run
         route = routes.resolve_for_run(route_decision["route"])
         if provider:
             # Continuing a session means going back to the endpoint that holds
@@ -385,7 +400,29 @@ class Runner:
             return decision
 
         try:
-            assessment = policy.assess(task_brief(task), review=auto)
+            if auto:
+                coord_plan = coordinator.plan(task_brief(task))
+                decision["assessment"] = coord_plan.assessment
+                decision["recommendation"] = {
+                    "route": coord_plan.executor_route,
+                    "rationale": coord_plan.rationale,
+                    "confidence": coord_plan.confidence,
+                    "effort": coord_plan.effort,
+                }
+                decision["coordinator_plan"] = coord_plan.to_json()
+                decision["route"] = coord_plan.executor_route
+                usable = self._ready_route(decision["recommendation"])
+                decision["route"] = usable or coord_plan.executor_route
+                if usable and usable != coord_plan.executor_route:
+                    decision["fallback"] = {
+                        "reason": "recommended route is not ready",
+                        "fallback_route": usable,
+                        "recommended": coord_plan.executor_route,
+                        "error": "",
+                    }
+                return decision
+            # Non-auto path: assess for context, skip Jev to save latency
+            assessment = policy.assess(task_brief(task), review=False)
             recommendation = policy.recommend(assessment)
             recommended = str(recommendation.get("route") or "").strip()
             if not recommended:
@@ -406,19 +443,7 @@ class Runner:
 
         decision["assessment"] = assessment
         decision["recommendation"] = recommendation
-        if not auto:
-            decision["route"] = requested
-            return decision
-
-        usable = self._ready_route(recommendation)
-        decision["route"] = usable or recommended
-        if usable and usable != recommended:
-            decision["fallback"] = {
-                "reason": "recommended route is not ready",
-                "fallback_route": usable,
-                "recommended": recommended,
-                "error": "",
-            }
+        decision["route"] = requested
         return decision
 
     @staticmethod
@@ -1084,6 +1109,75 @@ class Runner:
                 "error": err,
             },
         )
+        # A-plane auto-review: triggered when the coordinator requested it and
+        # the run completed successfully.  Advisory reviews run regardless of
+        # verify_mark; blocking reviews also run regardless (a red verify is
+        # exactly when a second set of eyes is most needed).
+        self._auto_review(rid, task, workdir, verify_mark, artifacts)
+
+    def _auto_review(
+        self,
+        rid: str,
+        task: dict,
+        workdir: Path,
+        verify_mark: str,
+        artifacts: list[str],
+    ) -> None:
+        """Dispatch the coordinator-requested review if one was planned.
+
+        Called from _finalize() (already in a worker thread).  Failures are
+        logged and emitted as events but never re-raise.
+        """
+        coord_plan = self._plans.pop(rid, None)
+        if coord_plan is None or coord_plan.review_kind == "none":
+            return
+        if not coord_plan.reviewer_route:
+            return
+
+        # Build and persist the A-plane context bundle
+        diff_stat = ""
+        try:
+            import subprocess as _sp
+            res = _sp.run(
+                ["git", "-C", str(workdir), "diff", "--stat", "HEAD"],
+                capture_output=True, text=True, timeout=10.0,
+            )
+            diff_stat = res.stdout.strip()[:4000]
+        except Exception:  # noqa: BLE001
+            pass
+
+        ctx = aplane.build(
+            rid, task, coord_plan,
+            verify_state=verify_mark,
+            verify_summary=f"verify={verify_mark}",
+            changed_files=artifacts,
+            diff_stat=diff_stat,
+        )
+        try:
+            aplane.save(ctx)
+        except Exception:  # noqa: BLE001
+            pass
+
+        self._emit(rid, "coordinator.review_requested", {
+            "reviewer": coord_plan.reviewer_route,
+            "review_kind": coord_plan.review_kind,
+            "aplane_ctx": str(aplane._ctx_path(rid)),
+        })
+
+        try:
+            from . import review as review_mod
+            review_mod.run_review(
+                rid,
+                by=coord_plan.reviewer_route,
+                focus=ctx.to_prompt_fragment(),
+                scope="task",
+                timeout=1800,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._emit(rid, "coordinator.review_error", {
+                "error": f"{type(exc).__name__}: {exc}",
+                "review_kind": coord_plan.review_kind,
+            })
 
     def _auto_verify(self, rid: str, task_id: str, workdir: Path) -> str:
         """Run the project's own tests and bind the result to this run.
