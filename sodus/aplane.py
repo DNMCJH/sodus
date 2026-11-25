@@ -107,6 +107,8 @@ def load(run_id: str) -> APlaneCtx | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+    if not isinstance(data, dict):
+        return None
     # Tolerate unknown / missing keys so old bundles still parse
     known = {f.name for f in APlaneCtx.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     filtered = {k: v for k, v in data.items() if k in known}

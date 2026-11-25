@@ -127,6 +127,15 @@ class TestPersistence:
         result = aplane.load("run-corrupt")
         assert result is None
 
+    def test_load_non_dict_returns_none(self, tmp_path, monkeypatch):
+        """JSON that is not a dict (e.g. a list) must return None, not raise."""
+        monkeypatch.setattr(config, "HOME", tmp_path)
+        path = aplane._ctx_path("run-listjson")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[]", encoding="utf-8")
+        result = aplane.load("run-listjson")
+        assert result is None
+
     def test_save_creates_parent_dirs(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "HOME", tmp_path)
         ctx = aplane.build("run-nested-001", _TASK, _PLAN)
