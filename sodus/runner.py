@@ -265,10 +265,6 @@ class Runner:
         if spend["over"] or (spend["gated"] and not spend["family_gated"]):
             raise RuntimeError(budget.blocked_message(spend))
 
-        # Check Phase 2 budget limits (opt-in caps for development phase)
-        phase2_check = budget.check_phase2(task_id=task_id)
-        if phase2_check and phase2_check.get("over"):
-            raise RuntimeError(phase2_check["message"])
         profiles.ensure_ready()
         if verify_run is None:
             verify_run = AUTO_VERIFY and config.auto_verify()
