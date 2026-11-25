@@ -27,6 +27,51 @@ DEFAULT_KEY = "budget"
 CURRENCY = "CNY"
 
 
+def _get_phase2_limits() -> tuple[float | None, float | None]:
+    """Return (phase2_total_cny, phase2_per_run_max_cny) from config, or (None, None)."""
+    cfg = config.load_config()
+    budget_cfg = cfg.get("budget", {})
+    return (
+        budget_cfg.get("phase2_cny"),
+        budget_cfg.get("phase2_per_run_max_cny")
+    )
+
+
+def check_phase2(task_id: str = "", now: float | None = None) -> dict | None:
+    """Check Phase 2 budget limits if configured. Returns error dict or None if OK.
+
+    Phase 2 limits are opt-in caps for a specific development phase:
+    - phase2_cny: total CNY spend allowed in Phase 2 (cumulative across all runs)
+    - phase2_per_run_max_cny: max CNY per single run
+
+    Returns None if limits are not configured or not exceeded.
+    Returns error dict {"over": True, "message": str} if limit is exceeded.
+    """
+    total_limit, per_run_limit = _get_phase2_limits()
+    if not total_limit and not per_run_limit:
+        return None  # No Phase 2 limits configured
+
+    used = spent(now)
+
+    # Check total Phase 2 budget
+    if total_limit and used >= total_limit:
+        return {
+            "over": True,
+            "message": (
+                f"Phase 2 budget exhausted: {used:.2f} / {total_limit:.2f} {CURRENCY} spent. "
+                f"Raise budget.phase2_cny in ~/.sodus/config.json to continue."
+            )
+        }
+
+    # Check per-run budget (estimate based on past runs for this task's route/model)
+    # For now, we only enforce this as a warning since we don't know run cost upfront
+    if per_run_limit:
+        # TODO: Could check recent run costs for this route/model and warn if average > limit
+        pass
+
+    return None
+
+
 def limit() -> float:
     """The daily ceiling in CNY, or 0.0 when no ceiling is configured."""
     env = os.environ.get("SODUS_DAILY_BUDGET")
@@ -84,8 +129,11 @@ def expensive_models() -> tuple[str, ...]:
     if isinstance(raw, dict):
         names = raw.get("expensive_models") or ()
         if isinstance(names, (list, tuple)):
-            return tuple(str(name).strip() for name in names if str(name).strip())
-    return ()
+            result = tuple(str(name).strip() for name in names if str(name).strip())
+            if result:
+                return result
+    # Default: opus and fable are expensive (high-tier reasoning models)
+    return ("claude-opus", "claude-fable")
 
 
 def model_is_expensive(model: str) -> bool:

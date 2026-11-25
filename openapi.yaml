@@ -3,114 +3,146 @@ info:
   title: Sodus HTTP API
   version: 0.9.0
   summary: Sodus daemon 的 HTTP + SSE 接口
-  description: |
-    产品名 Sodus。
+  description: '产品名 Sodus。
+
     这份契约对应 `sodus/server.py` 里实际存在的每一条路由，默认地址
+
     `http://127.0.0.1:4199`（`sodus up` 或 `python -m sodus serve`）。
 
+
     鉴权：除公开端点外，所有请求都要带
+
     `Authorization: Bearer <token>`。token 存在 `~/.sodus/token`
+
     （Windows 为 `%USERPROFILE%\.sodus\token`；`SODUS_HOME` 可改根目录），
+
     首次运行 daemon 时自动生成。token 不对返回 `401 {"error":"unauthorized"}`。
 
+
     公开端点（`security: []`）：`GET /`、`GET /health`、`GET /favicon.ico`、
+
     `GET /openapi.yaml`。`/` 返回轻量服务元信息 JSON（指向 `/state`）。
 
+
     `GET /events` 是 EventSource 端点，浏览器不能给它设请求头，所以额外接受
+
     `?token=<token>`（header 和 query 二选一）。
 
+
     约定：所有时间戳都是 Unix epoch 秒（number）；未匹配的路径返回
+
     `404 {"error":"not found"}`；handler 内未捕获异常返回
+
     `500 {"error":"internal error"}`。POST 的 JSON 解析失败返回
+
     `400 {"error":"invalid json"}`，请求体超过 1,000,000 字节返回
+
     `413 {"error":"body too large"}`。
 
+
     安全边界：daemon 默认只绑定环回地址，非环回绑定需要
+
     `SODUS_ALLOW_REMOTE=1`。HTTP 层只有这一枚本地 token，没有多用户/RBAC。
+
+    '
   contact:
     name: Sodus
 servers:
-  - url: http://127.0.0.1:4199
-    description: 默认 daemon 地址（端口可用 --port 改）
+- url: http://127.0.0.1:4199
+  description: 默认 daemon 地址（端口可用 --port 改）
 security:
-  - bearerAuth: []
+- bearerAuth: []
 tags:
-  - name: public
-    description: 不需要 Authorization 的端点（仅环回监听）
-  - name: state
-    description: 轻量只读状态与项目决策聚合
-  - name: catalog
-  - name: tasks
-  - name: runs
-  - name: pipelines
-  - name: proposals
-  - name: memory
-  - name: events
+- name: public
+  description: 不需要 Authorization 的端点（仅环回监听）
+- name: state
+  description: 轻量只读状态与项目决策聚合
+- name: catalog
+- name: tasks
+- name: runs
+- name: pipelines
+- name: proposals
+- name: memory
+- name: events
 paths:
   /handoff:
     get:
       summary: Read the project handoff console (no writes)
       parameters:
-        - in: query
-          name: cwd
-          schema: {type: string}
-          description: Existing directory resolving to current or task/run-known project root
+      - in: query
+        name: cwd
+        schema:
+          type: string
+        description: Existing directory resolving to current or task/run-known project root
       responses:
-        "200":
+        '200':
           description: path, project_root, exists, snapshot_at, recorded head and content
-        "401":
+        '401':
           description: Missing or invalid bearer token
-        "403":
+        '403':
           description: Unknown project root or unsafe file path
   /handoff/check:
     get:
       summary: Read-only handoff validation
       parameters:
-        - in: query
-          name: cwd
-          schema: {type: string}
+      - in: query
+        name: cwd
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Metadata plus ok and errors (validation failures still return 200)
-        "401":
+        '401':
           description: Missing or invalid bearer token
-        "403":
+        '403':
           description: Unknown project root or unsafe file path
   /handoffs:
     get:
       summary: List current and task/run-known project handoff metadata without content
       responses:
-        "200":
+        '200':
           description: Array of project metadata and next actions
-        "401":
+        '401':
           description: Missing or invalid bearer token
   /handoff/decisions:
     get:
       summary: Read-only project-level decision inbox (single project or aggregated across known projects)
       parameters:
-        - in: query
-          name: cwd
-          schema: {type: string}
-          description: Existing directory resolving to a known project root (ignored when all=1)
-        - in: query
-          name: all
-          schema: {type: string, enum: ['0', '1', 'true', 'false']}
-          description: Aggregate decisions across all known projects
-        - in: query
-          name: status
-          schema: {type: string, enum: [open, deferred, all]}
+      - in: query
+        name: cwd
+        schema:
+          type: string
+        description: Existing directory resolving to a known project root (ignored when all=1)
+      - in: query
+        name: all
+        schema:
+          type: string
+          enum:
+          - '0'
+          - '1'
+          - 'true'
+          - 'false'
+        description: Aggregate decisions across all known projects
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - open
+          - deferred
+          - all
       responses:
-        "200":
+        '200':
           description: Decision inbox summary and list of D-xxx items
-        "401":
+        '401':
           description: Missing or invalid bearer token
-        "403":
+        '403':
           description: Unknown project root or invalid status
   /reconcile:
     post:
       summary: Reconcile runs owned by the daemon
       responses:
-        "200":
+        '200':
           description: Runs marked failed
   /plan:
     post:
@@ -121,23 +153,36 @@ paths:
           application/json:
             schema:
               type: object
-              required: [goal]
+              required:
+              - goal
               properties:
-                goal: {type: string, minLength: 1}
-                cwd: {type: string}
-                acceptance: {type: string}
-                route: {type: string}
+                goal:
+                  type: string
+                  minLength: 1
+                cwd:
+                  type: string
+                acceptance:
+                  type: string
+                route:
+                  type: string
       responses:
         '202':
           description: Plan attempt persisted, with plan_id, run_id and status; poll GET /plans/{id}
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Invalid request}
-        '401': {description: Unauthorized}
+              schema:
+                $ref: '#/components/schemas/PlanExecution'
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
   /plans/{id}:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     get:
       summary: Read a plan attempt, validation errors, nodes and review
       responses:
@@ -145,12 +190,19 @@ paths:
           description: Persisted plan view
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '404': {description: Plan not found in this workspace}
-        '401': {description: Unauthorized}
+              schema:
+                $ref: '#/components/schemas/PlanExecution'
+        '404':
+          description: Plan not found in this workspace
+        '401':
+          description: Unauthorized
   /plans/{id}/review:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     post:
       summary: Start independent sol review; poll GET /plans/{id} for completion
       responses:
@@ -158,13 +210,21 @@ paths:
           description: Review accepted; status is reviewing until reviewed or review_failed
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Invalid state}
-        '404': {description: Plan not found}
-        '401': {description: Unauthorized}
+              schema:
+                $ref: '#/components/schemas/PlanExecution'
+        '400':
+          description: Invalid state
+        '404':
+          description: Plan not found
+        '401':
+          description: Unauthorized
   /plans/{id}/execute:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     post:
       summary: Execute a human-approved plan DAG
       requestBody:
@@ -175,20 +235,31 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                route: {type: string, minLength: 1}
+                route:
+                  type: string
+                  minLength: 1
       responses:
         '202':
           description: Accepted; poll GET /plans/{id}
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Invalid state or input}
-        '401': {description: Unauthorized}
-        '403': {description: Recursive worker request denied}
-        '404': {description: Plan not found}
+              schema:
+                $ref: '#/components/schemas/PlanExecution'
+        '400':
+          description: Invalid state or input
+        '401':
+          description: Unauthorized
+        '403':
+          description: Recursive worker request denied
+        '404':
+          description: Plan not found
   /plans/{id}/replan:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     post:
       summary: Create a new planner version with feedback
       requestBody:
@@ -197,22 +268,34 @@ paths:
           application/json:
             schema:
               type: object
-              required: [feedback]
+              required:
+              - feedback
               properties:
-                feedback: {type: string, minLength: 1}
+                feedback:
+                  type: string
+                  minLength: 1
       responses:
         '202':
           description: Accepted; poll GET /plans/{id}
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/PlanExecution'}
-        '400': {description: Invalid state or input}
-        '401': {description: Unauthorized}
-        '403': {description: Recursive worker request denied}
-        '404': {description: Plan not found}
+              schema:
+                $ref: '#/components/schemas/PlanExecution'
+        '400':
+          description: Invalid state or input
+        '401':
+          description: Unauthorized
+        '403':
+          description: Recursive worker request denied
+        '404':
+          description: Plan not found
   /plans/{id}/approve:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
     post:
       deprecated: true
       summary: Disabled; approval requires interactive local CLI
@@ -223,23 +306,34 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [error]
+                required:
+                - error
                 properties:
-                  error: {const: approve_requires_cli}
-        '401': {description: Unauthorized}
+                  error:
+                    const: approve_requires_cli
+        '401':
+          description: Unauthorized
   /state:
     get:
-      tags: [state]
+      tags:
+      - state
       operationId: getState
       summary: Lightweight read-only control-tower status snapshot
-      description: |
-        Live runs and asks are queried on every request. Today, proposals,
+      description: 'Live runs and asks are queried on every request. Today, proposals,
+
         pending database memory candidates, and open HANDOFF.md decisions have
+
         a 1.5-second TTL. Zero git subprocess probes, no evidence assembly, no
+
         HTML rendering or per-agent cost expansion. needs_you and unverifiable
+
         cover the newest 50 work runs (unverifiable is 0 or 1). running includes
+
         queued/running/stalled, newest first, capped at 20; counts.running and
+
         counts.queued are uncapped status counts.
+
+        '
       responses:
         '200':
           description: State snapshot
@@ -260,7 +354,8 @@ paths:
           description: Success
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                type: object
         '400':
           description: Invalid arguments
   /memory/remember:
@@ -273,16 +368,21 @@ paths:
           application/json:
             schema:
               type: object
-              required: [text]
+              required:
+              - text
               properties:
-                text: {type: string}
-                source: {type: string, default: agent}
+                text:
+                  type: string
+                source:
+                  type: string
+                  default: agent
       responses:
         '200':
           description: Success
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                type: object
         '400':
           description: Invalid arguments
   /memory/harvest:
@@ -290,15 +390,29 @@ paths:
       operationId: memoryHarvest
       summary: Read harness memory candidates
       parameters:
-        - {in: query, name: project, schema: {type: string}}
-        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
-        - {in: query, name: conflicts_only, schema: {type: boolean, default: false}}
+      - in: query
+        name: project
+        schema:
+          type: string
+      - in: query
+        name: limit
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 50
+      - in: query
+        name: conflicts_only
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: Success
           content:
             application/json:
-              schema: {type: object}
+              schema:
+                type: object
         '400':
           description: Invalid arguments
   /memory/candidates:
@@ -310,12 +424,16 @@ paths:
           description: Success
           content:
             application/json:
-              schema: {type: array, items: {type: object}}
+              schema:
+                type: array
+                items:
+                  type: object
         '400':
           description: Invalid arguments
   /:
     get:
-      tags: [public]
+      tags:
+      - public
       operationId: getServiceInfo
       summary: 服务元信息（轻量 JSON）
       description: 返回服务名称、版本与只读状态/契约路径。
@@ -327,18 +445,26 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [service, version, state, openapi]
+                required:
+                - service
+                - version
+                - state
+                - openapi
                 properties:
-                  service: {type: string}
-                  version: {type: string}
-                  state: {type: string}
-                  openapi: {type: string}
+                  service:
+                    type: string
+                  version:
+                    type: string
+                  state:
+                    type: string
+                  openapi:
+                    type: string
         '500':
           $ref: '#/components/responses/InternalError'
-
   /health:
     get:
-      tags: [public]
+      tags:
+      - public
       operationId: getHealth
       summary: 存活探针
       security: []
@@ -351,10 +477,10 @@ paths:
                 $ref: '#/components/schemas/Health'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /favicon.ico:
     get:
-      tags: [public]
+      tags:
+      - public
       operationId: getFavicon
       summary: 空 favicon
       security: []
@@ -363,15 +489,17 @@ paths:
           description: 没有图标，空响应体
         '500':
           $ref: '#/components/responses/InternalError'
-
   /openapi.yaml:
     get:
-      tags: [public]
+      tags:
+      - public
       operationId: getOpenApiDocument
       summary: 这份 OpenAPI 文档
-      description: |
-        直接返回仓库根目录的 `openapi.yaml`。公开：schema 泄露的风险低于
+      description: '直接返回仓库根目录的 `openapi.yaml`。公开：schema 泄露的风险低于
+
         用不起来的成本，客户端可以直接拉契约生成代码。
+
+        '
       security: []
       responses:
         '200':
@@ -384,15 +512,17 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /agents:
     get:
-      tags: [catalog]
+      tags:
+      - catalog
       operationId: listAgents
       summary: 已注册的 agent CLI
-      description: |
-        `ready` 表示这台机器上能跑（可执行文件存在、不用端点凭据）；
+      description: '`ready` 表示这台机器上能跑（可执行文件存在、不用端点凭据）；
+
         `missing` 是具体缺什么。端点凭据缺失不算在 `ready` 里。
+
+        '
       responses:
         '200':
           description: agent 列表
@@ -406,15 +536,17 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /providers:
     get:
-      tags: [catalog]
+      tags:
+      - catalog
       operationId: listProviders
       summary: 已注册的模型端点
-      description: |
-        `ready` 只看凭据是否齐全；`pricing` 是每百万 token 的单价，
+      description: '`ready` 只看凭据是否齐全；`pricing` 是每百万 token 的单价，
+
         没有标价时为 null。
+
+        '
       responses:
         '200':
           description: 端点列表
@@ -428,15 +560,17 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /routes:
     get:
-      tags: [catalog]
+      tags:
+      - catalog
       operationId: listRoutes
       summary: 路由组（agent + 有序 provider 回退链）
-      description: |
-        `problems` 汇总路由本身和每个 provider 的缺失项；`ready` 为
+      description: '`problems` 汇总路由本身和每个 provider 的缺失项；`ready` 为
+
         `problems` 为空。
+
+        '
       responses:
         '200':
           description: 路由组列表
@@ -450,10 +584,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /profiles:
     get:
-      tags: [catalog]
+      tags:
+      - catalog
       operationId: listProfiles
       summary: 配置快照
       description: 没有 profile 文件时返回一个名为 `default` 的空 profile。
@@ -470,10 +604,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /tasks:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: listTasks
       summary: 最近 50 个任务
       responses:
@@ -490,7 +624,8 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: createTask
       summary: 建任务
       description: 所有字段都可省略；`goal` 为空也能建。`title` 为空时取 `goal` 前 60 字。
@@ -515,15 +650,15 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/tasks/{id}":
+  /tasks/{id}:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: getTask
       summary: 按 id 取任务
       description: 任务不存在时返回 `200 {}`（不是 404），调用方要自己判断空对象。
       parameters:
-        - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/TaskId'
       responses:
         '200':
           description: 任务记录；不存在时为空对象
@@ -531,25 +666,25 @@ paths:
             application/json:
               schema:
                 oneOf:
-                  - $ref: '#/components/schemas/Task'
-                  - $ref: '#/components/schemas/EmptyObject'
+                - $ref: '#/components/schemas/Task'
+                - $ref: '#/components/schemas/EmptyObject'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /runs:
     get:
-      tags: [runs]
+      tags:
+      - runs
       operationId: listRuns
       summary: 最近 50 个 run
       parameters:
-        - name: task_id
-          in: query
-          required: false
-          description: 只取这个任务的 run
-          schema:
-            type: string
+      - name: task_id
+        in: query
+        required: false
+        description: 只取这个任务的 run
+        schema:
+          type: string
       responses:
         '200':
           description: run 列表（按 started_at 倒序），每条带 verify 标记
@@ -564,13 +699,17 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     post:
-      tags: [runs]
+      tags:
+      - runs
       operationId: startRun
       summary: 起一个 run
-      description: |
-        `task_id` 不存在、route 不可用、cwd 已被别的 run 占用时返回
+      description: '`task_id` 不存在、route 不可用、cwd 已被别的 run 占用时返回
+
         `400 {"error": "..."}`。`wait` 大于 0 会阻塞 HTTP 请求直到 run
+
         结束（或超时），别在 UI 的普通请求里用。
+
+        '
       requestBody:
         required: true
         content:
@@ -596,15 +735,15 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/runs/{id}":
+  /runs/{id}:
     get:
-      tags: [runs]
+      tags:
+      - runs
       operationId: getRun
       summary: 按 id 取 run
       description: run 不存在时返回 `200 {}`（不是 404）。
       parameters:
-        - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: run 记录；不存在时为空对象
@@ -612,41 +751,49 @@ paths:
             application/json:
               schema:
                 oneOf:
-                  - $ref: '#/components/schemas/Run'
-                  - $ref: '#/components/schemas/EmptyObject'
+                - $ref: '#/components/schemas/Run'
+                - $ref: '#/components/schemas/EmptyObject'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/runs/{id}/events":
+  /runs/{id}/events:
     get:
-      tags: [runs, events]
+      tags:
+      - runs
+      - events
       operationId: getRunEvents
       summary: run 的事件流（JSON 或 SSE）
-      description: |
-        默认返回从 `after` 之后最多 500 条事件（JSON 数组）。`stream=1` 或
+      description: '默认返回从 `after` 之后最多 500 条事件（JSON 数组）。`stream=1` 或
+
         `stream=true` 时改为 SSE：先补发 backlog，再推实时事件，帧格式是
+
         `data: <Event JSON>\n\n`；约每 15 秒发一次 `: ping`。SSE 连接会一直
+
         挂着。`after` 不是整数会 500。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/RunId'
-        - name: after
-          in: query
-          required: false
-          description: 只取 seq 大于它的 backlog
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-        - name: stream
-          in: query
-          required: false
-          description: '`1` 或 `true` 走 SSE，其余值走 JSON'
-          schema:
-            type: string
-            enum: ['0', '1', 'true']
-            default: '0'
+      - $ref: '#/components/parameters/RunId'
+      - name: after
+        in: query
+        required: false
+        description: 只取 seq 大于它的 backlog
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      - name: stream
+        in: query
+        required: false
+        description: '`1` 或 `true` 走 SSE，其余值走 JSON'
+        schema:
+          type: string
+          enum:
+          - '0'
+          - '1'
+          - 'true'
+          default: '0'
       responses:
         '200':
           description: 事件数组，或一条 SSE 流
@@ -663,14 +810,14 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/runs/{id}/artifacts":
+  /runs/{id}/artifacts:
     get:
-      tags: [runs]
+      tags:
+      - runs
       operationId: listRunArtifacts
       summary: run 的产物文件
       parameters:
-        - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: artifact 列表
@@ -684,17 +831,19 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/runs/{id}/handoff":
+  /runs/{id}/handoff:
     get:
-      tags: [runs]
+      tags:
+      - runs
       operationId: getRunHandoff
       summary: run 所属任务的最新交接单
-      description: |
-        取该 run 的 task 最近一份 handoff 并读出正文。run 或 handoff 不存在时
+      description: '取该 run 的 task 最近一份 handoff 并读出正文。run 或 handoff 不存在时
+
         返回 `{"path": null, "text": ""}`；文件读不了时 text 为空串。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: 交接单路径与正文
@@ -706,17 +855,19 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/runs/{id}/stop":
+  /runs/{id}/stop:
     post:
-      tags: [runs]
+      tags:
+      - runs
       operationId: stopRun
       summary: 杀掉 run 的进程树
-      description: |
-        run 不在当前进程的 `procs` 表里时返回 `{"stopped": false}`，但仍然
+      description: 'run 不在当前进程的 `procs` 表里时返回 `{"stopped": false}`，但仍然
+
         是 HTTP 200；不会把数据库状态直接改成 failed。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/RunId'
+      - $ref: '#/components/parameters/RunId'
       responses:
         '200':
           description: 是否真的找到了进程并杀掉
@@ -732,20 +883,26 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /pipelines:
     get:
-      tags: [pipelines]
+      tags:
+      - pipelines
       operationId: listPipelines
       summary: 最近的 pipeline（默认 20 条）
       parameters:
-        - name: status
-          in: query
-          required: false
-          description: 按状态精确过滤；空串返回全部
-          schema:
-            type: string
-            enum: ['', queued, running, completed, failed, stopped]
+      - name: status
+        in: query
+        required: false
+        description: 按状态精确过滤；空串返回全部
+        schema:
+          type: string
+          enum:
+          - ''
+          - queued
+          - running
+          - completed
+          - failed
+          - stopped
       responses:
         '200':
           description: pipeline 列表
@@ -760,13 +917,17 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     post:
-      tags: [pipelines]
+      tags:
+      - pipelines
       operationId: submitPipeline
       summary: 提交 tdd / review / fix 作业
-      description: |
-        pipeline 在 daemon 的后台线程里跑，接口只负责落一行记录并立即返回
+      description: 'pipeline 在 daemon 的后台线程里跑，接口只负责落一行记录并立即返回
+
         201。参数错误（例如缺 target_run_id）通常在后台线程里才暴露，落到
+
         pipeline 的 `status=failed` 和 `error`，不会变成这里的 4xx。
+
+        '
       requestBody:
         required: true
         content:
@@ -792,14 +953,14 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/pipelines/{id}":
+  /pipelines/{id}:
     get:
-      tags: [pipelines]
+      tags:
+      - pipelines
       operationId: getPipeline
       summary: 按 id 取 pipeline
       parameters:
-        - $ref: '#/components/parameters/PipelineId'
+      - $ref: '#/components/parameters/PipelineId'
       responses:
         '200':
           description: pipeline 记录
@@ -813,25 +974,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/pipelines/{id}/events":
+  /pipelines/{id}/events:
     get:
-      tags: [pipelines, events]
+      tags:
+      - pipelines
+      - events
       operationId: getPipelineEvents
       summary: pipeline 的事件（JSON 数组）
-      description: |
-        和 run events 的区别是这里没有 SSE；`after` 之后最多 500 条。
+      description: '和 run events 的区别是这里没有 SSE；`after` 之后最多 500 条。
+
         pipeline 不存在时 404（和 `/pipelines/{id}` 一致）。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/PipelineId'
-        - name: after
-          in: query
-          required: false
-          description: 只取 seq 大于它的记录
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
+      - $ref: '#/components/parameters/PipelineId'
+      - name: after
+        in: query
+        required: false
+        description: 只取 seq 大于它的记录
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
       responses:
         '200':
           description: 事件数组
@@ -847,17 +1011,19 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/pipelines/{id}/stop":
+  /pipelines/{id}/stop:
     post:
-      tags: [pipelines]
+      tags:
+      - pipelines
       operationId: stopPipeline
       summary: 取消 pipeline
-      description: |
-        标记取消并停掉当前子 run。无论 id 是否存在都返回
+      description: '标记取消并停掉当前子 run。无论 id 是否存在都返回
+
         `{"stopped": true}`（200）；不校验归属。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/PipelineId'
+      - $ref: '#/components/parameters/PipelineId'
       responses:
         '200':
           description: 已请求取消
@@ -873,20 +1039,21 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /proposals:
     get:
-      tags: [proposals]
+      tags:
+      - proposals
       operationId: listProposals
       summary: 提案列表
       parameters:
-        - name: all
-          in: query
-          required: false
-          description: |
-            任意非空值（包括 `0`）都会返回全部状态；省略或空串只返回 open。
-          schema:
-            type: string
+      - name: all
+        in: query
+        required: false
+        description: '任意非空值（包括 `0`）都会返回全部状态；省略或空串只返回 open。
+
+          '
+        schema:
+          type: string
       responses:
         '200':
           description: 提案列表（按 created_at 倒序）
@@ -900,18 +1067,21 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/proposals/{id}/merge":
+  /proposals/{id}/merge:
     post:
-      tags: [proposals]
+      tags:
+      - proposals
       operationId: mergeProposal
       summary: 把提案分支合入主树
-      description: |
-        在目标仓库的写锁下执行 `git merge --no-ff`。成功时删掉 worktree 和
+      description: '在目标仓库的写锁下执行 `git merge --no-ff`。成功时删掉 worktree 和
+
         分支、把提案标成 merged；冲突或锁被占用时主树不动，返回 409 且
+
         `ok=false`。提案不存在返回 404。
+
+        '
       parameters:
-        - $ref: '#/components/parameters/ProposalId'
+      - $ref: '#/components/parameters/ProposalId'
       responses:
         '200':
           description: 合并成功
@@ -935,15 +1105,15 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
-  "/proposals/{id}/reject":
+  /proposals/{id}/reject:
     post:
-      tags: [proposals]
+      tags:
+      - proposals
       operationId: rejectProposal
       summary: 丢弃提案
       description: 删 worktree 和分支，把提案标成 rejected。提案不存在返回 404。
       parameters:
-        - $ref: '#/components/parameters/ProposalId'
+      - $ref: '#/components/parameters/ProposalId'
       responses:
         '200':
           description: 已丢弃
@@ -961,17 +1131,21 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /memory/adopt:
     post:
-      tags: [memory]
+      tags:
+      - memory
       operationId: adoptMemoryCandidates
       summary: 采纳候选事实，追加进项目 AGENTS.md
-      description: |
-        把人审过的候选追加到项目根 `AGENTS.md` 的 `## 已验证事实` 小节，格式为
+      description: '把人审过的候选追加到项目根 `AGENTS.md` 的 `## 已验证事实` 小节，格式为
+
         `- YYYY-MM-DD（来源 <文件>）<事实>`。重复采纳同一条不会写第二遍，
+
         文件里已有的内容一行不动。候选来自 `sodus debug memory harvest`
+
         或 `sodus debug memory candidates`。
+
+        '
       requestBody:
         required: true
         content:
@@ -1003,21 +1177,24 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
-
   /events:
     get:
-      tags: [events]
+      tags:
+      - events
       operationId: streamEvents
       summary: 全局事件流（SSE）
-      description: |
-        只推订阅之后的实时事件，不补历史。EventSource 不能设请求头，所以
+      description: '只推订阅之后的实时事件，不补历史。EventSource 不能设请求头，所以
+
         token 走 `?token=`（也接受 Authorization 头）。每帧
+
         `data: <Event JSON>\n\n`，空闲时约每 15 秒发 `: ping`。
+
+        '
       security:
-        - bearerAuth: []
-        - eventsToken: []
+      - bearerAuth: []
+      - eventsToken: []
       parameters:
-        - $ref: '#/components/parameters/StreamToken'
+      - $ref: '#/components/parameters/StreamToken'
       responses:
         '200':
           description: SSE 流
@@ -1029,16 +1206,15 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
-
-
   /asks:
     get:
       summary: List unexpired asks in a workspace (defaults to server workspace)
       operationId: listAsks
       parameters:
-        - in: query
-          name: workspace
-          schema: {type: string}
+      - in: query
+        name: workspace
+        schema:
+          type: string
       responses:
         '200':
           description: Unexpired asks, newest first; status uses the polling state mapping
@@ -1048,62 +1224,109 @@ paths:
                 type: array
                 items:
                   type: object
-                  required: [id, status, created_at, expires_at]
+                  required:
+                  - id
+                  - status
+                  - created_at
+                  - expires_at
                   properties:
-                    id: {type: string}
-                    status: {type: string, enum: [queued, running, stalled, answered, promoted, failed]}
-                    created_at: {type: number}
-                    expires_at: {type: number}
-        '401': {description: Unauthorized}
-
+                    id:
+                      type: string
+                    status:
+                      type: string
+                      enum:
+                      - queued
+                      - running
+                      - stalled
+                      - answered
+                      - promoted
+                      - failed
+                    created_at:
+                      type: number
+                    expires_at:
+                      type: number
+        '401':
+          description: Unauthorized
   /ask:
     post:
       summary: Queue an isolated answer (24 hour TTL)
       parameters:
-        - in: header
-          name: X-Sodus-Depth
-          schema: {type: integer, default: 0}
-          description: Values at least one are rejected to prevent recursion.
+      - in: header
+        name: X-Sodus-Depth
+        schema:
+          type: integer
+          default: 0
+        description: Values at least one are rejected to prevent recursion.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [request_id, text]
+              required:
+              - request_id
+              - text
               properties:
-                request_id: {type: string, minLength: 1}
-                text: {type: string, minLength: 1}
-                cwd: {type: string}
-                route: {type: string}
-                follow_up_of: {type: string}
-                origin: {type: string, enum: [http, cli, mcp]}
-                client: {type: string}
+                request_id:
+                  type: string
+                  minLength: 1
+                text:
+                  type: string
+                  minLength: 1
+                cwd:
+                  type: string
+                route:
+                  type: string
+                follow_up_of:
+                  type: string
+                origin:
+                  type: string
+                  enum:
+                  - http
+                  - cli
+                  - mcp
+                client:
+                  type: string
                 session_ref: {}
       responses:
-        '200': {description: Existing request with identical canonical payload}
+        '200':
+          description: Existing request with identical canonical payload
         '202':
           description: Queued answer
           content:
             application/json:
               schema:
                 type: object
-                required: [id, request_id, status, poll]
+                required:
+                - id
+                - request_id
+                - status
+                - poll
                 properties:
-                  id: {type: string}
-                  request_id: {type: string}
-                  status: {type: string, const: queued}
-                  poll: {type: string}
-        '400': {description: Invalid request}
-        '401': {description: Unauthorized}
-        '403': {description: recursion_denied}
-        '409': {description: request_id_conflict (includes existing id and payload_hash)}
+                  id:
+                    type: string
+                  request_id:
+                    type: string
+                  status:
+                    type: string
+                    const: queued
+                  poll:
+                    type: string
+        '400':
+          description: Invalid request
+        '401':
+          description: Unauthorized
+        '403':
+          description: recursion_denied
+        '409':
+          description: request_id_conflict (includes existing id and payload_hash)
   /ask/{id}:
     parameters:
-      - in: path
-        name: id
-        required: true
-        schema: {type: string}
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
     get:
       summary: Poll answer status
       responses:
@@ -1113,25 +1336,62 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [id, status, answer, run_id, task_id, wrote_files, cost, expires_at]
+                required:
+                - id
+                - status
+                - answer
+                - run_id
+                - task_id
+                - wrote_files
+                - cost
+                - expires_at
                 properties:
-                  id: {type: string}
-                  status: {type: string, enum: [queued, running, stalled, answered, failed, promoted, expired]}
-                  answer: {type: [string, 'null']}
-                  run_id: {type: [string, 'null']}
-                  task_id: {type: [string, 'null']}
-                  wrote_files: {type: boolean}
-                  cost: {type: [number, 'null']}
-                  expires_at: {type: number}
-        '401': {description: Unauthorized}
-        '404': {description: Unknown ask}
-        '410': {description: Expired ask, including swept ids}
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    enum:
+                    - queued
+                    - running
+                    - stalled
+                    - answered
+                    - failed
+                    - promoted
+                    - expired
+                  answer:
+                    type:
+                    - string
+                    - 'null'
+                  run_id:
+                    type:
+                    - string
+                    - 'null'
+                  task_id:
+                    type:
+                    - string
+                    - 'null'
+                  wrote_files:
+                    type: boolean
+                  cost:
+                    type:
+                    - number
+                    - 'null'
+                  expires_at:
+                    type: number
+        '401':
+          description: Unauthorized
+        '404':
+          description: Unknown ask
+        '410':
+          description: Expired ask
+          including swept ids: null
   /ask/{id}/promote:
     parameters:
-      - in: path
-        name: id
-        required: true
-        schema: {type: string}
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
     post:
       summary: Idempotently promote an answer into a task
       requestBody:
@@ -1140,10 +1400,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [acceptance]
+              required:
+              - acceptance
               properties:
-                acceptance: {type: string, minLength: 1}
-                route: {type: string}
+                acceptance:
+                  type: string
+                  minLength: 1
+                route:
+                  type: string
       responses:
         '201':
           description: Created or previously promoted task
@@ -1151,31 +1415,40 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [task_id]
+                required:
+                - task_id
                 properties:
-                  task_id: {type: string}
-        '400': {description: Acceptance is required}
-        '401': {description: Unauthorized}
-        '404': {description: Unknown ask}
-        '410': {description: Expired ask}
-
+                  task_id:
+                    type: string
+        '400':
+          description: Acceptance is required
+        '401':
+          description: Unauthorized
+        '404':
+          description: Unknown ask
+        '410':
+          description: Expired ask
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      description: |
-        `~/.sodus/token` 的内容（Windows 为
+      description: '`~/.sodus/token` 的内容（Windows 为
+
         `%USERPROFILE%\.sodus\token`；`SODUS_HOME` 可改根目录）。请求头写法
+
         `Authorization: Bearer <token>`。首次启动 daemon 时自动生成。
+
+        '
     eventsToken:
       type: apiKey
       in: query
       name: token
-      description: |
-        `/events` 专用：EventSource 不能设置 Authorization 头，所以允许把
+      description: '`/events` 专用：EventSource 不能设置 Authorization 头，所以允许把
+
         同一个 token 放在查询参数里。其他端点不接受 query token。
 
+        '
   parameters:
     TaskId:
       name: id
@@ -1212,7 +1485,6 @@ components:
       description: '本地 token；省略时必须带 `Authorization: Bearer`'
       schema:
         type: string
-
   responses:
     Unauthorized:
       description: token 缺失或不匹配
@@ -1244,185 +1516,320 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-
   schemas:
     PlanExecution:
       type: object
-      required: [id, status, plan_json, errors_json, run_id, review_json, warnings_json]
+      required:
+      - id
+      - status
+      - plan_json
+      - errors_json
+      - run_id
+      - review_json
+      - warnings_json
       properties:
-        id: {type: string}
-        plan_id: {type: string}
-        parent_id: {type: [string, 'null']}
-        version: {type: integer}
-        feedback: {type: [string, 'null']}
-        status: {enum: [draft, planning, validated, reviewing, review_failed, failed, reviewed, approved, materializing, executing, done]}
-        run_id: {type: [string, 'null']}
-        review_run_id: {type: [string, 'null']}
-        cwd: {type: [string, 'null']}
-        plan_json: {type: object}
-        errors_json: {type: string, description: JSON encoded validation or execution error array}
-        warnings_json: {type: string, description: JSON encoded non-blocking validation warnings}
+        id:
+          type: string
+        plan_id:
+          type: string
+        parent_id:
+          type:
+          - string
+          - 'null'
+        version:
+          type: integer
+        feedback:
+          type:
+          - string
+          - 'null'
+        status:
+          enum:
+          - draft
+          - planning
+          - validated
+          - reviewing
+          - review_failed
+          - failed
+          - reviewed
+          - approved
+          - materializing
+          - executing
+          - done
+        run_id:
+          type:
+          - string
+          - 'null'
+        review_run_id:
+          type:
+          - string
+          - 'null'
+        cwd:
+          type:
+          - string
+          - 'null'
+        plan_json:
+          type: object
+        errors_json:
+          type: string
+          description: JSON encoded validation or execution error array
+        warnings_json:
+          type: string
+          description: JSON encoded non-blocking validation warnings
         review_json:
-          type: [object, 'null']
+          type:
+          - object
+          - 'null'
           properties:
-            verdict: {enum: [approve, revise, reject]}
-            findings: {type: array, items: {}}
-        approved_by: {type: [string, 'null']}
-        approved_at: {type: [number, 'null']}
+            verdict:
+              enum:
+              - approve
+              - revise
+              - reject
+            findings:
+              type: array
+              items: {}
+        approved_by:
+          type:
+          - string
+          - 'null'
+        approved_at:
+          type:
+          - number
+          - 'null'
         nodes:
           type: array
           items:
             type: object
             properties:
-              node_id: {type: string}
-              task_id: {type: [string, 'null']}
-              run_id: {type: [string, 'null']}
-              status: {enum: [pending, materialized, running, done, failed]}
+              node_id:
+                type: string
+              task_id:
+                type:
+                - string
+                - 'null'
+              run_id:
+                type:
+                - string
+                - 'null'
+              status:
+                enum:
+                - pending
+                - materialized
+                - running
+                - done
+                - failed
     State:
       type: object
       additionalProperties: false
-      required: [version, workspace_id, now, running, counts, today, asks, memory, decisions]
+      required:
+      - version
+      - workspace_id
+      - now
+      - running
+      - counts
+      - today
+      - asks
+      - memory
+      - decisions
       properties:
-        version: {type: string, const: '0.9.0'}
-        workspace_id: {type: string}
-        now: {type: number}
+        version:
+          type: string
+          const: 0.9.0
+        workspace_id:
+          type: string
+        now:
+          type: number
         running:
           type: array
           maxItems: 20
           items:
             type: object
-            required: [id, task_id, agent, route, started_at, cwd]
+            required:
+            - id
+            - task_id
+            - agent
+            - route
+            - started_at
+            - cwd
             properties:
-              id: {type: string}
-              task_id: {type: [string, 'null']}
-              agent: {type: [string, 'null']}
-              route: {type: [string, 'null']}
-              started_at: {type: [number, 'null']}
-              cwd: {type: [string, 'null']}
+              id:
+                type: string
+              task_id:
+                type:
+                - string
+                - 'null'
+              agent:
+                type:
+                - string
+                - 'null'
+              route:
+                type:
+                - string
+                - 'null'
+              started_at:
+                type:
+                - number
+                - 'null'
+              cwd:
+                type:
+                - string
+                - 'null'
         counts:
           type: object
-          required: [running, queued, needs_you, unverifiable, proposals, asks_open, memory_candidates, open_decisions]
+          required:
+          - running
+          - queued
+          - needs_you
+          - unverifiable
+          - proposals
+          - asks_open
+          - memory_candidates
+          - open_decisions
           additionalProperties: false
           properties:
-            running: {type: integer, minimum: 0}
-            queued: {type: integer, minimum: 0}
-            needs_you: {type: integer, minimum: 0}
-            unverifiable: {type: integer, minimum: 0, maximum: 1}
-            proposals: {type: integer, minimum: 0}
-            asks_open: {type: integer, minimum: 0}
-            memory_candidates: {type: integer, minimum: 0}
-            open_decisions: {type: integer, minimum: 0}
+            running:
+              type: integer
+              minimum: 0
+            queued:
+              type: integer
+              minimum: 0
+            needs_you:
+              type: integer
+              minimum: 0
+            unverifiable:
+              type: integer
+              minimum: 0
+              maximum: 1
+            proposals:
+              type: integer
+              minimum: 0
+            asks_open:
+              type: integer
+              minimum: 0
+            memory_candidates:
+              type: integer
+              minimum: 0
+            open_decisions:
+              type: integer
+              minimum: 0
         today:
           type: object
-          required: [CNY, runs, unpriced]
+          required:
+          - CNY
+          - runs
+          - unpriced
           properties:
-            CNY: {type: number}
-            runs: {type: integer, minimum: 0}
-            unpriced: {type: integer, minimum: 0, description: Runs without a recorded price; no FX conversion}
+            CNY:
+              type: number
+            runs:
+              type: integer
+              minimum: 0
+            unpriced:
+              type: integer
+              minimum: 0
+              description: Runs without a recorded price; no FX conversion
         asks:
           type: object
           description: open is queued; done is answered; includes retained expired rows without modifying them.
-          required: [open, running, done, failed]
+          required:
+          - open
+          - running
+          - done
+          - failed
           additionalProperties: false
           properties:
-            open: {type: integer, minimum: 0}
-            running: {type: integer, minimum: 0}
-            done: {type: integer, minimum: 0}
-            failed: {type: integer, minimum: 0}
+            open:
+              type: integer
+              minimum: 0
+            running:
+              type: integer
+              minimum: 0
+            done:
+              type: integer
+              minimum: 0
+            failed:
+              type: integer
+              minimum: 0
         memory:
           type: object
-          required: [candidates_pending]
+          required:
+          - candidates_pending
           properties:
-            candidates_pending: {type: integer, minimum: 0, description: Database proposed or retire_proposed candidates in workspace or saved project}
+            candidates_pending:
+              type: integer
+              minimum: 0
+              description: Database proposed or retire_proposed candidates in workspace or saved project
         decisions:
           type: object
-          required: [open, items]
+          required:
+          - open
+          - items
           additionalProperties: false
           properties:
-            open: {type: integer, minimum: 0}
+            open:
+              type: integer
+              minimum: 0
             items:
               type: array
               maxItems: 20
               items:
                 type: object
-                required: [project, project_root, id, title, recommend]
+                required:
+                - project
+                - project_root
+                - id
+                - title
+                - recommend
                 properties:
-                  project: {type: string}
-                  project_root: {type: string}
-                  id: {type: string}
-                  title: {type: string}
-                  recommend: {type: string}
+                  project:
+                    type: string
+                  project_root:
+                    type: string
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  recommend:
+                    type: string
     Error:
       type: object
       additionalProperties: false
-      required: [error]
+      required:
+      - error
       properties:
         error:
           type: string
-          examples: [unauthorized, 'not found', 'invalid json', 'body too large', 'internal error']
-
+          examples:
+          - unauthorized
+          - not found
+          - invalid json
+          - body too large
+          - internal error
     EmptyObject:
       type: object
       description: 资源不存在时接口返回的空对象
       maxProperties: 0
-
-    MemorySource:
-      type: object
-      additionalProperties: false
-      required: [path, scope, harness]
-      properties:
-        path:
-          type: string
-          description: 记忆文件绝对路径
-        scope:
-          type: string
-          enum: [project, global]
-        harness:
-          type: string
-          enum: [claude, codex, dsh, other]
-          description: 按文件名和所在目录猜的归属，`other` 表示猜不出来
-
-    MemoryCandidate:
-      type: object
-      additionalProperties: false
-      required: [id, text, sources, conflict, adopted]
-      description: |
-        从 harness 自己的记忆文件里抽出来的一条事实。`id` 由归一化文本的哈希
-        得到，源文件不变时跨调用稳定，采纳时用它。`adopted` 表示这条已经出现在
-        项目 AGENTS.md 的「已验证事实」小节里。
-      properties:
-        id:
-          type: string
-          examples: ['mem-0123456789']
-        text:
-          type: string
-        sources:
-          type: array
-          description: 同一条事实出现在几个文件里就列几个
-          items:
-            $ref: '#/components/schemas/MemorySource'
-        conflict:
-          type: boolean
-          description: 同主题下有另一种相反说法；规则很粗，看之前先读两条原文
-        adopted:
-          type: boolean
-
     MemoryAdoptRequest:
       type: object
       additionalProperties: false
-      required: [ids]
+      required:
+      - ids
       properties:
         ids:
           type: array
           minItems: 1
           items:
             type: string
-            pattern: '^mem-[0-9a-f]{6,40}$'
-
+            pattern: ^mem-[0-9a-f]{6,40}$
     MemoryAdoptResult:
       type: object
       additionalProperties: false
-      required: [ok, adopted, path, added, already]
+      required:
+      - ok
+      - adopted
+      - path
+      - added
+      - already
       properties:
         ok:
           type: boolean
@@ -1440,25 +1847,32 @@ components:
         already:
           type: integer
           description: 因为已经存在而跳过的条数
-
     Health:
       type: object
       additionalProperties: false
-      required: [ok, version, profile]
+      required:
+      - ok
+      - version
+      - profile
       properties:
         ok:
           type: boolean
           const: true
         version:
           type: string
-          examples: [0.4.0]
+          examples:
+          - 0.4.0
         profile:
           type: string
           description: 当前 active profile
-
     Agent:
       type: object
-      required: [name, vendor, protocols, ready, missing]
+      required:
+      - name
+      - vendor
+      - protocols
+      - ready
+      - missing
       properties:
         name:
           type: string
@@ -1476,11 +1890,14 @@ components:
           description: 不可用的原因；空数组表示可用
           items:
             type: string
-
     Pricing:
       type: object
       additionalProperties: false
-      required: [input, output, cache_read, currency]
+      required:
+      - input
+      - output
+      - cache_read
+      - currency
       properties:
         input:
           type: number
@@ -1491,30 +1908,47 @@ components:
           type: number
         currency:
           type: string
-          examples: [USD, CNY]
-
+          examples:
+          - USD
+          - CNY
     Provider:
       type: object
-      required: [name, protocol, base_url, model, tiers, pricing, meter, note, ready, missing]
+      required:
+      - name
+      - protocol
+      - base_url
+      - model
+      - tiers
+      - pricing
+      - meter
+      - note
+      - ready
+      - missing
       properties:
         name:
           type: string
         protocol:
           type: string
         base_url:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         model:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         tiers:
           type: object
           additionalProperties:
             type: string
         pricing:
           oneOf:
-            - $ref: '#/components/schemas/Pricing'
-            - type: 'null'
+          - $ref: '#/components/schemas/Pricing'
+          - type: 'null'
         meter:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         note:
           type: string
         ready:
@@ -1524,10 +1958,16 @@ components:
           description: 缺的凭据/配置项
           items:
             type: string
-
     RouteInfo:
       type: object
-      required: [name, agent, providers, model, effort, ready, problems]
+      required:
+      - name
+      - agent
+      - providers
+      - model
+      - effort
+      - ready
+      - problems
       properties:
         name:
           type: string
@@ -1539,44 +1979,67 @@ components:
           items:
             type: string
         model:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         effort:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         ready:
           type: boolean
         problems:
           type: array
           items:
             type: string
-
     Profile:
       type: object
-      required: [name, route, model, effort, created_at, active]
+      required:
+      - name
+      - route
+      - model
+      - effort
+      - created_at
+      - active
       properties:
         name:
           type: string
         route:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         model:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         effort:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         created_at:
           type: number
         active:
           type: boolean
-
     Task:
       type: object
       description: '`task` 表的一行；`budget_json` 是 JSON 字符串，不是对象。'
-      required: [id, workspace_id, title, goal, acceptance, status, created_at]
+      required:
+      - id
+      - workspace_id
+      - title
+      - goal
+      - acceptance
+      - status
+      - created_at
       properties:
         id:
           type: string
         workspace_id:
           type: string
         session_id:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         title:
           type: string
         goal:
@@ -1585,13 +2048,18 @@ components:
           type: string
         status:
           type: string
-          enum: [open, done, needs_review, failed]
+          enum:
+          - open
+          - done
+          - needs_review
+          - failed
         budget_json:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           description: JSON 编码的预算；目前没有写入方
         created_at:
           type: number
-
     TaskCreate:
       type: object
       properties:
@@ -1602,20 +2070,29 @@ components:
           type: string
           default: ''
         session_id:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           description: 省略时自动建一个 session
         title:
           type: string
           default: ''
           description: 省略时取 goal 前 60 字
-
     Run:
       type: object
-      description: |
-        `run` 表的一行。`usage_json`、`session_ref_json` 是 JSON 字符串，
+      description: '`run` 表的一行。`usage_json`、`session_ref_json` 是 JSON 字符串，
+
         需要客户端二次解析；`usage_json` 里可能有 input_tokens、
+
         output_tokens、cache_read、cost、currency、cost_basis。
-      required: [id, workspace_id, agent, status, cwd]
+
+        '
+      required:
+      - id
+      - workspace_id
+      - agent
+      - status
+      - cwd
       properties:
         mcp:
           type: object
@@ -1630,9 +2107,16 @@ components:
           type: string
         status:
           type: string
-          enum: [queued, running, completed, failed, stalled]
+          enum:
+          - queued
+          - running
+          - completed
+          - failed
+          - stalled
         parent_run_id:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         cwd:
           type: string
         note:
@@ -1640,45 +2124,70 @@ components:
         effort:
           type: string
         model:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         route:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         provider:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         profile:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         session_ref_json:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         usage_json:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         owner_pid:
-          type: [integer, 'null']
+          type:
+          - integer
+          - 'null'
         owner_host:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         started_at:
-          type: [number, 'null']
+          type:
+          - number
+          - 'null'
         ended_at:
-          type: [number, 'null']
+          type:
+          - number
+          - 'null'
         error:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         problem:
           type: string
           description: 仅 GET /runs/{id} 且状态为 failed 时出现，一句人话
-
     RunWithVerify:
       allOf:
-        - $ref: '#/components/schemas/Run'
-        - type: object
-          required: [verify]
-          properties:
-            verify:
-              type: string
-              description: 执行证据，不参与 run.status
-              enum: [ok, red, none]
-
+      - $ref: '#/components/schemas/Run'
+      - type: object
+        required:
+        - verify
+        properties:
+          verify:
+            type: string
+            description: 执行证据，不参与 run.status
+            enum:
+            - ok
+            - red
+            - none
     RunCreate:
       type: object
-      required: [task_id]
+      required:
+      - task_id
       properties:
         task_id:
           type: string
@@ -1690,7 +2199,9 @@ components:
           type: string
           description: '`route` 的旧名字，仅在 route 缺失时使用'
         cwd:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           description: 工作目录；省略时用 daemon 进程的 cwd
         note:
           type: string
@@ -1709,33 +2220,46 @@ components:
           default: ''
           description: 指定端点时覆盖回退链（用于接续会话）
         parent_run_id:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         session_id:
           type: string
           default: ''
         session_mode:
           type: string
-          enum: [resume, fork]
+          enum:
+          - resume
+          - fork
           default: resume
         wait:
           type: number
           default: 0
           description: 大于 0 时阻塞这么多秒等 run 结束
         verify:
-          type: [boolean, 'null']
+          type:
+          - boolean
+          - 'null'
           description: null 表示按全局 auto_verify 策略决定
         propose:
           type: boolean
           default: false
           description: 在独立 worktree 里跑，产出提案
-
     Event:
       type: object
-      description: |
-        事件表的 HTTP 形状。`payload` 的结构随 `type` 变化（run.started、
+      description: '事件表的 HTTP 形状。`payload` 的结构随 `type` 变化（run.started、
+
         run.attempt、run.fallback、usage、verify.green/red、run.completed、
+
         run.failed、pipeline.* 等）；数据库里的 `version` 列不在响应里。
-      required: [run_id, seq, type, payload, ts]
+
+        '
+      required:
+      - run_id
+      - seq
+      - type
+      - payload
+      - ts
       properties:
         run_id:
           type: string
@@ -1744,16 +2268,28 @@ components:
           type: integer
         type:
           type: string
-          examples: [run.started, run.attempt, usage, verify.green, verify.red]
+          examples:
+          - run.started
+          - run.attempt
+          - usage
+          - verify.green
+          - verify.red
         payload:
           type: object
           additionalProperties: true
         ts:
           type: number
-
     Artifact:
       type: object
-      required: [id, workspace_id, run_id, task_id, kind, path, hash, created_at]
+      required:
+      - id
+      - workspace_id
+      - run_id
+      - task_id
+      - kind
+      - path
+      - hash
+      - created_at
       properties:
         id:
           type: string
@@ -1765,7 +2301,11 @@ components:
           type: string
         kind:
           type: string
-          examples: [file, handoff, verify, review]
+          examples:
+          - file
+          - handoff
+          - verify
+          - review
         path:
           type: string
         rel_path:
@@ -1776,31 +2316,36 @@ components:
           type: string
         created_at:
           type: number
-
     Handoff:
       type: object
       additionalProperties: false
-      required: [path, text]
+      required:
+      - path
+      - text
       properties:
         path:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
           description: 交接单文件路径；没有交接单时为 null
         text:
           type: string
           description: 文件正文；读不到时为空串
-
     StopResult:
       type: object
       additionalProperties: false
-      required: [stopped]
+      required:
+      - stopped
       properties:
         stopped:
           type: boolean
-
     ProposalFile:
       type: object
       additionalProperties: false
-      required: [path, added, removed]
+      required:
+      - path
+      - added
+      - removed
       properties:
         path:
           type: string
@@ -1808,13 +2353,23 @@ components:
           type: integer
         removed:
           type: integer
-
     Proposal:
       type: object
-      description: |
-        `proposal` 表的一行。`files` 已解析成数组；`files_json` 仍是原始
+      description: '`proposal` 表的一行。`files` 已解析成数组；`files_json` 仍是原始
+
         JSON 字符串，同时返回。
-      required: [id, workspace_id, run_id, task_id, repo, branch, status, files, created_at]
+
+        '
+      required:
+      - id
+      - workspace_id
+      - run_id
+      - task_id
+      - repo
+      - branch
+      - status
+      - files
+      - created_at
       properties:
         id:
           type: string
@@ -1843,18 +2398,24 @@ components:
           description: JSON 编码的文件列表
         stat:
           type: string
-          examples: ['3 file(s), +120 −4']
+          examples:
+          - 3 file(s), +120 −4
         status:
           type: string
-          enum: [open, merged, rejected]
+          enum:
+          - open
+          - merged
+          - rejected
         created_at:
           type: number
         closed_at:
-          type: [number, 'null']
-
+          type:
+          - number
+          - 'null'
     MergeResult:
       type: object
-      required: [ok]
+      required:
+      - ok
       properties:
         ok:
           type: boolean
@@ -1870,11 +2431,13 @@ components:
         conflict:
           type: boolean
           description: 失败是否由 git 冲突导致
-
     RejectResult:
       type: object
       additionalProperties: false
-      required: [ok, proposal, status]
+      required:
+      - ok
+      - proposal
+      - status
       properties:
         ok:
           type: boolean
@@ -1884,13 +2447,19 @@ components:
         status:
           type: string
           const: rejected
-
     Pipeline:
       type: object
-      description: |
-        `pipeline` 表的一行。`params_json` 和 `result_json` 是 JSON 字符串，
+      description: '`pipeline` 表的一行。`params_json` 和 `result_json` 是 JSON 字符串，
+
         这个接口不替客户端解析。
-      required: [id, workspace_id, kind, status, created_at]
+
+        '
+      required:
+      - id
+      - workspace_id
+      - kind
+      - status
+      - created_at
       properties:
         id:
           type: string
@@ -1898,299 +2467,51 @@ components:
           type: string
         kind:
           type: string
-          enum: [tdd, review, fix]
+          enum:
+          - tdd
+          - review
+          - fix
         label:
           type: string
         status:
           type: string
-          enum: [queued, running, completed, failed, stopped, stalled]
+          enum:
+          - queued
+          - running
+          - completed
+          - failed
+          - stopped
+          - stalled
         params_json:
           type: string
         result_json:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         error:
-          type: [string, 'null']
+          type:
+          - string
+          - 'null'
         created_at:
           type: number
-
     PipelineCreate:
       type: object
-      required: [kind]
+      required:
+      - kind
       properties:
         kind:
           type: string
-          enum: [tdd, review, fix]
+          enum:
+          - tdd
+          - review
+          - fix
         params:
           type: object
           additionalProperties: true
-          description: |
-            按 kind 传给对应入口：
-            - tdd: `task_id`、`cwd`（必填），可选 `writer`、`impl`、
-              `test_cmd`、`retries`、`dry_run`、`review`、`reviewer`。
-            - review: `target_run_id`（必填），可选 `by`、`focus`、
-              `scope`、`timeout`、`dry_run`。
-            - fix: `target_run_id`（必填），可选 `by`、`rounds`、
-              `review_first`、`timeout`。
-            这里不做参数校验，错误会落到 pipeline 的 status/error。
+          description: "按 kind 传给对应入口：\n- tdd: `task_id`、`cwd`（必填），可选 `writer`、`impl`、\n  `test_cmd`、`retries`、`dry_run`、`review`、`reviewer`。\n\
+            - review: `target_run_id`（必填），可选 `by`、`focus`、\n  `scope`、`timeout`、`dry_run`。\n- fix: `target_run_id`（必填），可选\
+            \ `by`、`rounds`、\n  `review_first`、`timeout`。\n这里不做参数校验，错误会落到 pipeline 的 status/error。\n"
           default: {}
         label:
           type: string
           default: ''
-
-    LiveRun:
-      type: object
-      description: 还在 queued/running 的 run 的实时摘要
-      required: [id, agent, route, provider, cwd, note, status, tokens]
-      properties:
-        id:
-          type: string
-        agent:
-          type: string
-        route:
-          type: string
-        provider:
-          type: string
-        cwd:
-          type: string
-        note:
-          type: string
-        status:
-          type: string
-          enum: [queued, running]
-        started_at:
-          type: [number, 'null']
-        tokens:
-          type: object
-          additionalProperties: false
-          required: [input, output]
-          properties:
-            input:
-              type: integer
-            output:
-              type: integer
-        partial_cost:
-          type: [number, 'null']
-          description: 按 usage 事件累加的下界，不是最终计价
-        partial_currency:
-          type: string
-          description: 有 partial_cost 时为 USD，否则空串
-
-    Decision:
-      type: object
-      required: [kind, id, run, title, detail, note, at]
-      properties:
-        kind:
-          type: string
-          enum: [proposal, red, failed, unverified]
-        id:
-          type: string
-        run:
-          type: string
-        title:
-          type: string
-        detail:
-          type: string
-        note:
-          type: string
-        at:
-          type: [number, 'null']
-
-    UnverifiedRun:
-      type: object
-      description: 跑完但没有测试证据、可以由看板逐条展开的一个 run
-      required: [id, task_id, title, agent, ended_at, verify]
-      properties:
-        id:
-          type: string
-        task_id:
-          type: string
-        title:
-          type: string
-        agent:
-          type: string
-        ended_at:
-          type: number
-        verify:
-          type: string
-          enum: [none]
-
-    DecisionContext:
-      type: object
-      description: |
-        `needs_you` / `deterministic` 的一行：不打开日志就能看懂哪个项目、
-        哪个任务、出了什么问题、改了什么、下一步做什么。
-      required: [kind, id, run, project, cwd, task_id, task_title, goal, problem,
-                 suggestion, title, detail, note, at]
-      properties:
-        kind:
-          type: string
-          enum: [proposal, red, failed, unverified]
-        id:
-          type: string
-        run:
-          type: string
-        at:
-          type: [number, 'null']
-        project:
-          type: string
-          description: run.cwd 的最后一级目录
-        cwd:
-          type: string
-          description: 完整工作目录
-        task_id:
-          type: string
-        task_title:
-          type: string
-        goal:
-          type: string
-          description: task.goal，截断到 120 字
-        problem:
-          type: string
-          description: 一句人话；失败类由 recover.problem_text 给出
-        change:
-          type: [string, 'null']
-          description: 提案的 stat，或失败 run 的 artifacts/handoff 改动摘要
-        suggestion:
-          type: string
-        title:
-          type: string
-          description: 兼容旧 `decisions` 的标题
-        detail:
-          type: string
-        note:
-          type: string
-
-    Recovery:
-      type: object
-      description: 正在自动重试的一件失败；`next_retry_at` 为 null 表示重试已在跑
-      required: [run_id, task_id, task_title, project, attempt, limit, next_retry_at]
-      properties:
-        run_id:
-          type: string
-        task_id:
-          type: string
-        task_title:
-          type: string
-        project:
-          type: string
-        attempt:
-          type: integer
-        limit:
-          type: integer
-        next_retry_at:
-          type: [number, 'null']
-
-    DecisionCounts:
-      type: object
-      additionalProperties: false
-      required: [proposal, red, failed, unverified, needs_you, auto_recovering, deterministic, history_failed]
-      properties:
-        proposal:
-          type: integer
-        red:
-          type: integer
-        failed:
-          type: integer
-        unverified:
-          type: integer
-        needs_you:
-          type: integer
-        auto_recovering:
-          type: integer
-        deterministic:
-          type: integer
-        history_failed:
-          type: integer
-
-    AgentCost:
-      type: object
-      required: [agent, costs, runs, priced, routes]
-      properties:
-        agent:
-          type: string
-        costs:
-          type: object
-          additionalProperties:
-            type: number
-        runs:
-          type: integer
-        priced:
-          type: integer
-        routes:
-          type: array
-          items:
-            type: string
-
-    Today:
-      type: object
-      required: [window_start, runs, priced, unpriced, totals, by_agent, basis]
-      properties:
-        window_start:
-          type: number
-          description: 本地零点（epoch 秒）
-        runs:
-          type: integer
-        priced:
-          type: integer
-        unpriced:
-          type: integer
-        totals:
-          type: object
-          additionalProperties:
-            type: number
-        by_agent:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentCost'
-        basis:
-          type: object
-          description: cost_basis 的计数（list_price/metered/...）
-          additionalProperties:
-            type: integer
-
-    TerminalToday:
-      type: object
-      additionalProperties: false
-      required: [runs, sessions, cost]
-      properties:
-        runs:
-          type: integer
-          description: 今天的工作 run 数（宠物闲聊是账单，不是尝试）
-        sessions:
-          type: integer
-          description: 今天在这个终端里出现的不同会话数
-        cost:
-          type: object
-          additionalProperties:
-            type: number
-          description: 今日花费，按币种；包含闲聊（钱要记）
-
-    Terminal:
-      type: object
-      additionalProperties: false
-      required: [key, name, installed, running, state, last_active, binary, log_root, today]
-      properties:
-        key:
-          type: string
-          enum: [dsh, claude, codex, opencode, kimi]
-        name:
-          type: string
-        installed:
-          type: boolean
-          description: CLI 是否可用（shutil.which 或已知安装位置；今天有 run 也算）
-        running:
-          type: boolean
-        state:
-          type: string
-          enum: [running, idle, missing]
-        last_active:
-          type: [number, 'null']
-          description: 最近一次写 session 日志的时间（epoch 秒）；没有日志为 null
-        binary:
-          type: string
-          description: 解析到的 CLI 路径；空串表示没装
-        log_root:
-          type: string
-          description: 扫描的 session 日志根目录
-        today:
-          $ref: '#/components/schemas/TerminalToday'

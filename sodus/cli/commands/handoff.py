@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from ... import handoff
+from ... import agents_rules
 
 
 def add(sub):
@@ -59,6 +60,13 @@ def add(sub):
     unreg.add_argument('--json', action='store_true')
     unreg.set_defaults(func=execute, needs_daemon=False)
 
+    install = commands.add_parser('install-rules', help='install decision-check rules into AI host AGENTS.md')
+    install.add_argument('--host', choices=['claude', 'codex', 'dsh'], help='target host (default: all)')
+    install.add_argument('--uninstall', action='store_true', help='remove rules instead')
+    install.add_argument('--check', action='store_true', help='check installation status')
+    install.add_argument('--json', action='store_true')
+    install.set_defaults(func=execute, needs_daemon=False)
+
 
 def execute(args):
     name = args.handoff_cmd
@@ -99,6 +107,11 @@ def execute(args):
                 all_projects=args.all_projects,
                 status=args.status,
             )
+        elif name == 'install-rules':
+            if args.check:
+                result = agents_rules.check()
+            else:
+                result = agents_rules.install(host=args.host, uninstall=args.uninstall)
         else:
             result = getattr(handoff, name)()
     except OSError as exc:

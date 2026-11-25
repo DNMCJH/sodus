@@ -135,6 +135,31 @@ def test_retired_routes_and_schemas_absent_from_openapi(spec):
         assert schema_name not in spec["components"]["schemas"]
 
 
+def test_no_orphan_schemas(spec):
+    """Every schema in components.schemas must be referenced somewhere via $ref."""
+    def collect_refs(obj, refs=None):
+        if refs is None:
+            refs = set()
+        if isinstance(obj, dict):
+            if "$ref" in obj:
+                ref = obj["$ref"]
+                if ref.startswith("#/components/schemas/"):
+                    refs.add(ref.split("/")[-1])
+            for value in obj.values():
+                collect_refs(value, refs)
+        elif isinstance(obj, list):
+            for item in obj:
+                collect_refs(item, refs)
+        return refs
+
+    referenced = collect_refs(spec)
+    all_schemas = set(spec["components"]["schemas"].keys())
+    orphans = all_schemas - referenced
+
+    assert not orphans, f"Found {len(orphans)} orphan schema(s) with no $ref: {sorted(orphans)}"
+
+
+
 def test_openapi_yaml_is_served_without_a_token():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     httpd.daemon_threads = True
