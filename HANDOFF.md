@@ -5,7 +5,7 @@ updated: 2026-11-25
 version: 3.3.0
 type: project-handoff
 status: active
-snapshot_at: "2026-11-25T03:13:40.892972+00:00"
+snapshot_at: "2026-11-25T03:15:42.096768+00:00"
 tags:
   - workflow/handoff
   - sodus
@@ -91,6 +91,7 @@ Sodus 是双平面个人多项目控制塔：单机 daemon（默认 127.0.0.1:41
 - **并发口径**：多个宿主各自拉 MCP 进程，但都只是 HTTP 客户端；daemon 单实例、多线程；不同 cwd 可并行，同一 cwd 写锁串行；SQLite 单写者。
 - **2026-11-24 双平面控制塔重构（`refactor/control-tower`）**：经 Gate 0 多家族盲评与复核，确立 A 面（Agent 间协同）/ B 面（人机汇报与决策）双平面架构；退役 `board/ui/pet/mood/statuslight/desk/llm` 7 个模块并迁出 `evidence.py`；上线 `HANDOFF.md` `D-xxx` 决策收件箱（文件锁 + hash CAS + 零 Git 读路径 + `~/.sodus/projects.json` 注册表）；MCP 工具增至 13 个（新增 `sodus_handoff_decisions`）。
 - **交接口径**：per-run handoff、session brief 都是单次快照；项目控制台是权威恢复入口，支持单项目写入与跨项目只读决策聚合（CLI/HTTP/MCP）。
+- **2026-11-25 D-001**（decided）：Phase 2 A 面 MVP 单阶段预算上限是多少？：B：Phase 2 总花费 ≤ ¥30，每次派活最多 ¥10，允许用一次 fable。依据：relay 余额约 ¥97，需要给 Phase 2 多轮实验留余量，同时允许一次高端 fable 裁决
 
 ## 3. 进度节点
 
@@ -126,20 +127,10 @@ Sodus 是双平面个人多项目控制塔：单机 daemon（默认 127.0.0.1:41
 - **旧 ~/.nodus 已归档**：关键文件（DB 快照、config/secrets/routes/providers、token、policy/决策日志）在 A:\VScode\Code\Projects\_archive\nodus-home-rollback-20261112（63MB）；原目录 1.2GB 已删除（2026-11-12）。
 - **DSH 宠物插件已改名 sodus-pet**：目录 A:\dsh\home\sodus-pet（旧 nodus-pet 已移走），包名/菜单/快捷键/日志/环境变量全部改；托盘已从新路径重启。
 
-### D-001 Phase 2 A 面 MVP 单阶段预算上限是多少？
-- **为什么轮到你**：relay 余额约 ¥97，Phase 2 会派多轮 sol/fable run，需要你拍板上限防止过量消耗
-- **背景**：目前软上限：claude ¥100 / gpt ¥80 / other ¥80（仅拦新 run）；无日硬上限。Phase 2 包括 coordinator→advisor→executor 路由原型 + 至少 2 个真实任务端到端验收。
-- **选项**：A. 总花费 ≤ ¥20（每次派活最多 ¥5）；B. 总花费 ≤ ¥30（每次派活最多 ¥10，一次允许用 fable）；C. 维持现有软上限，不设 Phase 级硬闸
-- **推荐**：B
-- **等待代价**：不设上限可能在 coordinator 多轮调用时不经意烧 ¥20+
-- **状态**：open
-- **创建日期**：2026-11-25
-
 ## 5. 下一步（按顺序）
 
-1. **先拍板 D-001（Phase 2 预算上限）**：见 `§4 未决与风险 → D-001`；决策后更新 `~/.sodus/config.json` 加 `budget.phase2_cny`。
-2. 合入 `main`：Phase 0+1+1.5 均已验收，`refactor/control-tower` 可 fast-forward 合入。
-3. Phase 2（A 面薄纵切 MVP）：一条真实任务 `coordinator → 判难度 → 选角色（盲 advisor + executor） → 执行 → 审查 → 决策写回 HANDOFF` 跑通端到端。
+1. 合入 `main`：Phase 0+1+1.5 均已验收，`refactor/control-tower` 可 fast-forward 合入。
+2. Phase 2（A 面薄纵切 MVP）：一条真实任务 `coordinator → 判难度 → 选角色（盲 advisor + executor） → 执行 → 审查 → 决策写回 HANDOFF` 跑通端到端；单阶段预算 ≤ ¥30，每次派活最多 ¥10（D-001 已决，2026-11-25）。
 
 ## 6. 会话/交接机制
 
@@ -175,19 +166,19 @@ git -C A:\VScode\Code\Projects\sodus log --oneline -5
 - 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
 
 <!-- sodus:auto:start -->
-head: 069e56922e0ffffa8a6d51439e487960f2969c45
+head: c7034a1696eb3f1c768592f33d5c6ca43afebadd
 ```json
 {
   "schema_version": 2,
-  "head": "069e56922e0ffffa8a6d51439e487960f2969c45",
+  "head": "c7034a1696eb3f1c768592f33d5c6ca43afebadd",
   "branch": "refactor/control-tower",
-  "tag": "v0.9.0-7-g069e569",
+  "tag": "v0.9.0-8-gc7034a1",
   "dirty": true,
   "daemon": {
     "version": "0.9.0",
     "pid": 35648
   },
-  "open_decisions_count": 1,
+  "open_decisions_count": 0,
   "deferred_decisions_count": 0,
   "open_proposals": 0,
   "latest_verify": null,
