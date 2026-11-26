@@ -1,11 +1,11 @@
 ---
 title: 'sodus 项目接力控制台'
 date: '2026-11-09'
-updated: 2026-11-25
+updated: 2026-11-26
 version: 3.3.0
 type: project-handoff
 status: active
-snapshot_at: "2026-11-25T03:15:42.096768+00:00"
+snapshot_at: "2026-11-26T03:35:41.565279+00:00"
 tags:
   - workflow/handoff
   - sodus
@@ -110,6 +110,10 @@ Sodus 是双平面个人多项目控制塔：单机 daemon（默认 127.0.0.1:41
 | 2026-11-25 | Phase 1.5：三入口（Claude/Codex/DSH）注入决策首屏规则、登记 sodus+talent-agent、跨项目聚合实测通过（create→3入口可见→close→清零）；D-001 Phase 2 预算待用户拍板 | ✅ |
 | 待定 | 0.8.2：route_meta 持久化、runner requirements 硬校验、difficulty 1–10 | ⏳ |
 | 待定 | 效率 A/B（12 题 ×10 ×2 组 = 240 对） | ⏳ 设计已定，未跑 |
+
+- 2026-11-25 Phase 2 coordinator集成完成（2026-11-25）：coordinator.py + aplane.py + runner.py _auto_review触发。1127 tests（32 new），release_check MCP JSON缺陷是预存在（已用git stash验证）。sol复检run-1f86b51e9ece进行中，通过后 merge to main。
+
+- 2026-11-26 sol 复检 3 个问题已全修（8403a41 aplane.load 非 dict crash + 109a074 F1 reviewer fallback + F2 blocking gating emit 事件）。1128 tests 通过。准备 merge to main。
 
 ## 4. 未决与风险
 
