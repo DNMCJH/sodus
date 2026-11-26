@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, aplane, budget, config, coordinator, db, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, aplane, budget, config, coordinator, db, handoff, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -1159,6 +1159,17 @@ class Runner:
         if not coord_plan.reviewer_route:
             return
 
+        # Skip review if the execution run itself failed — no point reviewing
+        # broken code that never ran successfully.
+        run = db.get_run(rid)
+        if run and (run.get("status") == "failed" or run.get("error")):
+            self._emit(rid, "coordinator.review_skipped", {
+                "reason": "execution_failed",
+                "run_status": run.get("status"),
+                "run_error": (run.get("error") or "")[:200],
+            })
+            return
+
         # Build and persist the A-plane context bundle
         diff_stat = ""
         try:
@@ -1208,11 +1219,40 @@ class Runner:
                     "reviewer": coord_plan.reviewer_route,
                     "summary": result.get("summary", ""),
                 })
+
+                # Decision writeback: write D-xxx to HANDOFF.md for operator attention
+                try:
+                    handoff.decide_draft(
+                        title=f"Review blocked: {task.get('title') or task.get('goal', '')[:60]}",
+                        why=f"blocking review failed with verdict={verdict}",
+                        background=f"run {rid} attempted task but {coord_plan.reviewer_route} reviewer found issues",
+                        evidence=f"review.json: {result.get('review_run')}, handoff: {run.get('handoff_path') or 'pending'}",
+                        recommend="address review feedback and re-run",
+                        cwd=str(workdir),
+                    )
+                except Exception as exc_handoff:  # noqa: BLE001
+                    self._emit(rid, "coordinator.decision_write_failed", {
+                        "error": f"{type(exc_handoff).__name__}: {exc_handoff}",
+                    })
+
+                # Blocking gate: downgrade task status to needs_review
+                try:
+                    db.update_task(task["id"], status="needs_review")
+                    self._emit(rid, "coordinator.task_blocked", {
+                        "task_id": task["id"],
+                        "reason": "blocking_review_failed",
+                        "verdict": verdict,
+                    })
+                except Exception as exc_gate:  # noqa: BLE001
+                    self._emit(rid, "coordinator.gate_failed", {
+                        "error": f"{type(exc_gate).__name__}: {exc_gate}",
+                    })
         except Exception as exc:  # noqa: BLE001
             self._emit(rid, "coordinator.review_error", {
                 "error": f"{type(exc).__name__}: {exc}",
                 "review_kind": coord_plan.review_kind,
             })
+
 
     def _auto_verify(self, rid: str, task_id: str, workdir: Path) -> str:
         """Run the project's own tests and bind the result to this run.
