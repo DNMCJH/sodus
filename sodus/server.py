@@ -618,6 +618,8 @@ class Handler(BaseHTTPRequestHandler):
                     propose_run=bool(body.get("propose", False)),
                     allow_expensive=bool(body.get("allow_expensive", False)),
                     include_memory=not bool(body.get("no_memory", False)),
+                    force_review=bool(body.get("force_review", False)),
+                    skip_review=bool(body.get("skip_review", False)),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

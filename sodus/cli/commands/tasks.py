@@ -69,6 +69,16 @@ def add(sub) -> None:
         default=0.0,
         help="seconds to wait for a busy --cwd instead of failing at once",
     )
+    p.add_argument(
+        "--review",
+        action="store_true",
+        help="force coordinator review even for explicit routes",
+    )
+    p.add_argument(
+        "--no-review",
+        action="store_true",
+        help="skip review entirely, even on auto routes",
+    )
     p.set_defaults(func=run)
 
     p = sub.add_parser("watch", help="follow a run")
@@ -127,6 +137,8 @@ def run(args) -> int:
         "propose": args.propose,
         "no_memory": args.no_memory,
         "allow_expensive": args.allow_expensive,
+        "force_review": args.review,
+        "skip_review": args.no_review,
     }
 
     if args.continue_run:

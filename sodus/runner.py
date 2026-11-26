@@ -250,6 +250,8 @@ class Runner:
         allow_expensive: bool = False,
         kind: str = "work",
         readonly: bool = False,
+        force_review: bool = False,
+        skip_review: bool = False,
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
@@ -285,9 +287,9 @@ class Runner:
         # `--route auto` becomes a concrete route here, before any run row
         # exists. Every failure path below returns *some* route: the strategy
         # layer is allowed to be wrong, never to be a single point of failure.
-        route_decision = self._decide_route(task, route_name)
-        # Store coordinator plan (present only for --route auto) so _finalize
-        # can dispatch auto-review without changing all function signatures.
+        route_decision = self._decide_route(task, route_name, force_review, skip_review)
+        # Store coordinator plan (present only for --route auto or --review) so
+        # _finalize can dispatch auto-review without changing all function signatures.
         _coord_plan_json = route_decision.get("coordinator_plan")
         if _coord_plan_json:
             try:
@@ -346,9 +348,11 @@ class Runner:
         # work possible without weakening the rule.
         workdir = Path(proposal_ctx["worktree"]) if proposal_ctx else target
         prof = profiles.read(profile_name)
+        # Extract coordinator's effort recommendation if available (from --route auto or --review)
+        coord_effort = route_decision.get("recommendation", {}).get("effort", "")
         run = self._claim(
             task, spec, workdir, parent_run_id, note,
-            effort or route.effort or prof.effort or "",
+            effort or coord_effort or route.effort or prof.effort or "",
             model or route.model or prof.model or "",
             route, profile_name, wait, run_id,
         )
@@ -370,15 +374,19 @@ class Runner:
         thread.start()
         return db.get_run(run["id"])
 
-    def _decide_route(self, task: dict, requested: str) -> dict:
+    def _decide_route(self, task: dict, requested: str, force_review: bool = False, skip_review: bool = False) -> dict:
         """Pick the route to run, and remember who picked it.
 
-        For ``auto`` the task text goes through `policy.assess` and
-        `policy.recommend`; the recommended route is used only if it can
-        actually run, otherwise the first ready alternative does. For an
-        explicit route the assessment is still recorded — with
-        ``review=False``, because spending a model call to re-decide something
-        the operator already decided is latency with no decision attached.
+        For ``auto`` the task text goes through coordinator.plan(); the
+        recommended executor route is used only if it can run, otherwise
+        the first ready alternative does.
+
+        For explicit routes with ``force_review=True``, coordinator.plan()
+        is still called to pick a reviewer, but the requested route is used
+        as the executor (decoupling "who executes" from "should we review").
+
+        For explicit routes without force_review, assessment is recorded
+        with ``review=False`` to skip the expensive review planning.
 
         Returns a dict with the chosen route and enough evidence for
         `_record_policy`. It never raises for policy reasons.
@@ -400,8 +408,10 @@ class Runner:
             return decision
 
         try:
-            if auto:
-                coord_plan = coordinator.plan(task_brief(task))
+            # Call coordinator.plan() when auto=True OR force_review=True
+            should_plan = auto or force_review
+            if should_plan:
+                coord_plan = coordinator.plan(task_brief(task), force_review=force_review, skip_review=skip_review)
                 decision["assessment"] = coord_plan.assessment
                 decision["recommendation"] = {
                     "route": coord_plan.executor_route,
@@ -410,24 +420,33 @@ class Runner:
                     "effort": coord_plan.effort,
                 }
                 decision["coordinator_plan"] = coord_plan.to_json()
-                decision["route"] = coord_plan.executor_route
-                usable = self._ready_route(decision["recommendation"])
-                decision["route"] = usable or coord_plan.executor_route
-                if usable and usable != coord_plan.executor_route:
-                    # F1 fix: re-pick reviewer for the actual (fallback'd) executor
-                    # to prevent executor == reviewer (same-agent self-review).
-                    actual_reviewer = coordinator._pick_reviewer(usable, coord_plan.difficulty)
-                    coord_plan_dict = decision["coordinator_plan"]
-                    coord_plan_dict["reviewer_route"] = actual_reviewer
-                    decision["fallback"] = {
-                        "reason": "recommended route is not ready",
-                        "fallback_route": usable,
-                        "recommended": coord_plan.executor_route,
-                        "error": "",
-                        "reviewer_updated": actual_reviewer,
-                    }
+
+                if auto:
+                    # Use coordinator's executor recommendation
+                    decision["route"] = coord_plan.executor_route
+                    usable = self._ready_route(decision["recommendation"])
+                    decision["route"] = usable or coord_plan.executor_route
+                    if usable and usable != coord_plan.executor_route:
+                        # F1 fix: re-pick reviewer for the actual (fallback'd) executor
+                        # to prevent executor == reviewer (same-agent self-review).
+                        actual_reviewer = coordinator._pick_reviewer(usable, coord_plan.difficulty)
+                        coord_plan_dict = decision["coordinator_plan"]
+                        # Update both reviewer and executor in the plan to reflect actual routes used
+                        coord_plan_dict["executor_route"] = usable
+                        coord_plan_dict["reviewer_route"] = actual_reviewer
+                        decision["fallback"] = {
+                            "reason": "recommended route is not ready",
+                            "fallback_route": usable,
+                            "recommended": coord_plan.executor_route,
+                            "error": "",
+                            "reviewer_updated": actual_reviewer,
+                        }
+                else:
+                    # Explicit route + --review: use requested route as executor,
+                    # but keep coordinator's reviewer recommendation in the plan
+                    decision["route"] = requested
                 return decision
-            # Non-auto path: assess for context, skip Jev to save latency
+            # Non-auto, no force_review: assess for context, skip review planning
             assessment = policy.assess(task_brief(task), review=False)
             recommendation = policy.recommend(assessment)
             recommended = str(recommendation.get("route") or "").strip()

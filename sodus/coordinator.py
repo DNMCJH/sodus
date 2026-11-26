@@ -33,16 +33,16 @@ BLOCKING_THRESHOLD = 4
 #: difficulty threshold at which advisory review is added
 ADVISORY_THRESHOLD = 3
 
-#: For high-difficulty tasks, prefer these routes as reviewer (ordered)
-#: "different family first" is enforced by _pick_reviewer; this list is the
-#: preference order among remaining candidates.
-_HIGH_REVIEW_PREFERENCE = ("claude", "dsh", "codex", "opencode-glm", "opencode-gemini", "minimax")
-_LOW_REVIEW_PREFERENCE = ("dsh", "codex", "opencode-glm", "claude", "opencode-gemini", "minimax")
+#: For high-difficulty tasks, prefer stronger/more capable reviewers
+#: For low-difficulty tasks, prefer cheaper/faster reviewers
+#: These are agent preferences, not route names (routes are resolved dynamically)
+_HIGH_REVIEW_AGENT_PREFERENCE = ("claude", "codex", "dsh", "opencode-gemini", "opencode-glm")
+_LOW_REVIEW_AGENT_PREFERENCE = ("dsh", "codex", "opencode-glm", "claude", "opencode-gemini")
 
-# Agent families: routes in the same family share the same provider ecosystem.
+# Agent families: agents in the same family share the same provider ecosystem.
 # A reviewer must come from a *different* family than the executor so it brings
-# an independent read.  Family assignments are coarse-grained on purpose.
-_FAMILIES: dict[str, str] = {
+# an independent read. Family assignments are coarse-grained on purpose.
+_AGENT_FAMILIES: dict[str, str] = {
     "claude": "anthropic",
     "minimax": "anthropic",   # same protocol/CLI as claude
     "codex": "openai",
@@ -53,7 +53,51 @@ _FAMILIES: dict[str, str] = {
 
 
 def _family(route: str) -> str:
-    return _FAMILIES.get(route, route)
+    """Return the model family for a route.
+
+    Resolves the route to get its agent, then maps agent to family.
+    This ensures cross-family guarantee works for all routes, not just
+    the hardcoded legacy ones.
+
+    If the route doesn't resolve or agent is unknown, returns the route
+    name as a fallback (treating each unknown route as its own family).
+    """
+    resolved = routes.resolve(route)
+    if resolved is None:
+        return route  # Unknown route, treat as its own family
+    agent = resolved.agent
+    return _AGENT_FAMILIES.get(agent, agent)
+
+
+def _routes_by_agent_preference(agent_preference: tuple[str, ...]) -> list[str]:
+    """Return present routes sorted by agent preference order.
+
+    Routes with agents earlier in the preference list come first.
+    Within same agent group, routes appear in present_routes() order.
+    Agents not in the preference list are appended as fallback.
+    """
+    present = policy.present_routes()
+    # Group routes by their agent
+    by_agent: dict[str, list[str]] = {}
+    for route_name in present:
+        resolved = routes.resolve(route_name)
+        if resolved is None:
+            continue
+        agent = resolved.agent
+        if agent not in by_agent:
+            by_agent[agent] = []
+        by_agent[agent].append(route_name)
+
+    # Build ordered list following agent preference
+    result = []
+    for agent in agent_preference:
+        if agent in by_agent:
+            result.extend(by_agent[agent])
+    # Append any agents not in preference (as fallback)
+    for agent, routes_list in by_agent.items():
+        if agent not in agent_preference:
+            result.extend(routes_list)
+    return result
 
 
 def _pick_reviewer(executor: str, difficulty: int) -> str | None:
@@ -62,21 +106,26 @@ def _pick_reviewer(executor: str, difficulty: int) -> str | None:
     Returns None when no suitable reviewer is available (graceful degradation).
     Hard tasks prefer a stronger reviewer (high_preference list); easy ones
     prefer a cheap one.
+
+    Uses dynamic route discovery from present_routes() instead of hardcoded
+    route names, so new routes are automatically available as reviewers.
     """
     executor_family = _family(executor)
-    present = set(policy.present_routes())
-    order = _HIGH_REVIEW_PREFERENCE if difficulty >= BLOCKING_THRESHOLD else _LOW_REVIEW_PREFERENCE
-    for candidate in order:
+    agent_pref = _HIGH_REVIEW_AGENT_PREFERENCE if difficulty >= BLOCKING_THRESHOLD else _LOW_REVIEW_AGENT_PREFERENCE
+    candidates = _routes_by_agent_preference(agent_pref)
+
+    # First pass: find different family
+    for candidate in candidates:
         if candidate == executor:
-            continue
-        if candidate not in present:
             continue
         if _family(candidate) != executor_family:
             return candidate
-    # All candidates are in the same family — pick any that isn't the executor
-    for candidate in order:
-        if candidate != executor and candidate in present:
+
+    # Second pass: same family fallback — pick any that isn't the executor
+    for candidate in candidates:
+        if candidate != executor:
             return candidate
+
     return None
 
 
