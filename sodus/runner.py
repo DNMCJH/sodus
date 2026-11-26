@@ -414,11 +414,17 @@ class Runner:
                 usable = self._ready_route(decision["recommendation"])
                 decision["route"] = usable or coord_plan.executor_route
                 if usable and usable != coord_plan.executor_route:
+                    # F1 fix: re-pick reviewer for the actual (fallback'd) executor
+                    # to prevent executor == reviewer (same-agent self-review).
+                    actual_reviewer = coordinator._pick_reviewer(usable, coord_plan.difficulty)
+                    coord_plan_dict = decision["coordinator_plan"]
+                    coord_plan_dict["reviewer_route"] = actual_reviewer
                     decision["fallback"] = {
                         "reason": "recommended route is not ready",
                         "fallback_route": usable,
                         "recommended": coord_plan.executor_route,
                         "error": "",
+                        "reviewer_updated": actual_reviewer,
                     }
                 return decision
             # Non-auto path: assess for context, skip Jev to save latency
@@ -1166,13 +1172,23 @@ class Runner:
 
         try:
             from . import review as review_mod
-            review_mod.run_review(
+            result = review_mod.run_review(
                 rid,
                 by=coord_plan.reviewer_route,
                 focus=ctx.to_prompt_fragment(),
                 scope="task",
                 timeout=1800,
             )
+            # F2 fix: blocking review gating — emit failure event when verdict
+            # is revise/reject so upstream (CI, merge gates) can block.
+            verdict = result.get("verdict", "")
+            if coord_plan.review_kind == "blocking" and verdict not in ("accept", ""):
+                self._emit(rid, "coordinator.review_blocking_failed", {
+                    "verdict": verdict,
+                    "review_run": result.get("review_run"),
+                    "reviewer": coord_plan.reviewer_route,
+                    "summary": result.get("summary", ""),
+                })
         except Exception as exc:  # noqa: BLE001
             self._emit(rid, "coordinator.review_error", {
                 "error": f"{type(exc).__name__}: {exc}",
