@@ -41,6 +41,14 @@ def add(sub) -> None:
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=review_cmd)
 
+    p = sub.add_parser("audit", help="batch review multiple runs")
+    p.add_argument("runs", nargs="*", help="run IDs to review (or use --since)")
+    p.add_argument("--by", default="", help="reviewer route")
+    p.add_argument("--since", default="", help="review runs from last N days (e.g., 7d)")
+    p.add_argument("--task", default="", help="only review runs for this task")
+    p.add_argument("--failed-only", action="store_true", help="only review failed runs")
+    p.set_defaults(func=audit_cmd)
+
     p = sub.add_parser("fix", help="review -> fix -> verify -> re-review")
     p.add_argument("run")
     p.add_argument("--by", default="")
@@ -315,3 +323,98 @@ def report_cmd(args) -> int:
     for flag in data["flags"]:
         print(f"  - {flag}")
     return 0
+
+
+def audit_cmd(args) -> int:
+    """Review multiple runs based on criteria."""
+    runs_to_review = []
+
+    # If explicit run IDs provided, use those
+    if args.runs:
+        runs_to_review = args.runs
+    else:
+        # Query for recent runs based on filters
+        try:
+            # Get recent runs from daemon
+            all_runs = call("GET", "/runs")
+
+            # Apply filters
+            filtered = all_runs
+            if args.since:
+                # Parse "7d" into seconds
+                if args.since.endswith("d"):
+                    days = int(args.since[:-1])
+                    cutoff = time.time() - (days * 86400)
+                    filtered = [r for r in filtered if r.get("started_at", 0) > cutoff]
+
+            if args.task:
+                filtered = [r for r in filtered if r.get("task_id") == args.task]
+
+            if args.failed_only:
+                filtered = [r for r in filtered if r.get("status") == "failed"]
+            else:
+                # Only review completed runs by default
+                filtered = [r for r in filtered if r.get("status") == "completed"]
+
+            runs_to_review = [r["id"] for r in filtered]
+        except Exception as e:
+            print(f"Failed to query runs: {e}")
+            return 1
+
+    if not runs_to_review:
+        print("No runs to audit")
+        return 0
+
+    print(f"Auditing {len(runs_to_review)} run(s)...")
+
+    results = []
+    for run_id in runs_to_review:
+        print(f"\n→ Reviewing {run_id}...", flush=True)
+        try:
+            res = _submit("review", {
+                "target_run_id": run_id,
+                "by": args.by,
+                "focus": "periodic audit",
+                "scope": "task",
+                "dry_run": False,
+            }, label=run_id)["result"]
+            results.append({"run_id": run_id, **res})
+        except Exception as e:
+            print(f"  Failed: {e}")
+            results.append({"run_id": run_id, "ok": False, "error": str(e)})
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("AUDIT SUMMARY")
+    print("=" * 70)
+
+    total = len(results)
+    successful = sum(1 for r in results if r.get("ok"))
+    accepted = sum(1 for r in results if r.get("verdict") == "accept")
+
+    print(f"Total runs audited: {total}")
+    print(f"Reviews completed: {successful} / {total}")
+    print(f"Verdict 'accept': {accepted} / {successful}")
+
+    # Count findings by severity
+    all_findings = []
+    for r in results:
+        if r.get("findings"):
+            all_findings.extend(r["findings"])
+
+    if all_findings:
+        critical = sum(1 for f in all_findings if f.get("severity") == "critical")
+        high = sum(1 for f in all_findings if f.get("severity") == "high")
+        medium = sum(1 for f in all_findings if f.get("severity") == "medium")
+        low = sum(1 for f in all_findings if f.get("severity") == "low")
+
+        print(f"\nFindings: critical={critical} high={high} medium={medium} low={low}")
+
+        if critical > 0 or high > 0:
+            print("\nCritical/High findings:")
+            for r in results:
+                for f in r.get("findings") or []:
+                    if f.get("severity") in ("critical", "high"):
+                        print(f"  [{f['severity'].upper()}] {r['run_id']} - {f.get('file', '?')}:{f.get('line', '?')} - {f['issue']}")
+
+    return 0 if accepted == successful else 1

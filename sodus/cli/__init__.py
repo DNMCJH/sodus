@@ -36,6 +36,7 @@ TOP_LEVEL = (
     # judge: run the tests, review the work
     "verify",
     "review",
+    "audit",
     "dream",
     # stats: money, tokens, cache
     "stats",
