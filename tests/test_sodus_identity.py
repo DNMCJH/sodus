@@ -34,7 +34,7 @@ def _run(*argv: str) -> subprocess.CompletedProcess:
 
 def test_one_version_everywhere():
     declared = _pyproject()["project"]["version"]
-    assert declared == "0.9.0"
+    assert declared == "0.10.0"
     from sodus import __version__ as package_version
 
     assert package_version == declared
@@ -53,7 +53,7 @@ def test_python_dash_m_sodus_prints_sodus():
     proc = _run("-m", "sodus", "--version")
     assert proc.returncode == 0
     text = (proc.stdout + proc.stderr).decode("utf-8", "replace").strip()
-    assert text == "sodus 0.9.0"
+    assert text == "sodus 0.10.0"
 
 
 def test_home_resolves_to_sodus_and_never_the_legacy_directory(tmp_path, monkeypatch):

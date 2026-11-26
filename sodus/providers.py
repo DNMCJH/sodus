@@ -212,7 +212,7 @@ def _builtin() -> dict[str, Provider]:
             tiers={
                 "opus": "claude-opus-5-5[1M]",
                 "sonnet": "claude-sonnet-5-5[1M]",
-                "haiku": "gemini-3.8-flash",
+                "haiku": "claude-haiku-5-5",
                 "fable": "claude-fable-5-2",
             },
             meter="relay",
