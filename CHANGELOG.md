@@ -1,5 +1,31 @@
 # 更新日志
 
+## 0.10.0 — Phase 2: 智能协调器与分级审查 (2026-11-25)
+
+**核心新增：**
+
+- **coordinator.py**：智能路由规划器，包裹 `policy.assess + recommend`，按任务难度自动分级审查门控（1-2: none，3: advisory，4-5: blocking），审查者路由选择确保跨 agent family（防止同 agent 自审）。
+- **aplane.py**：A-plane 临时上下文，executor→reviewer 交接时注入 run 状态、diff stat、验证结果等关键信息，支持 build/save/load 持久化。
+- **runner.py 集成**：`--route auto` 路径现调用 `coordinator.plan()`，`_finalize()` 末尾自动触发 `_auto_review()`；blocking review 失败时 emit `coordinator.review_blocking_failed` 事件供 CI 消费。
+
+**架构重构（Phase 0-1.5）：**
+
+- **退役模块**：移除 board/ui/pet/mood/statuslight/desk/llm 等旧模块，简化架构；提取 evidence.py 统一管理 run 证据。
+- **项目级决策收件箱**：新增 `sodus decision` 子命令（inbox/open/defer/close），支持 CLI/HTTP/MCP 三端操作；决策数据零 git 依赖（`~/.sodus/decisions/`）。
+- **项目注册表**：`~/.sodus/projects.json` 记录已知项目及其 git root，`sodus handoff init` 自动登记。
+
+**修复：**
+
+- 修复 relative cwd leak（Phase 1）
+- 修复 `aplane.load()` 对非 dict JSON 崩溃问题
+- 修复 reviewer fallback contamination（executor 被 fallback 时重新选 reviewer）
+- 修复 blocking review 无 gating 效果（现 emit 失败事件）
+
+**测试：**
+
+- 新增 33 个测试（test_coordinator.py + test_aplane.py）
+- 总计 1128 tests 全部通过
+
 ## 未发布
 
 - `sodus handoff check`：控制台自身同步后的提交不再误报 head_mismatch；只有其它文件改动才报 drift。
