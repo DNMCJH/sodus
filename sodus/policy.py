@@ -559,7 +559,13 @@ def assess(task_text: str, context: str = "", review: bool = True) -> dict:
     )
     if jev_difficulty is not None and jev_difficulty_confidence >= 0.55:
         if jev_difficulty > rules["difficulty"]:
-            final_difficulty = min(5, rules["difficulty"] + 1)
+            # When rules are blind (no strong signals, low confidence), let Jev
+            # override directly — the ±1 cap only applies when rules have a
+            # real foothold (keyword/path hits) to anchor against.
+            if not strong and rules["confidence"] < 0.5:
+                final_difficulty = jev_difficulty
+            else:
+                final_difficulty = min(5, rules["difficulty"] + 1)
         elif jev_difficulty < rules["difficulty"] and not strong:
             final_difficulty = max(1, rules["difficulty"] - 1)
 

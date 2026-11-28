@@ -17,6 +17,7 @@ files, never dispatches a run. The caller (runner.py) owns that.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import NamedTuple
@@ -158,6 +159,8 @@ class CoordinatorPlan:
     confidence: float = 0.5
     basis: str = "rules-only"
     rationale: str = ""
+    # Gating flags
+    needs_clarification: bool = False   # True → trigger grill-me before dispatch
     # Raw outputs for debugging / tracing
     assessment: dict = field(default_factory=dict)
     scoring: dict = field(default_factory=dict)
@@ -216,6 +219,23 @@ def plan(
     basis = assessment.get("basis") or "rules-only"
     confidence = assessment.get("confidence") or 0.5
 
+    # Detect tasks that need scope clarification before dispatch.
+    # Triggers when rules are blind (no strong signals) AND the task looks
+    # hard/broad — classic markers: "全套", "任何", "所有", scope adverbs with
+    # low confidence. The coordinator model (future: sonnet-kiro) would handle
+    # deeper analysis; for now we surface the flag so runner.py can invoke
+    # grill-me or at least log the ambiguity.
+    _SCOPE_SIGNALS = re.compile(
+        r"全套|所有|任何|整套|全部|一整|完整|全面|全量|每一|所有的|全站|全库", re.IGNORECASE
+    )
+    ambiguous_blind = (
+        not assessment.get("signals")  # rules had no foothold
+        and confidence < 0.55
+        and difficulty >= 3
+    )
+    scope_ambiguous = bool(_SCOPE_SIGNALS.search(text)) and confidence < 0.65
+    needs_clarification = ambiguous_blind or scope_ambiguous
+
     # Review gating
     if skip_review:
         review_kind = "none"
@@ -246,6 +266,7 @@ def plan(
         confidence=confidence,
         basis=basis,
         rationale=rationale,
+        needs_clarification=needs_clarification,
         assessment=assessment,
         scoring=recommendation.get("scoring") or {},
     )

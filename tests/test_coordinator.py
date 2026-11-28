@@ -120,10 +120,10 @@ class TestReviewerSelection:
             assert p.reviewer_route != p.executor_route
 
     def test_reviewer_different_family(self):
-        from sodus.coordinator import _FAMILIES
+        from sodus.coordinator import _family
         p = _plan("refactor cross-module state management")
-        if p.reviewer_route and p.executor_route in _FAMILIES and p.reviewer_route in _FAMILIES:
-            assert _FAMILIES[p.reviewer_route] != _FAMILIES[p.executor_route]
+        if p.reviewer_route:
+            assert _family(p.reviewer_route) != _family(p.executor_route)
 
     def test_reviewer_none_when_review_none(self):
         p = _plan("fix typo")
@@ -144,19 +144,16 @@ class TestPickReviewer:
                 assert reviewer != route
 
     def test_different_family_preferred(self):
-        from sodus.coordinator import _FAMILIES
+        from sodus.coordinator import _family
         reviewer = coordinator._pick_reviewer("claude", difficulty=4)
         if reviewer:
-            assert _FAMILIES.get(reviewer) != _FAMILIES.get("claude")
+            assert _family(reviewer) != _family("claude")
 
     def test_high_difficulty_prefers_strong_route(self):
-        # For difficulty ≥ BLOCKING_THRESHOLD the reviewer should be from a
-        # different family than the executor.  Which exact route wins depends on
-        # what is ready on this machine, so we only assert the family invariant.
-        from sodus.coordinator import _FAMILIES
+        from sodus.coordinator import _family
         reviewer = coordinator._pick_reviewer("dsh", difficulty=4)
         if reviewer:
-            assert _FAMILIES.get(reviewer, reviewer) != _FAMILIES.get("dsh", "dsh")
+            assert _family(reviewer) != _family("dsh")
 
     def test_review_kind_mapping(self):
         assert coordinator._review_kind(1, []) == "none"
