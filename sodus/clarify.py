@@ -38,30 +38,35 @@ You are NOT solving the task. You are preparing it for safe dispatch to an
 executor model. A bad spec wastes expensive compute; an ambiguous scope leads
 to multi-hour runs that miss the point.
 
-You must output exactly one JSON object (no markdown fences, no prose before or
-after). Schema:
+You must output exactly one JSON object with no markdown fences and no prose
+before or after. The schema is:
 
 {
-  "questions": [          // 2-4 targeted questions, most important first
+  "questions": [
     {
-      "q": "...",         // the question (Chinese or English matching input)
-      "why": "...",       // what ambiguity this resolves
-      "options": ["..."]  // 2-3 concrete options the user can pick, or []
+      "q": "...",
+      "why": "...",
+      "options": ["...", "..."]
     }
   ],
-  "draft_spec": "...",    // refined task spec using what IS known; fill gaps
-                          // with the most conservative reasonable assumption,
-                          // mark each assumption with [ASSUMED]
-  "acceptance_draft": [   // 2-5 verifiable acceptance criteria
-    "..."                 // each one must be checkable: a file exists, a test
-                          // passes, a command exits 0, a count matches, etc.
-  ],
-  "scope_risk": "low|medium|high",  // how much the ambiguity could inflate cost
-  "estimated_effort": "1h|4h|1d|3d|1w+"  // rough wall-clock, not compute
+  "draft_spec": "...",
+  "acceptance_draft": ["...", "..."],
+  "scope_risk": "low",
+  "estimated_effort": "1h"
 }
 
-Be concise. The questions field is the most important — the user reads these
-and answers before anything runs. Keep each question under 60 characters.
+Field rules:
+- questions: array of 2-4 objects, each with string fields q, why, and an
+  options array of 2-3 strings. Most important question first. Keep each q
+  under 60 characters.
+- draft_spec: string. Refined task spec using what IS known. Mark each gap
+  you assumed with [ASSUMED] in the text.
+- acceptance_draft: array of 2-5 strings. Each must be verifiable: a file
+  exists, a test passes, a command exits 0, a count matches, etc.
+- scope_risk: exactly one of "low", "medium", or "high".
+- estimated_effort: rough wall-clock, one of "1h", "4h", "1d", "3d", "1w+".
+
+Output only the JSON object. No commentary, no code fences, no trailing text.
 """
 
 
@@ -69,25 +74,30 @@ def _user_message(task_text: str, assessment: dict) -> str:
     difficulty = assessment.get("difficulty", "?")
     kind = assessment.get("kind", "unknown")
     signals = assessment.get("signals") or []
-    confidence = assessment.get("confidence", 0)
+    rules_conf = (assessment.get("rules") or {}).get("confidence", assessment.get("confidence", 0))
+    composite_conf = assessment.get("confidence", 0)
     basis = assessment.get("basis", "unknown")
     needs = assessment.get("needs") or []
 
-    signal_summary = (
-        "none — rules could not find any structural signals"
-        if not signals
-        else ", ".join(signals)
-    )
+    # Describe the actual reason for clarification (not a generic message)
+    if not signals:
+        trigger_reason = "Rules engine found no structural signals in the task text."
+    else:
+        trigger_reason = (
+            f"Task contains broad scope keywords despite having signals: {', '.join(signals)}."
+        )
+
     return (
         f"Task: {task_text}\n\n"
         f"Assessment:\n"
         f"  difficulty: {difficulty}/5\n"
         f"  kind: {kind}\n"
-        f"  signals: {signal_summary}\n"
+        f"  signals: {signals or 'none'}\n"
         f"  needs: {', '.join(needs) or 'none'}\n"
-        f"  confidence: {confidence:.2f} (basis: {basis})\n\n"
-        "The rule engine had low confidence due to minimal structural signals. "
-        "Identify what is under-specified and produce the clarification output."
+        f"  rules_confidence: {rules_conf:.2f}  composite_confidence: {composite_conf:.2f}\n"
+        f"  basis: {basis}\n\n"
+        f"Trigger reason: {trigger_reason}\n"
+        "Identify what is under-specified and produce the clarification JSON."
     )
 
 
@@ -181,6 +191,29 @@ class ClarifyResult:
 # Parser
 # ---------------------------------------------------------------------------
 
+def _validate(parsed: dict) -> str | None:
+    """Return error message if parsed JSON fails schema checks, else None."""
+    qs = parsed.get("questions")
+    if not isinstance(qs, list):
+        return f"questions must be a list, got {type(qs).__name__}"
+    for i, item in enumerate(qs):
+        if not isinstance(item, dict):
+            return f"questions[{i}] must be a dict, got {type(item).__name__}"
+        if not isinstance(item.get("q"), str) or not item["q"].strip():
+            return f"questions[{i}].q must be a non-empty string"
+    ac = parsed.get("acceptance_draft")
+    if ac is not None and not isinstance(ac, list):
+        return f"acceptance_draft must be a list, got {type(ac).__name__}"
+    if isinstance(ac, list):
+        for i, item in enumerate(ac):
+            if not isinstance(item, str):
+                return f"acceptance_draft[{i}] must be a string, got {type(item).__name__}"
+    scope_risk = parsed.get("scope_risk")
+    if scope_risk is not None and scope_risk not in ("low", "medium", "high"):
+        parsed["scope_risk"] = "medium"
+    return None
+
+
 def _parse(text: str) -> dict | None:
     """Extract the JSON object from cortex output (strips accidental fences)."""
     # Strip markdown fences if present
@@ -205,12 +238,13 @@ def run(
     assessment: dict,
     *,
     route: str = "coordinator",
-    max_tokens: int = 1024,
+    max_tokens: int = 2048,
 ) -> ClarifyResult:
     """Run one clarification pass and return a structured ClarifyResult.
 
-    Fails open: if the cortex call fails or the JSON is unparseable, returns
-    a ClarifyResult(ok=False) so the caller can proceed without blocking.
+    Fails open: if the cortex call fails, JSON is unparseable, or schema
+    validation fails, returns a ClarifyResult(ok=False) so the caller can
+    proceed without blocking or changing the route decision.
     """
     user_msg = _user_message(task_text, assessment)
     result = cortex.ask(
@@ -228,11 +262,27 @@ def run(
         )
 
     text = result.get("text", "")
+    # Check for truncation before parsing
+    stop_reason = result.get("stop_reason", "")
+    truncated = stop_reason == "max_tokens"
+
     parsed = _parse(text)
     if parsed is None:
+        reason = "JSON parse failed (truncated output)" if truncated else "JSON parse failed"
         return ClarifyResult(
             ok=False,
-            unavailable="JSON parse failed",
+            unavailable=reason,
+            model=result.get("model", ""),
+            latency_ms=result.get("latency_ms", 0),
+            raw=text[:500],
+        )
+
+    # Schema validation — bad structure must not propagate as ok=True
+    validation_error = _validate(parsed)
+    if validation_error:
+        return ClarifyResult(
+            ok=False,
+            unavailable=f"schema validation: {validation_error}",
             model=result.get("model", ""),
             latency_ms=result.get("latency_ms", 0),
             raw=text[:500],
@@ -244,15 +294,16 @@ def run(
             why=str(item.get("why", "")),
             options=[str(o) for o in (item.get("options") or [])],
         )
-        for item in (parsed.get("questions") or [])
-        if item.get("q")
+        for item in (parsed.get("questions") or [])[:4]  # cap at 4
+        if isinstance(item, dict) and item.get("q")
     ]
 
+    acceptance = parsed.get("acceptance_draft") or []
     return ClarifyResult(
         ok=True,
         questions=questions,
         draft_spec=str(parsed.get("draft_spec") or ""),
-        acceptance_draft=[str(c) for c in (parsed.get("acceptance_draft") or [])],
+        acceptance_draft=[str(c) for c in acceptance if isinstance(c, str)],
         scope_risk=str(parsed.get("scope_risk") or "medium"),
         estimated_effort=str(parsed.get("estimated_effort") or "unknown"),
         model=result.get("model", ""),

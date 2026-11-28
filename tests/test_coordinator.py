@@ -162,3 +162,75 @@ class TestPickReviewer:
         assert coordinator._review_kind(3, ["reasoning"]) == "advisory"
         assert coordinator._review_kind(4, []) == "blocking"
         assert coordinator._review_kind(5, []) == "blocking"
+
+
+# ---------------------------------------------------------------------------
+# needs_clarification — uses rules_confidence, independent of Jev
+# ---------------------------------------------------------------------------
+
+class TestNeedsClarification:
+    def _plan_with_assessment(self, text, mock_assessment, monkeypatch):
+        """Plan with a fake assessment to test needs_clarification logic."""
+        import sodus.policy as pol
+        monkeypatch.setattr(pol, "assess", lambda t, **kw: mock_assessment)
+        monkeypatch.setattr(pol, "recommend", lambda a: {
+            "route": "dsh", "effort": "default", "rationale": "",
+            "confidence": 0.5, "scoring": {}, "basis": "rules-only",
+        })
+        return coordinator.plan(text)
+
+    def test_blind_rules_no_signals_flags_clarification(self, monkeypatch):
+        """rules_blind=True (no signals, low rules_conf) + difficulty>=3 → flag."""
+        assessment = {
+            "difficulty": 4, "kind": "analysis", "needs": [],
+            "signals": [], "confidence": 0.5,
+            "rules": {"confidence": 0.4, "difficulty": 2, "kind": "analysis",
+                      "signals": [], "needs": [], "kind_confidence": 0.3},
+            "basis": "rules-only",
+            "jev": {"ok": False, "available": False, "unavailable": "no key"},
+        }
+        p = self._plan_with_assessment("优化我的全套资料", assessment, monkeypatch)
+        assert p.needs_clarification is True
+
+    def test_jev_confidence_does_not_suppress_flag(self, monkeypatch):
+        """Even when Jev boosts composite confidence, rules_blind triggers flag
+        because we use rules_conf, not composite confidence."""
+        # Composite confidence is high (Jev agreed), but rules had no signals
+        assessment = {
+            "difficulty": 4, "kind": "analysis", "needs": [],
+            "signals": [], "confidence": 0.75,  # Jev boosted this
+            "rules": {"confidence": 0.4, "difficulty": 2, "kind": "analysis",
+                      "signals": [], "needs": [], "kind_confidence": 0.3},
+            "basis": "rules+jev",
+            "jev": {"ok": True, "available": True, "difficulty": 4,
+                    "difficulty_confidence": 0.9, "unavailable": None},
+        }
+        p = self._plan_with_assessment("全套审阅材料", assessment, monkeypatch)
+        assert p.needs_clarification is True
+
+    def test_clear_code_task_no_flag(self, monkeypatch):
+        """A task with strong code signals at any confidence → no flag."""
+        assessment = {
+            "difficulty": 3, "kind": "code", "needs": [],
+            "signals": ["code_path", "code"], "confidence": 0.8,
+            "rules": {"confidence": 0.8, "difficulty": 3, "kind": "code",
+                      "signals": ["code_path", "code"], "needs": [],
+                      "kind_confidence": 0.9},
+            "basis": "rules-only",
+            "jev": {"ok": False, "available": False, "unavailable": "no key"},
+        }
+        p = self._plan_with_assessment("修复 src/main.py 的 import 错误", assessment, monkeypatch)
+        assert p.needs_clarification is False
+
+    def test_low_difficulty_no_flag(self, monkeypatch):
+        """Even with no signals, difficulty < 3 → no flag (not worth clarifying)."""
+        assessment = {
+            "difficulty": 2, "kind": "code", "needs": [],
+            "signals": [], "confidence": 0.4,
+            "rules": {"confidence": 0.4, "difficulty": 2, "kind": "code",
+                      "signals": [], "needs": [], "kind_confidence": 0.3},
+            "basis": "rules-only",
+            "jev": {"ok": False, "available": False, "unavailable": "no key"},
+        }
+        p = self._plan_with_assessment("帮我整理下文件", assessment, monkeypatch)
+        assert p.needs_clarification is False

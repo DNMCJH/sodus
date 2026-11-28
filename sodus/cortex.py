@@ -26,7 +26,6 @@ from typing import Any
 
 from . import config, providers, routes
 
-_LOG_FILE = Path.home() / ".sodus" / "cortex.jsonl"
 DEFAULT_ROUTE = "coordinator"
 
 
@@ -34,8 +33,8 @@ DEFAULT_ROUTE = "coordinator"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _resolve(route_name: str) -> tuple["providers.Provider", str] | None:
-    """Return (provider, model) for a route, or None if unavailable."""
+def _resolve(route_name: str) -> tuple["providers.Provider", str, str] | None:
+    """Return (provider, model, key) for a route, or None if unavailable."""
     route = routes.resolve(route_name)
     if route is None:
         return None
@@ -44,6 +43,9 @@ def _resolve(route_name: str) -> tuple["providers.Provider", str] | None:
     for pname in route.providers:
         prov = prov_table.get(pname)
         if prov is None or prov.protocol != providers.ANTHROPIC:
+            continue
+        # Reject empty base_url: would send relay keys to api.anthropic.com
+        if not prov.base_url:
             continue
         key = providers.secret_value(prov, secrets)
         if not key:
@@ -58,8 +60,9 @@ def _resolve(route_name: str) -> tuple["providers.Provider", str] | None:
 
 def _log(record: dict) -> None:
     try:
-        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with _LOG_FILE.open("a", encoding="utf-8") as f:
+        log_dir = config.HOME
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "cortex.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except OSError:
         pass
@@ -112,7 +115,7 @@ def ask(
     ).hexdigest()[:8]
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:300]
         result: dict = {"ok": False, "unavailable": f"HTTP {exc.code}", "detail": detail}
@@ -126,9 +129,27 @@ def ask(
         return result
 
     latency_ms = int((time.time() - started) * 1000)
+    # Decode and parse defensively — relay may return HTML on error
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        result = {"ok": False, "unavailable": f"JSON decode: {exc}",
+                  "raw_prefix": raw[:120].decode("utf-8", "replace")}
+        _log({"id": call_id, "route": route, "model": model, **result,
+              "latency_ms": latency_ms})
+        return result
+
+    # body must be a dict with a "content" list
+    if not isinstance(body, dict):
+        result = {"ok": False, "unavailable": "unexpected response shape (not dict)"}
+        _log({"id": call_id, "route": route, "model": model, **result,
+              "latency_ms": latency_ms})
+        return result
+
     content = body.get("content") or []
     text = "".join(
-        block.get("text", "") for block in content if block.get("type") == "text"
+        block.get("text", "") for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
     )
     result = {"ok": True, "text": text, "model": model, "latency_ms": latency_ms}
     _log({

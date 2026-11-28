@@ -218,22 +218,23 @@ def plan(
     effort = str(recommendation.get("effort") or "default").strip() or "default"
     basis = assessment.get("basis") or "rules-only"
     confidence = assessment.get("confidence") or 0.5
+    # Use rules-layer confidence for clarification gating (not the composite
+    # confidence that includes Jev). This avoids the "Jev boosts confidence →
+    # never clarifies" inversion. When Jev is unavailable the two values are
+    # the same; when Jev is healthy, we use the rules' own certainty.
+    rules_conf = (assessment.get("rules") or {}).get("confidence", confidence)
 
-    # Detect tasks that need scope clarification before dispatch.
-    # Triggers when rules are blind (no strong signals) AND the task looks
-    # hard/broad — classic markers: "全套", "任何", "所有", scope adverbs with
-    # low confidence. The coordinator model (future: sonnet-kiro) would handle
-    # deeper analysis; for now we surface the flag so runner.py can invoke
-    # grill-me or at least log the ambiguity.
-    _SCOPE_SIGNALS = re.compile(
-        r"全套|所有|任何|整套|全部|一整|完整|全面|全量|每一|所有的|全站|全库", re.IGNORECASE
+    # Detect tasks that need scope clarification (opt-in; flag only, never auto-triggers).
+    # Both triggers use rules_conf so the flag is independent of Jev availability.
+    # Trigger 1 (blind): rules have no structural signals at all AND are low-confidence.
+    # Trigger 2 (scope): broad scope keywords present AND rules are still uncertain.
+    _SCOPE_RE = re.compile(
+        r"全套|所有(?!权)|任何(?!情况)|整套|全部|一整|全面|全量|每一(?!\d)|全站|全库",
+        re.IGNORECASE,
     )
-    ambiguous_blind = (
-        not assessment.get("signals")  # rules had no foothold
-        and confidence < 0.55
-        and difficulty >= 3
-    )
-    scope_ambiguous = bool(_SCOPE_SIGNALS.search(text)) and confidence < 0.65
+    rules_blind = not assessment.get("signals") and rules_conf < 0.5
+    ambiguous_blind = rules_blind and difficulty >= 3
+    scope_ambiguous = bool(_SCOPE_RE.search(text)) and rules_conf < 0.65 and difficulty >= 3
     needs_clarification = ambiguous_blind or scope_ambiguous
 
     # Review gating

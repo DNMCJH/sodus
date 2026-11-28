@@ -1,204 +1,58 @@
----
-title: 'sodus 项目接力控制台'
-date: '2026-11-09'
-updated: 2026-11-26
-version: 3.3.0
-type: project-handoff
-status: active
-snapshot_at: "2026-11-26T03:35:41.565279+00:00"
-tags:
-  - workflow/handoff
-  - sodus
----
+# Sodus HANDOFF
 
-# sodus 项目接力控制台
-
-> [!abstract] 唯一接力入口
-> 本文件是 sodus 仓库的权威项目控制台（A:\VScode\Code\Projects\sodus\HANDOFF.md）。新会话先完整读取本文件，再刷新“实时状态”，然后继续。sodus 项目上下文极大，不要试图从聊天记录重建决策和路径。详细内容通过索引跳转，不在这里重复。
-
-> [!warning] 快照边界
-> 这是 2026-11-24 的快照，Markdown 不自动同步。snapshot_at 之后的变化必须重新核验：git HEAD、tag、daemon 版本/pid、预算、relay 余额、宿主配置。
-
-## 0. 三分钟启动区
-
-### 项目一句话
-
-Sodus 是双平面个人多项目控制塔：单机 daemon（默认 127.0.0.1:4199）+ CLI + MCP over stdio + 轻量只读 `GET /state`。A 面负责 Agent 间协同（派活、路由、验证、评审、写锁/worktree），B 面负责向人汇报与项目级决策收件箱（`HANDOFF.md` `D-xxx` + 跨项目聚合），已退役网页看板与桌宠层。
-
-### 当前唯一优先
-
-> [!todo]
-> **控制塔重构分支 `refactor/control-tower` 已完成 Phase 0 + Phase 1 + 性能/收口加固（2026-11-24）。** 已完成：① 隔离路由测试、修通 `dream` busy 锁死与 CLI 候选审核、新增 `sodus debug reap-orphans` 干跑命令；② 迁出 `sodus/evidence.py`，退役 7 个 UI/桌宠模块并清理旧文档/OpenAPI 残留；③ 封堵相对 `cwd` 串项目泄漏、上线 `HANDOFF.md` 决策收件箱（CLI/HTTP/MCP + 锁/CAS）与 `projects.json` 注册表，将 `/state` 压回零 Git 子进程快路径。接下来：Phase 1.5（三入口首屏提示 + 两真实项目验收 + 单阶段预算硬闸）→ 合入 `main` → Phase 2（A 面薄纵切 MVP）。
-
-### 硬规则（用户明确要求，改之前先问）
-
-- 跑 sodus 不要弹终端窗口；console 子进程必须带 CREATE_NO_WINDOW。
-- 重大/有争议的方案先让 sodus 派多家族并行盲评（默认 `sol + dsh/neon`，高端裁决用 `fable` 替代 `opus`）再综合；不要单模型拍板。
-- 不做 n=1/n=3 的统计结论；效率结论必须来自预注册的配对实验（见 §5）。
-- main 必须可回退；每个阶段跑全量 pytest + scripts/release_check.ps1 并留证据。
-- 预算没有日硬上限；relay 余额是硬约束。模型族软上限：claude/opus ¥100、gpt ¥80、other ¥80（只拦新 run，--allow-expensive 可豁免）。
-- 不把密钥、token、provider apiKey 写进本文档；只写路径。
-- 重启 DSH Web GUI 会中断当前会话，先问用户；重启 sodus daemon 可以直接做。
-
-### 实时状态（2026-11-11 23:40，Checked/Measured）
-
-| 项 | 值 |
-|---|---|
-| 版本 / tag | sodus 0.9.0；main f30acf1（release）+ 本次收尾提交；tag v0.9.0 指向 release 提交 |
-| daemon | 0.9.0，pid 56388，单实例监听 4199，/health ok |
-| 发行门禁 | release_check.ps1 PASS（构建/干净 venv 安装/doctor/MCP 握手/全量 pytest，日志 reports/release-0.9.0.log）；全量 pytest 1458 项 EXIT=0（2026-11-12） |
-| CI | GitHub Actions windows-latest × Python 3.11/3.12/3.13 全绿（run 43077407300） |
-| Claude Code 冒烟 | sodus run --route claude 成功：run-8745eebea739，输出 CLAUDE_OK，exit=0，cost=¥0.178631(calibrated) |
-| DB | ~/.sodus/sodus.sqlite3，schema v8，tasks=333 runs=574（migrate-home 自 ~/.nodus，源未动） |
-| 预算 | budget.soft_families={claude:100,gpt:80,other:80}；无 daily_cny/soft_cny；今日花费与 relay 余额用 sodus status 重查 |
-| 四宿主 | codex / claude / dsh / opencode 均 configured；MCP 工具 12 个，全部 sodus_*；serverInfo.name=sodus 0.9.0 |
-| 并发 | 4 个 run 在不同目录并行实测通过；同目录仍由写锁串行 |
-| 交接台 | 控制台 3.0.0；sodus handoff sync/check 可用；检查前先 sync 一次刷新 HEAD/daemon |
-| 未推送 | 无：main、tag v0.9.0 与 GitHub Release 已推送到 DNMCJH/sodus |
-
-## 1. 关键路径索引
-
-| 用途 | 路径 |
-|---|---|
-| 主仓库 | A:\VScode\Code\Projects\sodus |
-| 旧版 worktree（已删） | 9 个 feat worktree 于 2026-11-11 删除（分支全部并入 main），备份 A:\VScode\Code\Projects\_archive\nodus-worktrees-20261111.zip |
-| 旧 home 归档 | A:\VScode\Code\Projects\_archive\nodus-home-rollback-20261112（旧 ~/.nodus 关键文件，63MB） |
-| 路由元数据 | sodus/route_meta.py、sodus/policy.py、sodus/decision.py、tests/test_policy.py |
-| 改名迁移 | docs/sodus-migration.md（从 nodus 到 sodus 0.9.0 的步骤与回滚） |
-| 0.8 交付 | reports/080a-report.md、reports/080b1-report.md、reports/080b2-report.md、reports/080c-report.md、reports/080d-report.md |
-| 旧版交接 | reports/HANDOFF-0.7.2.md、reports/HANDOFF-0.7.1.md、reports/HANDOFF-0.7.md |
-| 复查原文 | reports/review-0.7-opus-20261109.md、reports/review-0.7-sol-20261109.md |
-| 计划证据 | reports/plan-M4-M6-20261110-v5.json（plan-9d7318c01882，reviewed，verdict approve，待人工批准）；reports/plan-review-M4-M6-20261110.json |
-| 本控制台 | HANDOFF.md（仓库根，随代码版本化）；Obsidian 入口 B:\Obsidian\sessions\sodus\00_sodus_项目接力控制台.md |
-| 用户配置 | ~/.sodus/config.json（旧 ~/.nodus 保留作回滚；备份 config.json.bak-20261109-families） |
-| daemon 日志 | ~/.sodus/daemon.log |
-| token/DB | ~/.sodus/token、~/.sodus/sodus.sqlite3（不要复制内容） |
-| 多宿主配置 | ~/.codex/config.toml、~/.claude.json、A:\dsh\home\cordis.patch.yml、~/.config/opencode/opencode.json（含密钥，勿外传） |
-| 文档 | docs/architecture.md、docs/mcp.md、docs/cli.md |
-
-## 2. 决策记录（为什么是现在这样）
-
-- **0.7.0**：MCP 全部改成 daemon HTTP，daemon 是唯一 run 所有者；加只读 GET /state；planner 契约 + 机械 validator + kind='plan' 只读 run。
-- **0.7.1**：正式启用前复查（opus+sol）后修 P1/P2——daemon 独占单实例、auto-recover 改配置默认关、Host 校验、verify 基础设施退出码重试、approve 前复核 HEAD/AGENTS/hash、installer 保留 env/原子写、review 异步+超时。
-- **0.7.2**：按用户要求改成模型族软上限（Claude/opus 100、GPT 80、other 80），无日硬上限；补 opencode MCP 安装器；四终端并发文档与测试。
-- **0.8.0**：项目级 sodus handoff（单项目一份 HANDOFF.md，工作区只放索引）；B3 env 白名单 + plan/review 只读 + 临时 worktree；B4 关闭 HTTP approve，CLI 仅 TTY 确认。
-- **0.8.1**：plan 物化/执行/replan（schema v8）；handoff sync 自动迁移旧控制台、check warnings；修 HTTP 未授权 POST 残留 body 协议缺陷；午夜边界测试；codex 沙箱在 Windows worktree 启动失败→隔离 cwd 回退。
-- **2026-11-11 路由建模**：claude 是 CLI/agent，不是模型；opus/fable/sonnet 是模型，-high/-xhigh/-max 只是 effort。自动分配只从 canonical 模型路由里选，effort 是独立属性；claude 和 effort alias 不参与候选。policy/decision 的候选列表改为从 ~/.sodus/routes.json 动态加载，不再硬编码。
-- **2026-11-11 Carbon 首发价**：官方 2026-11-30 前 $2/M 输入、$10/M 输出，12-01 起 $4/$20。promotion 窗口内 carbon cost_tier 降为 2，prefer_over=[argon] 通过 dated-promotion guardrail 把 argon 移出候选池；这是“carbon 优先于 argon”，不是压过所有路线。
-- **2026-11-12 handoff check 提交感知**：`sync` 记录 HEAD，提交控制台本身后 head 必然变化；`check` 现在只在控制台文件以外的改动出现时才报 `head_mismatch`，同步+提交不再误报。
-- **2026-11-11 0.9.0 全面更名**：删掉 nodus 双入口和 sodus 入口壳，nodus 包整体改名为 sodus；默认状态目录 ~/.sodus、数据库 sodus.sqlite3；MCP 工具名全部 sodus_*；环境变量 NODUS_* → SODUS_*；migrate-home 只复制 ~/.nodus 并把数据库改名，源目录不动。理由：用户明确要求全部替换；保留 ~/.nodus 仅作回滚来源。
-- **预算口径**：用户确认“没有定过预算”；relay 余额才是硬约束；族软上限只拦新 run。
-- **并发口径**：多个宿主各自拉 MCP 进程，但都只是 HTTP 客户端；daemon 单实例、多线程；不同 cwd 可并行，同一 cwd 写锁串行；SQLite 单写者。
-- **2026-11-24 双平面控制塔重构（`refactor/control-tower`）**：经 Gate 0 多家族盲评与复核，确立 A 面（Agent 间协同）/ B 面（人机汇报与决策）双平面架构；退役 `board/ui/pet/mood/statuslight/desk/llm` 7 个模块并迁出 `evidence.py`；上线 `HANDOFF.md` `D-xxx` 决策收件箱（文件锁 + hash CAS + 零 Git 读路径 + `~/.sodus/projects.json` 注册表）；MCP 工具增至 13 个（新增 `sodus_handoff_decisions`）。
-- **交接口径**：per-run handoff、session brief 都是单次快照；项目控制台是权威恢复入口，支持单项目写入与跨项目只读决策聚合（CLI/HTTP/MCP）。
-- **2026-11-25 D-001**（decided）：Phase 2 A 面 MVP 单阶段预算上限是多少？：B：Phase 2 总花费 ≤ ¥30，每次派活最多 ¥10，允许用一次 fable。依据：relay 余额约 ¥97，需要给 Phase 2 多轮实验留余量，同时允许一次高端 fable 裁决
-
-## 3. 进度节点
-
-| 日期 | 节点 | 状态 |
-|---|---|---|
-| 2026-11-09 | v0.7.0 / v0.7.1 / v0.7.2 发布 | ✅ |
-| 2026-11-09 | v0.8.0 发布：项目 handoff、B3 隔离、B4 CLI 批准 | ✅ |
-| 2026-11-10 | M4–M6 重做计划 + 多轮 sol review：plan-9d7318c01882 reviewed，verdict approve，待人工 TTY 批准 | ✅ |
-| 2026-11-10 | v0.8.1 发布：plan 物化/执行/replan、handoff 迁移 | ✅ |
-| 2026-11-11 | 路由建模 + 动态路由元数据 + Carbon 首发价 guardrail（commits 96b0fb3/48fc33c/eb8db36/375722f） | ✅ |
-| 2026-11-11 | **v0.9.0 全面更名**：包/CLI/MCP 工具/状态目录/数据库/仓库目录统一 sodus；migrate-home 迁移 333 tasks / 574 runs | ✅ |
-| 2026-11-11 | v0.9.0 push + tag 完成（GitHub DNMCJH/sodus） | ✅ |
-| 2026-11-12 | 0.9.0 release_check PASS + CI 全绿 + Claude Code 冒烟 + GitHub Release v0.9.0 | ✅ |
-| 2026-11-12 | 收尾：handoff check 提交感知、DSH 宠物插件改名 sodus-pet、旧 ~/.nodus 归档并删除 | ✅ |
-| 2026-11-24 | Phase 0+1+性能收口：退役 7 模块、决策收件箱、`projects.json` 注册表、零 Git `/state`（242根 33.5s→34ms），`release_check: PASS` | ✅ |
-| 2026-11-25 | Phase 1.5：三入口（Claude/Codex/DSH）注入决策首屏规则、登记 sodus+talent-agent、跨项目聚合实测通过（create→3入口可见→close→清零）；D-001 Phase 2 预算待用户拍板 | ✅ |
-| 待定 | 0.8.2：route_meta 持久化、runner requirements 硬校验、difficulty 1–10 | ⏳ |
-| 待定 | 效率 A/B（12 题 ×10 ×2 组 = 240 对） | ⏳ 设计已定，未跑 |
-
-- 2026-11-25 Phase 2 coordinator集成完成（2026-11-25）：coordinator.py + aplane.py + runner.py _auto_review触发。1127 tests（32 new），release_check MCP JSON缺陷是预存在（已用git stash验证）。sol复检run-1f86b51e9ece进行中，通过后 merge to main。
-
-- 2026-11-26 sol 复检 3 个问题已全修（8403a41 aplane.load 非 dict crash + 109a074 F1 reviewer fallback + F2 blocking gating emit 事件）。1128 tests 通过。准备 merge to main。
-
-## 4. 未决与风险
-
-- **B3 残余**：env 白名单 + 只读参数 + 临时 worktree 已做；但没有 OS 级沙箱，同用户仍可读 token/凭据；DSH/opencode 无原生只读开关，隔离失败会回退原 cwd 并记 warning；git worktree 是 HEAD 快照，不含未提交修改。
-- **B4 残余**：HTTP approve 已关闭，CLI 仅交互式 TTY 确认并拒绝 worker 标记；但同用户可伪造 TTY、去掉环境标记或直连 SQLite，这不是身份隔离，只是提高无人值守自动批准的门槛。
-- **plan**：M4–M6 计划已按 finding 重做并获 sol approve（plan-9d7318c01882），但人工批准不能代办；执行功能 0.8.1 已实现，尚未执行该计划。
-- **B3 codex 回退**：Windows 下 codex sandbox helper 在 sodus 临时 worktree 启动失败（ShellExecuteExW 1223），已改为隔离 cwd + 正常 headless flags；这削弱了“只读”保证，主树仍由临时 cwd 隔离。
-- **测试抖动**：0.8.0 期间全量/发行检查出现过 Windows ConnectionAbortedError 10053（loopback HTTP 测试），复跑通过；根因未查。
-- **DSH 事故**：历史 daemon 在杀 MCP 进程时无日志退出，已多次恢复；当前 daemon 56388，继续观察。
-- **CI 依赖**：0.9.0 首次干净环境 CI 暴露 DSH YAML 合并缺 PyYAML；已把 pyyaml 加入运行时依赖并修复（3b3d641）。以后新增可选宿主依赖要先在干净 venv 验证。
-- **Carbon 促销到期**：2026-12-01 起 $4/$20，promotion 自动失效；要复查 argon 回池后的排序和测试是否仍绿。
-- **路由元数据未持久化**：route_meta 只在代码里，routes.json 自定义路由的 load/save 不携带能力/价格/requirements；runner 也没有对 requirements 硬校验或在 provider fallback 时重校验。
-- **Jev 依赖**：官方 key 已停用，DSH jev MCP 走 Netlify 函数代理（https://dnmcjh.netlify.app，key 在 %APPDATA%\jev-netlify-mcp\config.env）；代理挂了 Jev 不可用，policy 本身 fail-open。
-- **Agent Reach**：1.6.1 已装（C:\Users\35336\.local\bin\agent-reach.exe），旧 1.5 venv 改名备份；微信文章走 JustOneAPI，不走 Jina。
-- **旧 ~/.nodus 已归档**：关键文件（DB 快照、config/secrets/routes/providers、token、policy/决策日志）在 A:\VScode\Code\Projects\_archive\nodus-home-rollback-20261112（63MB）；原目录 1.2GB 已删除（2026-11-12）。
-- **DSH 宠物插件已改名 sodus-pet**：目录 A:\dsh\home\sodus-pet（旧 nodus-pet 已移走），包名/菜单/快捷键/日志/环境变量全部改；托盘已从新路径重启。
-
-## 5. 下一步（按顺序）
-
-1. 合入 `main`：Phase 0+1+1.5 均已验收，`refactor/control-tower` 可 fast-forward 合入。
-2. Phase 2（A 面薄纵切 MVP）：一条真实任务 `coordinator → 判难度 → 选角色（盲 advisor + executor） → 执行 → 审查 → 决策写回 HANDOFF` 跑通端到端；单阶段预算 ≤ ¥30，每次派活最多 ¥10（D-001 已决，2026-11-25）。
-
-## 6. 会话/交接机制
-
-- sodus handoff init/show/append/sync/check/list/register/unregister/decide-draft/decide-close/decisions：项目级控制台与 `D-xxx` 决策收件箱；sync 只更新 auto 标记之间，check 校验 snapshot/HEAD/路径/daemon 版本。
-- sodus debug sessions --limit 20 [--query ...] [--vendor ...]：扫 Claude/Codex/DSH 三家会话。
-- sodus debug session <id> --tail 40：看某一个会话原话。
-- sodus debug brief <id> --task "..." --tail 12 --out PATH：生成跨会话交接。
-- sodus debug lineage <id> [--json]：会话→run→task→proposal 血缘。
-- sodus debug resume/branch：继续/分叉会话（跨 vendor）。
-- sodus debug reap-orphans [--all-workspaces] [--apply] [--json]：干跑/清理进程已退出的孤儿 queued/running 记录。
-
-## 7. 命令速查
-
-```powershell
-A:\Anaconda\python.exe -m sodus status
-A:\Anaconda\python.exe -m sodus route-for --task "..." --json
-A:\Anaconda\python.exe -m sodus handoff sync
-A:\Anaconda\python.exe -m sodus handoff check --json
-A:\Anaconda\python.exe -m sodus debug sessions --query sodus
-A:\Anaconda\python.exe -m sodus plan list
-A:\Anaconda\python.exe -m sodus plan approve plan-9d7318c01882 --by human
-A:\Anaconda\python.exe -m sodus plan execute plan-9d7318c01882 --wait
-pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\release_check.ps1
-git -C A:\VScode\Code\Projects\sodus log --oneline -5
+## 机器段
+```
+daemon: {version: "0.10.0", pid: 20060, addr: "127.0.0.1:4199"}
+head: main @ 0912e05
 ```
 
-## 8. 更新规则
+## 当前活跃任务
 
-- 谁更新：当班会话的 agent；每次发布、阶段结束、关键决策、重大事故后更新。
-- 怎么更：只追加/修改对应节；snapshot_at 改成当前时间；涉及数字的写清来源（Checked/Measured/User-provided/Unverified）。
-- 不复制：长报告、评审原文、日志、密钥只放链接/路径。
-- 校验：git HEAD、tag、daemon pid/version、config、relay 余额在每次新会话开始时重查。
-- 一份活的控制台，不并行维护多份；发现旧结论错了，直接改并留下“原判断/为什么错”。
+### L1 追问层修复（进行中）
 
-<!-- sodus:auto:start -->
-head: c7034a1696eb3f1c768592f33d5c6ca43afebadd
-```json
-{
-  "schema_version": 2,
-  "head": "c7034a1696eb3f1c768592f33d5c6ca43afebadd",
-  "branch": "refactor/control-tower",
-  "tag": "v0.9.0-8-gc7034a1",
-  "dirty": true,
-  "daemon": {
-    "version": "0.9.0",
-    "pid": 35648
-  },
-  "open_decisions_count": 0,
-  "deferred_decisions_count": 0,
-  "open_proposals": 0,
-  "latest_verify": null,
-  "cost_today": {},
-  "cost_30d": {
-    "CNY": 5.689382
-  },
-  "tasks_summary": {
-    "open": 2
-  },
-  "recent_runs_count": 3,
-  "budget_soft_families": {
-    "claude": 100,
-    "gpt": 80,
-    "other": 80
-  }
-}
-```
-<!-- sodus:auto:end -->
+**背景：**
+dsh 对 L1 实现做了完整批判性复查（见 `scripts/_review_findings.md`），发现 2 条 CRITICAL 和 4 条 HIGH 问题。
+
+**执行计划（软工原则：先稳定边界，再扩功能，先 opt-in 再默认开）：**
+
+#### P0：修异常边界（≤30min）
+- `cortex.py`：捕获 `json.loads` 的 `JSONDecodeError` / `AttributeError`，统一返回 `{"ok": False, "unavailable": "..."}` 而不是抛出；确保 `ask()` 在任何情况下不会让 `_decide_route` 进入 broad except 路径
+- `cortex.py`：`base_url` 为空时直接返回 `ok=False`（不把 relay key 发到 api.anthropic.com）
+- `cortex.py`：日志路径改用 `config.HOME / "cortex.jsonl"` 与 decision.jsonl 保持一致
+- `clarify.py`：`_validate(parsed)` 函数，校验 questions/acceptance_draft 类型，坏结构返回 `ok=False` 而不抛异常
+- `clarify.py`：schema 示例改成合法 JSON（去 `//` 注释）
+- `clarify.py`：`max_tokens` 从 1024 → 2048，检查 `stop_reason == "max_tokens"` 时标记截断
+
+#### P1：L1 降级为显式 opt-in（≤30min）
+- `runner.py`：`start()` 新增 `clarify: bool = False` 参数
+- `runner.py`：只有 `clarify=True` 时才调用 `clarify.run()`，默认关闭
+- `server.py`：POST /runs 传递 `clarify` 字段
+- `cli/commands/tasks.py`：`run()` 加 `--clarify` flag
+- 保留 `needs_clarification` 字段（用于 `sodus clarify` 显式命令），但不再自动触发
+
+#### P2：统一盲区谓词（≤20min）
+- `coordinator.py`：`needs_clarification` 的触发器 1 改用 `assessment["rules"]["confidence"]`（不用 composite）
+- 两条触发器共享同一个 `rules_blind` 谓词：`not assessment.get("signals") and rules_conf < 0.5`
+
+#### P3：补测试
+- `tests/test_cortex.py`：HTTP 200 非 JSON、429、401、base_url 缺失 → 断言 `ok=False` 且不抛
+- `tests/test_clarify.py`：带注释 JSON、截断 JSON、questions 为字符串 → 断言 `ok=False` 且不抛
+- `tests/test_coordinator.py`：`needs_clarification` trigger 1/2 边界
+
+**设计原则约束：**
+- fail-open 要真正 fail-open：任何可选步骤失败必须保持原路由，不得触发 `_decide_route` broad except
+- opt-in 优先：L1 默认关闭，显式 `--clarify` 开启；不影响非 clarify 路径的任何测试
+- 记账先行：cortex 调用的 token 目前进 `~/.sodus/cortex.jsonl`，budget/meter 集成留 TODO 注释
+- 不引入新依赖，不改 runner.py 的核心派发逻辑
+
+## 未决决策
+
+| 日期 | 编号 | 决定 | 状态 |
+|------|------|------|------|
+| 2026-11-28 | D-001 | L1 答案回灌状态机 vs 永久 opt-in 预检 | 待拍板 |
+
+**D-001 背景：** dsh 指出 `refined_spec.md` 没有任何读取方，executor 执行时拿到的还是原始任务文本。两个选项：
+- A）实现完整状态机（task 增加 `clarifications` 表，`sodus clarify answer`，派发前注入 spec）——有用但工作量大
+- B）永久定位为"opt-in 预检报告"，不做回灌，`sodus clarify <text>` 只供人看再手动修 task 文本
+
+推荐 B，待用户拍板。

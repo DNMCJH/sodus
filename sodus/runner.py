@@ -252,6 +252,7 @@ class Runner:
         readonly: bool = False,
         force_review: bool = False,
         skip_review: bool = False,
+        clarify_first: bool = False,  # opt-in: run L1 intake before dispatch
     ) -> dict:
         # A per-task budget already exists; nothing stopped ten tasks from each
         # staying inside theirs and adding up to a number nobody agreed to.
@@ -287,7 +288,10 @@ class Runner:
         # `--route auto` becomes a concrete route here, before any run row
         # exists. Every failure path below returns *some* route: the strategy
         # layer is allowed to be wrong, never to be a single point of failure.
-        route_decision = self._decide_route(task, route_name, force_review, skip_review)
+        route_decision = self._decide_route(
+            task, route_name, force_review, skip_review,
+            clarify_first=clarify_first,
+        )
         # Store coordinator plan (present only for --route auto or --review) so
         # _finalize can dispatch auto-review without changing all function signatures.
         _coord_plan_json = route_decision.get("coordinator_plan")
@@ -390,7 +394,7 @@ class Runner:
         thread.start()
         return db.get_run(run["id"])
 
-    def _decide_route(self, task: dict, requested: str, force_review: bool = False, skip_review: bool = False) -> dict:
+    def _decide_route(self, task: dict, requested: str, force_review: bool = False, skip_review: bool = False, *, clarify_first: bool = False) -> dict:
         """Pick the route to run, and remember who picked it.
 
         For ``auto`` the task text goes through coordinator.plan(); the
@@ -437,10 +441,13 @@ class Runner:
                 }
                 decision["coordinator_plan"] = coord_plan.to_json()
 
-                # L1 Intake: when coordinator signals ambiguity, run a lightweight
-                # clarification round (Sonnet 5.5 via coordinator route) and stash
-                # the structured result so start() can write it to run_dir.
-                if coord_plan.needs_clarification:
+                # L1 Intake: opt-in only (--clarify flag). Never runs automatically.
+                # When enabled, calls Sonnet 5.5 to identify under-specified scope
+                # and writes refined_spec.md alongside the run. The spec is for
+                # human review — it does NOT change how the executor sees the task.
+                # TODO(D-001): implement answer-injection state machine to make
+                # the spec actually affect execution.
+                if clarify_first and coord_plan.needs_clarification:
                     _cr = clarify.run(task_brief(task), coord_plan.assessment)
                     decision["clarification"] = _cr.to_dict()
 

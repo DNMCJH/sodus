@@ -207,7 +207,7 @@ def test_runner_checks_resolved_family_before_claim(home, monkeypatch):
     monkeypatch.setattr(budget, 'spent_by_family', lambda now=None: {'claude': 0, 'gpt': 80, 'other': 0})
     monkeypatch.setattr(profiles, 'ensure_ready', lambda: None)
     monkeypatch.setattr(profiles, 'read', lambda name: type('Profile', (), {'model': ''})())
-    monkeypatch.setattr(runner.RUNNER, '_decide_route', lambda *a: {'route': 'custom'})
+    monkeypatch.setattr(runner.RUNNER, '_decide_route', lambda *a, **kw: {'route': 'custom'})
     monkeypatch.setattr(routes, 'resolve_for_run', lambda name: routes.Route(name='custom', agent='codex', providers=(), model='gpt-6'))
     task = db.create_task('family test', 'blocked')
     with pytest.raises(RuntimeError, match='gpt family'):

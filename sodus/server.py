@@ -620,6 +620,7 @@ class Handler(BaseHTTPRequestHandler):
                     include_memory=not bool(body.get("no_memory", False)),
                     force_review=bool(body.get("force_review", False)),
                     skip_review=bool(body.get("skip_review", False)),
+                    clarify_first=bool(body.get("clarify_first", False)),
                 )
             except (ValueError, RuntimeError) as exc:
                 return _json(self, 400, {"error": str(exc)})

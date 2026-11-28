@@ -79,6 +79,11 @@ def add(sub) -> None:
         action="store_true",
         help="skip review entirely, even on auto routes",
     )
+    p.add_argument(
+        "--clarify",
+        action="store_true",
+        help="run L1 intake before dispatch (opt-in; writes refined_spec.md)",
+    )
     p.set_defaults(func=run)
 
     p = sub.add_parser("watch", help="follow a run")
@@ -139,6 +144,7 @@ def run(args) -> int:
         "allow_expensive": args.allow_expensive,
         "force_review": args.review,
         "skip_review": args.no_review,
+        "clarify_first": getattr(args, "clarify", False),
     }
 
     if args.continue_run:
