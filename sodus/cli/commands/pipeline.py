@@ -49,6 +49,15 @@ def add(sub) -> None:
     p.add_argument("--failed-only", action="store_true", help="only review failed runs")
     p.set_defaults(func=audit_cmd)
 
+    p = sub.add_parser("clarify", help="L1 intake: clarify a task before dispatch")
+    p.add_argument("task", nargs="?", default="",
+                   help="task text or task-id (omit to read stdin)")
+    p.add_argument("--route", default="coordinator",
+                   help="coordinator route to use (default: coordinator)")
+    p.add_argument("--out", default="",
+                   help="write refined_spec.md to this directory")
+    p.set_defaults(func=clarify_cmd)
+
     p = sub.add_parser("fix", help="review -> fix -> verify -> re-review")
     p.add_argument("run")
     p.add_argument("--by", default="")
@@ -418,3 +427,63 @@ def audit_cmd(args) -> int:
                         print(f"  [{f['severity'].upper()}] {r['run_id']} - {f.get('file', '?')}:{f.get('line', '?')} - {f['issue']}")
 
     return 0 if accepted == successful else 1
+
+
+# ---------------------------------------------------------------------------
+# clarify
+# ---------------------------------------------------------------------------
+
+def clarify_cmd(args) -> int:
+    """L1 intake: run one clarification round on a task description."""
+    import sys
+    from pathlib import Path
+    from sodus import clarify, coordinator, policy
+
+    task_text = (args.task or "").strip()
+    if not task_text:
+        task_text = sys.stdin.read().strip()
+    if not task_text:
+        print("error: provide task text as argument or via stdin", file=sys.stderr)
+        return 1
+
+    # Run assessment first so clarify gets full context
+    assessment = policy.assess(task_text, review=False)
+    print(f"Assessment: difficulty={assessment['difficulty']}/5  "
+          f"kind={assessment['kind']}  "
+          f"confidence={assessment['confidence']:.2f}  "
+          f"signals={assessment['signals'] or '[]'}")
+
+    result = clarify.run(task_text, assessment, route=args.route)
+
+    if not result.ok:
+        print(f"error: clarification failed — {result.unavailable}", file=sys.stderr)
+        return 1
+
+    print(f"\n[scope_risk={result.scope_risk}  effort≈{result.estimated_effort}  "
+          f"model={result.model}  {result.latency_ms}ms]\n")
+
+    for i, q in enumerate(result.questions, 1):
+        print(f"Q{i}: {q.q}")
+        print(f"     why: {q.why}")
+        if q.options:
+            for opt in q.options:
+                print(f"     • {opt}")
+        print()
+
+    if result.draft_spec:
+        print("--- Draft Spec ---")
+        print(result.draft_spec)
+        print()
+
+    if result.acceptance_draft:
+        print("--- Acceptance Criteria ---")
+        for c in result.acceptance_draft:
+            print(f"  [ ] {c}")
+        print()
+
+    if args.out:
+        dest = Path(args.out)
+        path = clarify.save(result, task_text, dest)
+        print(f"Saved: {path}")
+
+    return 0

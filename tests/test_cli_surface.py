@@ -78,8 +78,8 @@ def test_help_flags_do_not_need_a_daemon():
 def test_top_level_help_lists_exactly_the_curated_names(capsys):
     text = _help(capsys, ["--help"])
     assert _listed_in_help(text) == list(TOP_LEVEL)
-    assert len(TOP_LEVEL) == 22
-    assert len(text.splitlines()) <= 33
+    assert len(TOP_LEVEL) == 23
+    assert len(text.splitlines()) <= 35
     for namespace in ("lineage", "reconcile", "triage"):
         assert f"    {namespace} " not in text
 

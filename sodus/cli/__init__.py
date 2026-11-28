@@ -37,6 +37,7 @@ TOP_LEVEL = (
     "verify",
     "review",
     "audit",
+    "clarify",
     "dream",
     # stats: money, tokens, cache
     "stats",

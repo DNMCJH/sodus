@@ -27,7 +27,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import adapters, agents, aplane, budget, config, coordinator, db, handoff, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
+from . import adapters, agents, aplane, budget, clarify, config, coordinator, db, handoff, harness, lineage, memory, meter, policy, pricing, profiles, propose, providers, routes, verify, daemon
 
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".obsidian",
@@ -361,6 +361,22 @@ class Runner:
         # after `thread.start()` would race the worker for the same `seq`.
         db.update_run(run["id"], kind=kind)
         self._record_policy(run["id"], route_decision)
+        # L1: if a clarification spec was generated, persist it to run_dir
+        # and emit a coordinator event so the user knows before the run ends.
+        _clarification = route_decision.get("clarification")
+        if _clarification:
+            _run_dir = config.HOME / "runs" / run["id"]
+            _run_dir.mkdir(parents=True, exist_ok=True)
+            _cr = clarify.ClarifyResult.from_dict(_clarification)
+            _spec_path = clarify.save(_cr, task_brief(task), _run_dir)
+            self._emit(run["id"], "coordinator.clarification_needed", {
+                "scope_risk": _clarification.get("scope_risk"),
+                "estimated_effort": _clarification.get("estimated_effort"),
+                "question_count": len(_clarification.get("questions") or []),
+                "spec_path": str(_spec_path),
+                "latency_ms": _clarification.get("latency_ms"),
+                "ok": _clarification.get("ok"),
+            })
         # The sitting row exists already (it was created with the task). Record
         # how this run got here before the worker spawns, so `sodus lineage`
         # answers while the run is still going instead of only after it ends.
@@ -420,6 +436,13 @@ class Runner:
                     "effort": coord_plan.effort,
                 }
                 decision["coordinator_plan"] = coord_plan.to_json()
+
+                # L1 Intake: when coordinator signals ambiguity, run a lightweight
+                # clarification round (Sonnet 5.5 via coordinator route) and stash
+                # the structured result so start() can write it to run_dir.
+                if coord_plan.needs_clarification:
+                    _cr = clarify.run(task_brief(task), coord_plan.assessment)
+                    decision["clarification"] = _cr.to_dict()
 
                 if auto:
                     # Use coordinator's executor recommendation
